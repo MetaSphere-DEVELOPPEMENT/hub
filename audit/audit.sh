@@ -132,10 +132,12 @@ else
 fi
 printf '\n'
 for i in $(ls /sys/class/net 2>/dev/null | grep -v '^lo$'); do
+  [ -e "/sys/class/net/$i/device" ] || continue
   porteuse=$(cat "/sys/class/net/$i/carrier" 2>/dev/null)
   vitesse=$(cat "/sys/class/net/$i/speed" 2>/dev/null)
   type=$([ -d "/sys/class/net/$i/wireless" ] && echo 'sans fil' || echo 'filaire')
   etat=$([ "$porteuse" = 1 ] && echo 'branché' || echo 'DÉBRANCHÉ')
+  [ "${vitesse:--1}" -lt 0 ] 2>/dev/null && vitesse=""
   ligne "$i ($type)" "$etat${vitesse:+  —  ${vitesse} Mb/s}"
 done
 printf '\n'

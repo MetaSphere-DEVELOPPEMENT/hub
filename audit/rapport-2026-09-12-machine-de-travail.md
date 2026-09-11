@@ -1,4 +1,4 @@
-# Audit matériel — samedi 12 septembre 2026, 00h37
+# Audit matériel — samedi 12 septembre 2026, 00h52
 
 _Mesuré sur `boudine-ThinkCentre-M720q`. Aucune installation, aucune modification._
 
@@ -11,7 +11,7 @@ _Mesuré sur `boudine-ThinkCentre-M720q`. Aucune installation, aucune modificati
   session                    wayland
   bureau                     ubuntu:GNOME
   connexion                  /usr/sbin/gdm3
-  démarrée depuis          up 4 days, 7 minutes
+  démarrée depuis          up 4 days, 22 minutes
 
 ## Machine
 
@@ -72,16 +72,12 @@ _Mesuré sur `boudine-ThinkCentre-M720q`. Aucune installation, aucune modificati
   veth5307bdd@if2  UP             fe80::5c95:caff:fecc:cb8d/64 
   vetha70e2aa@if2  UP             fe80::fb:edff:fe2b:f7b9/64 
 
-  br-060ae02bc718 (filaire)  branché  —  10000 Mb/s
-  docker0 (filaire)          DÉBRANCHÉ  —  -1 Mb/s
-  eno1 (filaire)             DÉBRANCHÉ  —  -1 Mb/s
-  veth5307bdd (filaire)      branché  —  10000 Mb/s
-  vetha70e2aa (filaire)      branché  —  10000 Mb/s
+  eno1 (filaire)             DÉBRANCHÉ
   wlx8c883bc17904 (sans fil) branché
 
   wlx8c883bc17904  IEEE 802.11  ESSID:"Freebox-5AF049"  
             Mode:Managed  Frequency:2.462 GHz  Access Point: 22:66:CF:92:0F:54   
-            Bit Rate=78 Mb/s   Tx-Power=20 dBm   
+            Bit Rate=26 Mb/s   Tx-Power=20 dBm   
             Link Quality=42/70  Signal level=-68 dBm  
 
   _Le débit wifi annoncé est un débit négocié, pas un débit utile : comptez la_
@@ -109,8 +105,8 @@ _Mesuré sur `boudine-ThinkCentre-M720q`. Aucune installation, aucune modificati
   └─nvme0n1p2 part  ext4        /
 
   Filesystem      Size  Used Avail Use% Mounted on
-  /dev/nvme0n1p2  233G  172G   50G  78% /
-  /dev/nvme0n1p2  233G  172G   50G  78% /
+  /dev/nvme0n1p2  233G  171G   50G  78% /
+  /dev/nvme0n1p2  233G  171G   50G  78% /
   /dev/nvme0n1p1  1.1G  6.2M  1.1G   1% /boot/efi
 
   volumes chiffrés déclarés :
