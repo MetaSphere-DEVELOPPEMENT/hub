@@ -77,6 +77,26 @@ avant de le supposer.
 saine. Le i3-8100T est modeste, mais c'est un « T » — il chauffe peu et se fait
 oublier dans un meuble.
 
+## Amorçage, relevé le 12 septembre 2026
+
+Le système est installé **directement sur le NVMe interne** — `/` sur `nvme0n1p2`
+(ext4, 237 Go d'un seul tenant, pas de `/home` séparé) et la partition EFI sur
+`nvme0n1p1`. Le firmware amorce `\EFI\UBUNTU\SHIMX64.EFI`. Aucune clé USB
+n'intervient ; le SSD externe ne porte que des données.
+
+`BootOrder : 000D, 0000, 000C, 000B, 0009, 0004, 0002, 0005, 0001`
+
+| entrée | | |
+|---|---|---|
+| `Boot000D` | HIKSEMI | le SSD externe, **en tête** — sans chargeur, donc sans effet |
+| `Boot0000` | Ubuntu | ce qui démarre réellement |
+| `Boot0004` | Generic Usb Device | **sixième** : la clé d'installation ne démarrera pas seule |
+| `Boot0002` | Fedora | fantôme, plus aucun système correspondant |
+| `Boot0001` | Windows Boot Manager | fantôme, idem |
+
+Les deux fantômes sont sans conséquence. Aucun double amorçage n'existe : le disque
+ne porte que la partition EFI et la racine.
+
 ## Le système
 
 **Ubuntu 26.04 LTS « Resolute Raccoon », Desktop, 64 bits.**
@@ -137,4 +157,8 @@ supposent pas :
       et cette sauvegarde, il n'a rien à faire près d'un installateur qui propose
       de partitionner.
 - [ ] Brancher l'Ethernet **avant** de démarrer sur la clé.
+- [ ] **Appuyer sur F12 au démarrage** pour choisir la clé. Le firmware ne la prendra
+      pas de lui-même : l'ordre d'amorçage relevé le 12 septembre place le SSD externe
+      (`Boot000D* HIKSEMI`) en premier, Ubuntu en deuxième, et « Generic Usb Device »
+      en sixième. Sans F12, la machine redémarre sur l'Ubuntu qu'on veut remplacer.
 - [ ] **Ne pas** activer le chiffrement du disque système.
