@@ -14,9 +14,21 @@ sur un Mac mini.
 ### 1. Le réseau — réglé par la place du meuble
 
 Le wifi est une **clé USB Realtek RTL8192EU, 802.11 b/g/n, 2,4 GHz uniquement**,
-négociée à 65 Mb/s avec un signal à −64 dBm. Compter 30 à 35 Mb/s utiles, sur la
-bande la plus encombrée qui soit : insuffisant pour du streaming de jeu, qui veut
-un débit *stable* et une latence régulière plus qu'un débit de pointe.
+négociée à 65 Mb/s avec un signal à −64 dBm.
+
+**Mesuré le 12 septembre 2026, et bien pire que le débit négocié le laissait
+croire : 0,6 à 1,0 Mio/s, soit 5 à 8 Mb/s utiles.** Quatre miroirs Ubuntu testés
+tour à tour donnent le même ordre de grandeur — le goulot est la liaison, pas le
+serveur d'en face. Une estimation antérieure de « 30 à 35 Mb/s » figurait ici :
+elle était cinq fois trop optimiste, tirée du débit négocié au lieu d'être
+mesurée.
+
+À 7 Mb/s, la 4K est hors de portée et le 1080p est déjà juste. Le streaming de
+jeu, qui veut un débit *stable* et une latence régulière plus qu'un débit de
+pointe, est exclu.
+
+_Réserve : un seul relevé, un soir, sur une machine qui faisait tourner d'autres
+travaux. À refaire avec `audit/audit.sh` une fois la machine à sa place._
 
 Le port **Ethernet Intel I219-V** existe. La TV est à portée de câble de la box.
 
