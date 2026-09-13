@@ -1,0 +1,9 @@
+#!/bin/sh
+# Remettre le HUB comme session suivante — /usr/local/bin/hub-session-par-defaut
+#
+# Lancé à l'ouverture du bureau Ubuntu (autostart). Le bureau est un détour : quelle
+# que soit la façon d'en sortir (déconnexion, redémarrage, coupure), la machine doit
+# revenir au HUB.
+
+exec busctl call org.freedesktop.Accounts "/org/freedesktop/Accounts/User$(id -u)" \
+  org.freedesktop.Accounts.User SetSession s gnome-kiosk-script-wayland
