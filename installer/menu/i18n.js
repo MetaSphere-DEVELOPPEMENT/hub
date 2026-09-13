@@ -39,6 +39,8 @@ const TEXTES = {
     "profils.modifier": "Modifier le profil",
     "profils.nom": "Nom",
     "profils.couleur": "Couleur",
+    "profils.photo": "Photo",
+    "profils.photo.aide": "Dépose des photos dans Images/HUB/profils, ou envoie-les depuis ton téléphone avec la télécommande.",
     "profils.supprimer.dernier": "Il faut garder au moins un profil.",
     "profils.demarrage": "Demander le profil au démarrage",
 
@@ -195,6 +197,8 @@ const TEXTES = {
     "profils.modifier": "Edit profile",
     "profils.nom": "Name",
     "profils.couleur": "Colour",
+    "profils.photo": "Photo",
+    "profils.photo.aide": "Put pictures in Pictures/HUB/profils, or send them from your phone with the remote.",
     "profils.supprimer.dernier": "At least one profile is required.",
     "profils.demarrage": "Ask for a profile at startup",
 

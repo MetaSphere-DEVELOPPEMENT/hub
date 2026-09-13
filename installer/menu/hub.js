@@ -81,6 +81,24 @@ function el(tag, attrs = {}, ...enfants) {
   return e;
 }
 
+// Une photo si le profil en a une (et qu'elle se charge), sinon l'initiale sur sa couleur.
+function habillerAvatar(e, p) {
+  const couleur = COULEURS_PROFIL[p.couleur] || COULEURS_PROFIL.turquoise;
+  e.style.setProperty("--c", couleur.join(" "));
+  e.textContent = (p.nom?.[0] || "?").toUpperCase();
+  e.classList.remove("avec-photo");
+  e.style.backgroundImage = "";
+  if (!p.photo) return e;
+  const image = new Image();
+  image.onload = () => {
+    e.classList.add("avec-photo");
+    e.style.backgroundImage = `url("${encodeURI(decodeURI(p.photo))}")`;
+  };
+  image.src = p.photo;
+  return e;
+}
+function avatar(p, attrs = {}) { return habillerAvatar(el("span", { class: "avatar", ...attrs }), p); }
+
 function copie(o) { return JSON.parse(JSON.stringify(o)); }
 function fusion(defaut, valeur) {
   if (Array.isArray(defaut)) return Array.isArray(valeur) ? valeur : defaut;
@@ -183,10 +201,7 @@ function appliquerApparence() {
   racine.style.setProperty("--marge", reglages.systeme.marge);
   document.body.classList.toggle("sans-animation", profil().animations === "reduites");
   const couleur = COULEURS_PROFIL[profil().couleur] || COULEURS_PROFIL.turquoise;
-  for (const avatar of [$("avatar-profil")]) {
-    avatar.style.setProperty("--c", couleur.join(" "));
-    avatar.textContent = (profil().nom[0] || "?").toUpperCase();
-  }
+  habillerAvatar($("avatar-profil"), profil());
   $("nom-profil").textContent = profil().nom;
 }
 
@@ -780,6 +795,7 @@ document.addEventListener("click", e => {
 
 // ── Profils ───────────────────────────────────────────────────────────────
 let brouillon = null;
+let listeAvatars = INITIAL.avatars || [];
 
 function tuileProfil(p) {
   const couleur = COULEURS_PROFIL[p.couleur] || COULEURS_PROFIL.turquoise;
@@ -789,7 +805,7 @@ function tuileProfil(p) {
       if (document.body.classList.contains("gestion")) return ouvrirEditeur(p);
       choisirProfil(p.id);
     },
-  }, el("span", { class: "avatar", style: `--c:${couleur.join(" ")}` }, (p.nom[0] || "?").toUpperCase()), p.nom);
+  }, avatar(p), p.nom);
   return tuile;
 }
 
@@ -822,12 +838,11 @@ function ouvrirEditeur(p) {
   brouillon = p ? { ...p } : { ...DEFAUTS_PROFIL, id: `p${Date.now().toString(36)}`, nom: "", couleur: Object.keys(COULEURS_PROFIL)[reglages.profils.length % 7], nouveau: true };
   rendreEditeur();
   ouvrirCalque("editeur-profil");
+  envoyer({ type: "avatars" });
   if (brouillon.nouveau) ACTIONS["editer-nom"]();
 }
 function rendreEditeur() {
-  const couleur = COULEURS_PROFIL[brouillon.couleur];
-  $("editeur-apercu").style.setProperty("--c", couleur.join(" "));
-  $("editeur-apercu").textContent = (brouillon.nom[0] || "?").toUpperCase();
+  habillerAvatar($("editeur-apercu"), brouillon);
   $("editeur-titre").textContent = brouillon.nouveau ? t("profils.nouveau") : t("profils.modifier");
   $("editeur-nom").textContent = brouillon.nom || "…";
   $("editeur-supprimer").hidden = !!brouillon.nouveau;
@@ -840,7 +855,21 @@ function rendreEditeur() {
       onclick: () => { brouillon.couleur = nom; rendreEditeur(); },
     }));
   }
-  const retrouve = cle && nuancier.querySelector(`[data-cle="${cle}"]`);
+  const galerie = $("galerie-avatars");
+  galerie.innerHTML = "";
+  galerie.append(el("button", {
+    class: `choix-photo sans-photo${!brouillon.photo ? " choisie" : ""}`, "data-nav": true, "data-cle": "photo-aucune",
+    onclick: () => { brouillon.photo = null; rendreEditeur(); },
+  }, (brouillon.nom[0] || "?").toUpperCase()));
+  for (const [i, uri] of listeAvatars.entries()) {
+    galerie.append(el("button", {
+      class: `choix-photo${brouillon.photo === uri ? " choisie" : ""}`, "data-nav": true, "data-cle": `photo-${i}`,
+      style: `background-image:url("${encodeURI(decodeURI(uri))}")`,
+      onclick: () => { brouillon.photo = uri; rendreEditeur(); },
+    }));
+  }
+  $("aide-photo").hidden = listeAvatars.length > 0;
+  const retrouve = cle && $("editeur-profil").querySelector(`[data-cle="${cle}"]`);
   if (retrouve && pile.at(-1) === "editeur-profil") definirFocus(retrouve, true);
 }
 function enregistrerProfil() {
@@ -986,7 +1015,7 @@ function rendreSection(garderFocus = true) {
       for (const x of reglages.profils) {
         const couleur = COULEURS_PROFIL[x.couleur] || COULEURS_PROFIL.turquoise;
         zone.append(rangee(
-          el("span", { style: "display:flex;align-items:center;gap:.9rem" }, el("span", { class: "avatar", style: `--c:${couleur.join(" ")}` }, (x.nom[0] || "?").toUpperCase()), x.nom, x.id === reglages.profilActif ? " ✓" : ""),
+          el("span", { style: "display:flex;align-items:center;gap:.9rem" }, avatar(x), x.nom, x.id === reglages.profilActif ? " ✓" : ""),
           null,
           el("div", { class: "options" },
             x.id !== reglages.profilActif && el("button", { class: "option", "data-nav": true, "data-cle": `utiliser-${x.id}`, onclick: () => { choisirProfil(x.id); } }, "✓"),
@@ -1270,6 +1299,10 @@ window.hub = {
       case "meteo": return recevoirMeteo(message.donnees, message.releveLe, message.horsLigne);
       case "geocodage": return rappelGeocodage?.(message.resultats || []);
       case "minuteur": return recevoirMinuteur(message.fin);
+      case "avatars":
+        listeAvatars = Array.isArray(message.liste) ? message.liste : [];
+        if (brouillon && pile.includes("editeur-profil")) rendreEditeur();
+        return;
       case "infos":
         infosMachine = message;
         if (pile.at(-1) === "reglages" && sectionCourante === "apropos") rendreSection();

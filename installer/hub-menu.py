@@ -126,24 +126,43 @@ def retenir(c, choix):
             pass
 
 
-def photos():
-    """Les images de Images/HUB (ou Pictures/HUB) deviennent un fond possible."""
-    candidats = [Path.home() / "Images" / "HUB", Path.home() / "Pictures" / "HUB"]
+def dossiers_images(sous_dossier):
+    candidats = [Path.home() / "Images" / sous_dossier, Path.home() / "Pictures" / sous_dossier]
     try:
         images = subprocess.run(["xdg-user-dir", "PICTURES"], capture_output=True, text=True, timeout=2).stdout.strip()
         if images:
-            candidats.insert(0, Path(images) / "HUB")
+            candidats.insert(0, Path(images) / sous_dossier)
     except (OSError, subprocess.SubprocessError):
         pass
-    vues, liste = set(), []
+    vus, dossiers = set(), []
     for d in candidats:
-        if not d.is_dir() or d.resolve() in vues:
-            continue
-        vues.add(d.resolve())
-        for f in sorted(d.iterdir()):
-            if f.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"} and f.is_file():
-                liste.append(f.resolve().as_uri())
-    return liste[:200]
+        if d.is_dir() and d.resolve() not in vus:
+            vus.add(d.resolve())
+            dossiers.append(d)
+    return dossiers
+
+
+def images_de(dossiers, limite=200, recentes_d_abord=False):
+    fichiers = [
+        f for d in dossiers for f in d.iterdir()
+        if f.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"} and f.is_file()
+    ]
+    if recentes_d_abord:
+        fichiers.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+    else:
+        fichiers.sort()
+    return [f.resolve().as_uri() for f in fichiers[:limite]]
+
+
+def photos(dossiers=None):
+    """Les images de Images/HUB (ou Pictures/HUB) deviennent un fond possible."""
+    return images_de(dossiers if dossiers is not None else dossiers_images("HUB"))
+
+
+def avatars(dossiers=None):
+    """Les photos de profil possibles : Images/HUB/profils, la plus récente d'abord,
+    pour qu'une photo envoyée depuis le téléphone soit en tête de liste."""
+    return images_de(dossiers if dossiers is not None else dossiers_images(str(Path("HUB") / "profils")), limite=40, recentes_d_abord=True)
 
 
 # ── Kodi : reprendre la lecture ───────────────────────────────────────────
@@ -354,6 +373,8 @@ def message_voix(datagramme):
         texte = datagramme.decode("utf-8").strip()
     except UnicodeDecodeError:
         return None
+    if texte == "avatars":
+        return {"type": "avatars"}
     if texte.startswith("voix:"):
         etat, _, reste = texte[5:].partition(":")
         if etat == "entendu":
@@ -432,6 +453,7 @@ def lancer():
                 "reglages": charger_reglages(c),
                 "dernier": dernier_choix(c),
                 "photos": photos(),
+                "avatars": avatars(),
                 "minuteurFin": minuteur_en_cours(c),
                 "reprises": reprises_kodi(Path.home() / ".kodi"),
                 # Le choix du profil se fait à l'allumage, pas à chaque retour de Kodi.
@@ -506,6 +528,8 @@ def lancer():
             elif genre == "minuteur" and isinstance(message.get("minutes"), int):
                 minutes = max(0, min(message["minutes"], 240))
                 self.en_fond(lambda: {"type": "minuteur", "fin": programmer_minuteur(c, minutes)})
+            elif genre == "avatars":
+                self.en_fond(lambda: {"type": "avatars", "liste": avatars()})
             elif genre == "infos":
                 self.en_fond(lambda: {"type": "infos", **infos()})
 
@@ -527,6 +551,9 @@ def lancer():
             try:
                 while True:
                     message = message_voix(self.ecoute.recv(4096))
+                    if message == {"type": "avatars"}:
+                        # Une photo vient d'arriver (télécommande) : la liste est relue ici.
+                        message = {"type": "avatars", "liste": avatars()}
                     if message:
                         self.vers_page(message)
             except BlockingIOError:
