@@ -1248,6 +1248,8 @@ requestAnimationFrame(manettes);
 
 const carteDepart = cartes.find(c => c.dataset.mode === (INITIAL.dernier || profil().dernier)) || cartes[0];
 definirFocus(carteDepart, true);
+// Le dernier relevé en cache s'affiche tout de suite ; le relevé frais suit.
+if (INITIAL.meteo) recevoirMeteo(INITIAL.meteo.donnees, INITIAL.meteo.releveLe, INITIAL.meteo.horsLigne);
 chargerMeteo();
 
 if (reglages.systeme.demanderProfil && reglages.profils.length > 1 && !INITIAL.retour) ACTIONS.profils();
