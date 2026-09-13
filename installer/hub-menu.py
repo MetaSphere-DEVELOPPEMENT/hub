@@ -146,6 +146,80 @@ def photos():
     return liste[:200]
 
 
+# ── Kodi : reprendre la lecture ───────────────────────────────────────────
+def base_kodi(dossier, prefixe):
+    """La base la plus récente : Kodi crée MyVideos131.db, puis MyVideos137.db à la
+    version suivante, sans effacer l'ancienne."""
+    def version(f):
+        chiffres = "".join(ch for ch in f.stem if ch.isdigit())
+        return int(chiffres or 0)
+    bases = sorted(Path(dossier).glob(f"{prefixe}*.db"), key=version)
+    return bases[-1] if bases else None
+
+
+def reprises_kodi(dossier_kodi, limite=6):
+    """Films et épisodes commencés dans Kodi, du plus récent au plus ancien.
+
+    Lu directement dans la base de Kodi, en lecture seule : Kodi ne tourne pas quand
+    le menu est affiché, et on ne veut ni activer son serveur web ni le lancer pour
+    savoir où on en était. Toute surprise de schéma donne une liste vide, jamais une
+    erreur à l'écran."""
+    import sqlite3
+
+    donnees = Path(dossier_kodi) / "userdata"
+    base = base_kodi(donnees / "Database", "MyVideos")
+    if not base:
+        return []
+    miniatures = {}
+    textures = base_kodi(donnees / "Database", "Textures")
+    requetes = {
+        "film": "SELECT idMovie, c00, NULL, NULL, NULL, strPath, strFileName, resumeTimeInSeconds, totalTimeInSeconds, lastPlayed "
+                "FROM movie_view WHERE resumeTimeInSeconds > 0",
+        "episode": "SELECT idEpisode, c00, strTitle, c12, c13, strPath, strFileName, resumeTimeInSeconds, totalTimeInSeconds, lastPlayed "
+                   "FROM episode_view WHERE resumeTimeInSeconds > 0",
+    }
+    elements = []
+    try:
+        with sqlite3.connect(f"{base.as_uri()}?mode=ro", uri=True) as bd:
+            for genre, requete in requetes.items():
+                for ident, titre, serie, saison, episode, chemin, fichier, position, duree, vu in bd.execute(requete):
+                    if not fichier or not duree:
+                        continue
+                    art = bd.execute(
+                        "SELECT url FROM art WHERE media_id = ? AND media_type = ? AND type IN ('poster', 'thumb') "
+                        "ORDER BY type = 'poster' DESC LIMIT 1", (ident, "movie" if genre == "film" else "episode")).fetchone()
+                    elements.append({
+                        "genre": genre,
+                        "titre": serie or titre,
+                        "sousTitre": f"S{int(saison):02d} E{int(episode):02d} · {titre}" if genre == "episode" and str(saison).isdigit() and str(episode).isdigit() else None,
+                        # Kodi range les URL (smb://, nfs://, chemins locaux) déjà complètes.
+                        "fichier": fichier if "://" in fichier or fichier.startswith("/") else (chemin or "") + fichier,
+                        "position": float(position),
+                        "duree": float(duree),
+                        "vuLe": vu or "",
+                        "art": art[0] if art else None,
+                    })
+    except sqlite3.Error:
+        return []
+    elements.sort(key=lambda e: e["vuLe"], reverse=True)
+    elements = elements[:limite]
+
+    if textures and any(e["art"] for e in elements):
+        try:
+            with sqlite3.connect(f"{textures.as_uri()}?mode=ro", uri=True) as bd:
+                for e in elements:
+                    if e["art"]:
+                        ligne = bd.execute("SELECT cachedurl FROM texture WHERE url = ?", (e["art"],)).fetchone()
+                        if ligne:
+                            miniatures[e["art"]] = (donnees / "Thumbnails" / ligne[0])
+        except sqlite3.Error:
+            pass
+    for e in elements:
+        image = miniatures.get(e.pop("art"))
+        e["image"] = image.as_uri() if image and image.is_file() else None
+    return elements
+
+
 # ── Météo ─────────────────────────────────────────────────────────────────
 def telecharger_json(url, delai=8):
     requete = urllib.request.Request(url, headers={"User-Agent": "HUB-menu"})
@@ -330,6 +404,7 @@ def lancer():
         def __init__(self):
             super().__init__(application_id="fr.boudine.HubMenu")
             self.choix = None
+            self.fichier = None
             self.vue = None
             self.ecoute = None
 
@@ -358,6 +433,7 @@ def lancer():
                 "dernier": dernier_choix(c),
                 "photos": photos(),
                 "minuteurFin": minuteur_en_cours(c),
+                "reprises": reprises_kodi(Path.home() / ".kodi"),
                 # Le choix du profil se fait à l'allumage, pas à chaque retour de Kodi.
                 "retour": deja_ouvert,
             }
@@ -409,6 +485,8 @@ def lancer():
             genre = message["type"]
             if genre == "choix" and message.get("mode") in MODES:
                 self.choix = message["mode"]
+                if self.choix == "tv" and isinstance(message.get("fichier"), str) and "\n" not in message["fichier"]:
+                    self.fichier = message["fichier"]
                 retenir(c, self.choix)
                 self.quit()
             elif genre == "reglages":
@@ -479,7 +557,11 @@ def lancer():
     menu = Menu()
     menu.run(None)
     if menu.choix:
+        # Première ligne : le mode. Seconde, facultative : le fichier à reprendre
+        # (lu par gnome-kiosk-script, qui le passe à hub-kodi-lire).
         print(menu.choix)
+        if menu.fichier:
+            print(menu.fichier)
         return 0
     return 1
 

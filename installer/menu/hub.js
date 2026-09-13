@@ -582,8 +582,22 @@ function candidats() {
 
 function definirFocus(cible, silencieux = false) {
   if (!cible) return;
+  const precedent = courant;
   if (courant && courant !== cible) courant.classList.remove("focus");
   const change = courant !== cible;
+  // La carte qu'on atteint pivote un instant dans le sens du déplacement, comme
+  // si on la faisait glisser : on sent la direction sans lire l'écran.
+  if (change && precedent?.classList.contains("carte") && cible.classList.contains("carte") && profil().animations !== "reduites") {
+    const sens = cartes.indexOf(cible) > cartes.indexOf(precedent) ? 1 : -1;
+    cible.animate([
+      { transform: `translateY(-.9rem) scale(1.06) rotateY(${sens * -9}deg)` },
+      { transform: "translateY(-.9rem) scale(1.06) rotateY(0deg)" },
+    ], { duration: 650, easing: "cubic-bezier(.34, 1.56, .64, 1)" });
+    precedent.animate([
+      { transform: `scale(.96) rotateY(${sens * 7}deg)` },
+      { transform: "scale(.96) rotateY(0deg)" },
+    ], { duration: 650, easing: "cubic-bezier(.2, .8, .2, 1)" });
+  }
   courant = cible;
   cible.classList.add("focus");
   focusParCalque[pile.at(-1)] = cible;
@@ -705,6 +719,41 @@ cartes.forEach(c => c.addEventListener("click", () => {
   definirFocus(c, true);
   lancer(c);
 }));
+
+// ── Continuer à regarder ──────────────────────────────────────────────────
+function rendreReprises() {
+  const liste = INITIAL.reprises || [];
+  document.body.classList.toggle("avec-reprises", liste.length > 0);
+  $("reprises").hidden = !liste.length;
+  const zone = $("reprises-liste");
+  zone.innerHTML = "";
+  liste.slice(0, 4).forEach((r, i) => {
+    const reste = Math.max(1, Math.round((r.duree - r.position) / 60));
+    const tuile = el("button", {
+      class: "reprise", "data-nav": true, "data-accent": "tv", "data-cle": `reprise-${i}`,
+      style: r.image ? `background-image:linear-gradient(180deg, transparent, transparent), url("${encodeURI(r.image)}")` : null,
+      onclick: () => lancerReprise(tuile, r),
+    },
+    !r.image && el("span", { class: "lettre" }, (r.titre[0] || "").toUpperCase()),
+    el("span", { class: "lecture", html: '<svg viewBox="0 0 10 12"><path d="M0 0l10 6-10 6z"/></svg>' }),
+    el("span", { class: "textes" },
+      el("div", { class: "t1" }, r.titre),
+      el("div", { class: "t2" }, [r.sousTitre, t("reprendre.reste", { m: reste })].filter(Boolean).join(" · "))),
+    el("span", { class: "barre" }, el("i", { style: `width:${borne(r.position / r.duree * 100, 2, 100)}%` })));
+    zone.append(tuile);
+  });
+}
+
+function lancerReprise(tuile, reprise) {
+  if (verrou || pile.at(-1) !== "accueil") return;
+  verrou = true;
+  son("ok");
+  profil().dernier = "tv";
+  envoyer({ type: "reglages", donnees: reglages });
+  tuile.classList.add("lance");
+  document.body.classList.add("depart");
+  setTimeout(() => envoyer({ type: "choix", mode: "tv", fichier: reprise.fichier }), profil().animations === "reduites" ? 0 : 620);
+}
 
 // ── Actions nommées ───────────────────────────────────────────────────────
 const ACTIONS = {
@@ -1242,7 +1291,17 @@ function appliquerTout() {
 }
 
 appliquerTout();
+rendreReprises();
 setInterval(() => { horloge(); majMinuteur(); }, 5000);
+
+// Intro à l'allumage seulement : revenir de Kodi doit être immédiat.
+if (!INITIAL.retour && !parametres.get("ecran") && !parametres.has("sans-intro") && profil().animations !== "reduites" && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+  const intro = $("intro");
+  intro.hidden = false;
+  son("ok");
+  setTimeout(() => intro.classList.add("fin"), 1700);
+  setTimeout(() => { intro.hidden = true; }, 2700);
+}
 setInterval(chargerMeteo, 20 * 60000);
 requestAnimationFrame(manettes);
 

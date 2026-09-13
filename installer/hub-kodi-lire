@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""Ouvrir Kodi directement sur un film ou un épisode, là où on l'avait arrêté.
+
+POURQUOI. La ligne « Continuer à regarder » du menu promet de reprendre en un geste.
+Passer le fichier en argument à Kodi le lirait depuis le début ; reprendre au bon
+endroit passe par son interface JSON-RPC (Player.Open avec resume), qui n'existe
+qu'une fois Kodi démarré. Ce programme lance donc Kodi, attend que JSON-RPC réponde
+sur localhost:9090, demande la lecture, puis attend que Kodi se ferme : pour le
+script de session, c'est exactement comme avoir lancé Kodi.
+
+Kodi doit autoriser le contrôle par les programmes de cette machine
+(services.esenabled dans guisettings.xml, réglé par l'installateur). Sans cela,
+Kodi s'ouvre quand même, sur son accueil : on n'a rien perdu.
+
+    hub-kodi-lire /media/films/dune.mkv
+"""
+
+import json
+import socket
+import subprocess
+import sys
+import time
+
+PORT_JSONRPC = 9090
+
+
+def requete_lecture(fichier, ident=1):
+    return json.dumps({
+        "jsonrpc": "2.0", "id": ident, "method": "Player.Open",
+        "params": {"item": {"file": fichier}, "options": {"resume": True}},
+    }).encode() + b"\n"
+
+
+def envoyer(requete, hote="127.0.0.1", port=PORT_JSONRPC, delai=3):
+    """Envoie une requête JSON-RPC brute (TCP) et rend la réponse décodée."""
+    with socket.create_connection((hote, port), timeout=delai) as s:
+        s.sendall(requete)
+        tampon = b""
+        while True:
+            morceau = s.recv(65536)
+            if not morceau:
+                break
+            tampon += morceau
+            try:
+                # Kodi n'envoie pas de délimiteur : la réponse est complète quand elle se décode.
+                return json.loads(tampon)
+            except ValueError:
+                continue
+    raise OSError("connexion fermée sans réponse")
+
+
+def attendre_jsonrpc(processus, attente=45, hote="127.0.0.1", port=PORT_JSONRPC, pause=.5):
+    fin = time.monotonic() + attente
+    ping = json.dumps({"jsonrpc": "2.0", "id": 0, "method": "JSONRPC.Ping"}).encode()
+    while time.monotonic() < fin:
+        if processus.poll() is not None:
+            return False
+        try:
+            if envoyer(ping, hote, port, delai=1).get("result") == "pong":
+                return True
+        except OSError:
+            pass
+        time.sleep(pause)
+    return False
+
+
+def main(arguments):
+    if len(arguments) != 1 or not arguments[0]:
+        print("usage : hub-kodi-lire FICHIER", file=sys.stderr)
+        return 2
+    kodi = subprocess.Popen(["kodi", "--windowing=wayland"])
+    if attendre_jsonrpc(kodi):
+        try:
+            reponse = envoyer(requete_lecture(arguments[0]))
+            if "error" in reponse:
+                print(f"hub-kodi-lire : Kodi refuse la lecture : {reponse['error']}", file=sys.stderr)
+        except OSError as erreur:
+            print(f"hub-kodi-lire : lecture non demandée ({erreur})", file=sys.stderr)
+    else:
+        print("hub-kodi-lire : JSON-RPC de Kodi injoignable, Kodi reste sur son accueil", file=sys.stderr)
+    return kodi.wait()
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
