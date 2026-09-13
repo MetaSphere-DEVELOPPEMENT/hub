@@ -135,6 +135,57 @@ class Minuteur(AvecDossier):
         self.assertIsNone(hub_menu.minuteur_en_cours(self.c, maintenant=1000 + 120))
 
 
+class ReprisesKodi(unittest.TestCase):
+    """Base de test aux colonnes de Kodi 21 (movie_view, episode_view, art, texture)."""
+
+    def setUp(self):
+        import sqlite3
+        self._tmp = tempfile.TemporaryDirectory()
+        self.kodi = Path(self._tmp.name) / ".kodi"
+        bases = self.kodi / "userdata" / "Database"
+        bases.mkdir(parents=True)
+        (bases / "MyVideos116.db").write_bytes(b"")
+        with sqlite3.connect(bases / "MyVideos131.db") as bd:
+            bd.executescript("""
+                CREATE TABLE movie_view (idMovie, c00, strPath, strFileName, resumeTimeInSeconds, totalTimeInSeconds, lastPlayed);
+                CREATE TABLE episode_view (idEpisode, c00, strTitle, c12, c13, strPath, strFileName, resumeTimeInSeconds, totalTimeInSeconds, lastPlayed);
+                CREATE TABLE art (media_id, media_type, type, url);
+                INSERT INTO movie_view VALUES (1, 'Dune', '/media/films/', 'dune.mkv', 3600, 9000, '2026-09-10 21:00:00');
+                INSERT INTO movie_view VALUES (2, 'Vu en entier', '/media/films/', 'fini.mkv', 0, 6000, '2026-09-12 21:00:00');
+                INSERT INTO episode_view VALUES (7, 'Le retour', 'Chernobyl', '1', '3', 'smb://nas/series/', 'smb://nas/series/c-s01e03.mkv', 600, 3600, '2026-09-12 22:00:00');
+                INSERT INTO art VALUES (1, 'movie', 'poster', 'image://dune.jpg/');
+            """)
+        with sqlite3.connect(bases / "Textures13.db") as bd:
+            bd.executescript("CREATE TABLE texture (url, cachedurl); INSERT INTO texture VALUES ('image://dune.jpg/', 'a/abcd.jpg');")
+        miniature = self.kodi / "userdata" / "Thumbnails" / "a" / "abcd.jpg"
+        miniature.parent.mkdir(parents=True)
+        miniature.write_bytes(b"jpg")
+        self.miniature = miniature
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_films_et_episodes_commences_du_plus_recent(self):
+        r = hub_menu.reprises_kodi(self.kodi)
+        self.assertEqual([e["titre"] for e in r], ["Chernobyl", "Dune"])
+        self.assertEqual(r[0]["sousTitre"], "S01 E03 · Le retour")
+        self.assertEqual(r[0]["fichier"], "smb://nas/series/c-s01e03.mkv")
+        self.assertEqual(r[1]["fichier"], "/media/films/dune.mkv")
+        self.assertEqual((r[1]["position"], r[1]["duree"]), (3600.0, 9000.0))
+
+    def test_affiche_depuis_le_cache_de_miniatures(self):
+        r = hub_menu.reprises_kodi(self.kodi)
+        self.assertEqual(r[1]["image"], self.miniature.as_uri())
+        self.assertIsNone(r[0]["image"])
+
+    def test_sans_kodi_ou_schema_inconnu_liste_vide(self):
+        self.assertEqual(hub_menu.reprises_kodi(Path(self._tmp.name) / "absent"), [])
+        import sqlite3
+        with sqlite3.connect(self.kodi / "userdata/Database/MyVideos140.db") as bd:
+            bd.execute("CREATE TABLE autre (x)")
+        self.assertEqual(hub_menu.reprises_kodi(self.kodi), [])
+
+
 class Messages(unittest.TestCase):
     def test_commandes_vocales(self):
         self.assertEqual(hub_menu.message_voix(b"tv"), {"type": "commande", "nom": "tv"})

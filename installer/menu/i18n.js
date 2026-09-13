@@ -156,6 +156,8 @@ const TEXTES = {
     "clavier.effacer": "Effacer",
     "clavier.valider": "Valider",
     "touche.echap": "Échap",
+    "reprendre.titre": "Continuer à regarder",
+    "reprendre.reste": "Reste {m} min",
   },
   en: {
     "salut.matin": "Good morning",
@@ -310,6 +312,8 @@ const TEXTES = {
     "clavier.effacer": "Delete",
     "clavier.valider": "Done",
     "touche.echap": "Esc",
+    "reprendre.titre": "Continue watching",
+    "reprendre.reste": "{m} min left",
   },
 };
 

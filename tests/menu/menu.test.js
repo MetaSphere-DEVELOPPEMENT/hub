@@ -191,6 +191,32 @@ test("mode ambiant : la première touche réveille sans rien déclencher", async
   assert.deepEqual(await messages("choix"), []);
 });
 
+test("continuer à regarder : une tuile par reprise, OK relance Kodi sur le fichier", async () => {
+  await ouvrir({
+    retour: true,
+    reprises: [
+      { genre: "episode", titre: "Chernobyl", sousTitre: "S01 E03 · Le retour", fichier: "smb://nas/c-s01e03.mkv", position: 600, duree: 3600, image: null },
+      { genre: "film", titre: "Dune", sousTitre: null, fichier: "/media/dune.mkv", position: 3600, duree: 9000, image: null },
+    ],
+  });
+  assert.equal(await page.locator(".reprise").count(), 2);
+  assert.match(await page.textContent(".reprise >> nth=0"), /Reste 50 min/);
+  await touche("ArrowDown");
+  assert.equal(await focus(), "reprise-0");
+  await touche("ArrowRight", "Enter");
+  await page.waitForTimeout(800);
+  assert.deepEqual(await messages("choix"), [{ type: "choix", mode: "tv", fichier: "/media/dune.mkv" }]);
+});
+
+test("sans reprise, la ligne n'existe pas et l'intro ne joue qu'à l'allumage", async () => {
+  await ouvrir({ retour: true });
+  assert.ok(!(await page.isVisible("#reprises")));
+  assert.ok(!(await page.isVisible("#intro")));
+  await page.close();
+  await ouvrir({});
+  assert.ok(await page.isVisible("#intro"));
+});
+
 test("météo reçue de hub-menu : puce, alerte pluie et panneau détaillé", async () => {
   await ouvrir();
   // Open-Meteo (timezone=auto) donne des heures locales sans fuseau : on fait pareil.
