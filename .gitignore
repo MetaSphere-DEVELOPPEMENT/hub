@@ -9,3 +9,5 @@ vm/telechargement.log
 vm/cidata.iso
 vm/moniteur.sock
 vm/vm-installation.log
+vm/noyau-installation
+vm/initrd-installation
