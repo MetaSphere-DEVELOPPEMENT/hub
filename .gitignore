@@ -11,3 +11,4 @@ vm/moniteur.sock
 vm/vm-*.log
 vm/noyau-installation
 vm/initrd-installation
+node_modules/
