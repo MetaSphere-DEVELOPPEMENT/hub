@@ -1,2 +1,9 @@
 rapport-*.local.md
 *.iso
+# Machine virtuelle d'essai : rien de lourd ni de secret dans le dépôt.
+vm/.venv/
+vm/cle-vm
+vm/*.qcow2
+vm/uefi-variables.fd
+vm/telechargement.log
+vm/cidata.iso
