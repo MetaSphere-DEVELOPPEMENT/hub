@@ -105,10 +105,22 @@ args=(
   -monitor "unix:$PWD/moniteur.sock,server,nowait"
 )
 if [ "$INSTALLER" = 1 ]; then
+  # On démarre le noyau de l'ISO directement, avec `autoinstall` sur sa ligne de
+  # commande. Sans ce paramètre, l'installateur de bureau trouve bien la configuration
+  # mais s'arrête sur « Ready to install » et attend un clic : vu le 13 septembre 2026,
+  # il n'a jamais commencé. Le noyau et l'initrd sont extraits de l'ISO vérifiée
+  # (voir extraire-noyau), pas téléchargés à part.
+  [ -f noyau-installation ] && [ -f initrd-installation ] \
+    || refus "noyau-installation / initrd-installation absents : extrayez-les de l'ISO"
   args+=(
     -drive "file=$ISO,media=cdrom,readonly=on"
     -drive "file=cidata.iso,media=cdrom,readonly=on"
-    -boot once=d
+    -kernel noyau-installation
+    -initrd initrd-installation
+    -append "autoinstall ds=nocloud --- quiet"
+    # La fin d'installation redémarre la machine. Avec le noyau passé en direct, elle
+    # relancerait l'installateur en boucle : on laisse QEMU s'arrêter à la place.
+    -no-reboot
   )
 fi
 if [ "$ECRAN" = 1 ]; then

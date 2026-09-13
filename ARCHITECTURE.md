@@ -66,6 +66,34 @@ UHD 630. Le mode Gaming sera du **streaming**, pas du jeu exécuté sur la machi
 > Sans source locale, « Gaming » se réduit à un service en ligne — architecture
 > très différente. À trancher avant le prototype.
 
+## La TV, relevée le 13 septembre 2026
+
+Sony **« KD55XG670 »** d'après le propriétaire. Aucune fiche exacte à ce nom : le
+modèle le plus proche est la **KD-55XG7005** (Bravia XG70, 2019). **À confirmer sur
+l'étiquette.** Fiche Sony (sony.fr, caractéristiques de la KD-55XG7005) :
+
+- 4K 3840×2160 ; entrée HDMI en 2160p à **24, 25, 30, 50 et 60 Hz** ;
+- **3 HDMI**, HDCP 2.3 ;
+- **HDR10 et HLG**, pas de Dolby Vision ;
+- dalle **native 50 Hz** (« Motionflow XR 200 Hz » est de l'interpolation) ;
+- son 2.0, 2 × 10 W.
+
+**Non vérifié :** HDMI-CEC (« BRAVIA Sync ») et la prise ARC ne figurent pas dans la
+fiche consultée. À lire dans le mode d'emploi.
+
+### Ce que ça implique
+
+1. **4K à 60 Hz par l'HDMI du M720q : probablement non.** Le M720q a 2 DisplayPort
+   1.2 (4K 60 Hz) et 1 HDMI dont la version n'est pas publiée ; sur UHD 630, l'HDMI
+   native est en général en 1.4, soit 4K **30 Hz**. **À mesurer au branchement**
+   (`audit.sh` relève les modes offerts par la TV). Si c'est confirmé : adaptateur
+   **actif DisplayPort → HDMI 2.0**.
+2. **La télécommande Sony ne pilote rien sans adaptateur USB-CEC** : le M720q n'a
+   pas de CEC (contrainte n° 3).
+3. **Kodi : ajustement automatique de la fréquence** à activer. Dalle 50 Hz, TV
+   française en 50 Hz, films en 24 i/s.
+4. **HDR : pas une promesse.** Il dépend de la sortie vidéo réellement utilisée.
+
 ## Ce qui est déjà bon
 
 **La machine démarre sans clavier** : la racine n'est pas chiffrée, et le volume
