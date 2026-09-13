@@ -1,0 +1,52 @@
+#cloud-config
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Installation automatique d'Ubuntu 26.04 pour éprouver le HUB
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Ce fichier sert d'abord à ESSAYER l'installateur du HUB dans une machine
+# virtuelle, avant qu'il n'approche la vraie machine du salon. Il décrit donc la
+# même machine que celle visée : pas de chiffrement, une session qui démarre
+# seule, du français partout.
+#
+# Il est aussi la recette de l'installation réelle : ce qui marche ici marchera
+# là-bas, et ce qui casse ici aura cassé loin du salon.
+autoinstall:
+  version: 1
+
+  # Sans cette ligne, l'installateur s'arrête pour poser des questions et la
+  # machine virtuelle attend indéfiniment un clavier que personne ne tient.
+  interactive-sections: []
+
+  locale: fr_FR.UTF-8
+  keyboard:
+    layout: fr
+
+  identity:
+    hostname: hub-essai
+    realname: Samuel Boudine
+    username: samuel
+    password: "$6$m9rgabDsc/KawOms$cJzBPxzBMhAgjpbiLJeCVOAM.U6dVpvICkinMUKYqVz1eWkkIZ7Ubcb9rkgR7HVQ1I6/SxsRllFgfk4LyASrF."
+
+  # Le seul moyen d'entrer dans la machine virtuelle pour y lancer l'installateur
+  # et en lire la sortie. Mot de passe refusé : la clé suffit.
+  ssh:
+    install-server: true
+    allow-pw: false
+    authorized-keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKOSE7IKh9bdQZW0YjBbHw8AvafQDEm2A76ksG2TDKjV hub-vm-essai
+
+  # PAS de chiffrement : un HUB doit démarrer sans clavier. C'est une règle du
+  # projet, elle vaut aussi pour l'essai, sinon l'essai ne prouve rien.
+  storage:
+    layout:
+      name: direct
+
+  packages:
+    - openssh-server
+
+  late-commands:
+    # L'installateur du HUB n'est pas lancé ici. Il doit l'être à la main, sur une
+    # machine déjà démarrée, pour qu'on voie ce qu'il fait et qu'on puisse le
+    # relancer. Un essai qui installe tout d'un coup ne prouve pas qu'il est
+    # rejouable.
+    - curtin in-target --target=/target -- systemctl enable ssh
