@@ -285,6 +285,33 @@ etape_mesure() {
   installer_paquets -- vainfo mesa-utils ethtool
 }
 
+# Le menu affiche la version installée : c'est la première chose qu'on demande quand
+# un soir « ça ne marche plus ». Elle vient du dépôt dont on installe, pas d'un
+# numéro tenu à la main qu'on oublierait de changer.
+poser_version() {
+  local version_depot cible=/usr/local/share/hub/VERSION
+  # safe.directory : lancé par sudo, git refuse un dépôt appartenant à l'utilisateur.
+  version_depot=$(git -c safe.directory='*' -C "$DEPOT/.." describe --always --dirty 2>/dev/null)
+  if [ -z "$version_depot" ] && [ -f "$DEPOT/../VERSION" ]; then
+    version_depot=$(head -n 1 "$DEPOT/../VERSION")
+  fi
+  if [ -z "$version_depot" ]; then
+    alerte "version inconnue (ni dépôt git, ni fichier VERSION) : le menu n'en affichera pas"
+    return 0
+  fi
+  if [ "$(cat "$cible" 2>/dev/null)" = "$version_depot" ]; then
+    deja "$cible ($version_depot)"; return 0
+  fi
+  if [ "$POUR_DE_VRAI" = 1 ]; then
+    printf '%s\n' "$version_depot" >"$cible.hub" &&
+    faire install -D -m 0644 "$cible.hub" "$cible"
+    local code=$?; rm -f "$cible.hub"; [ "$code" -eq 0 ] || return 1
+  else
+    faire "écrire $version_depot dans $cible"
+  fi
+  ok "$cible ($version_depot)"
+}
+
 # ── 3. Session et menu ────────────────────────────────────────────────────────
 etape_session() {
   etape "3. Session HUB et menu"
@@ -298,6 +325,7 @@ etape_session() {
 
   poser "$DEPOT/hub-menu.py"              /usr/local/bin/hub-menu              0755 || return 1
   poser_repertoire "$DEPOT/menu"          /usr/local/share/hub/menu            || return 1
+  poser_version || return 1
   poser "$DEPOT/hub-vers-bureau"          /usr/local/bin/hub-vers-bureau       0755 || return 1
   poser "$DEPOT/hub-session-par-defaut"   /usr/local/bin/hub-session-par-defaut 0755 || return 1
   poser "$DEPOT/hub-session-par-defaut.desktop" /etc/xdg/autostart/hub-session-par-defaut.desktop 0644 || return 1
@@ -367,6 +395,26 @@ etape_kodi() {
   # gnome-kiosk-script. Le quitter rend la main au menu. Ce raccourci l'y ramène
   # d'une touche (Accueil ou F12).
   poser "$DEPOT/kodi/keymaps/hub.xml" "$MAISON/.kodi/userdata/keymaps/hub.xml" 0644 "$UTILISATEUR" || return 1
+
+  # « Continuer à regarder » : hub-kodi-lire lance Kodi puis lui demande la reprise
+  # par JSON-RPC (localhost:9090). Kodi n'écoute que si le contrôle par les programmes
+  # de CETTE machine est autorisé ; celui depuis le réseau reste fermé, rien d'autre
+  # que le HUB n'a à piloter Kodi.
+  poser "$DEPOT/hub-kodi-lire" /usr/local/bin/hub-kodi-lire 0755 || return 1
+  local reglages="$MAISON/.kodi/userdata/guisettings.xml"
+  local voulus=(services.esenabled=true services.esallinterfaces=false)
+  if python3 "$DEPOT/kodi/regler-guisettings.py" verifier "$reglages" "${voulus[@]}" 2>/dev/null; then
+    deja "Kodi : contrôle par les programmes locaux autorisé, réseau fermé"
+  elif pgrep -u "$UTILISATEUR" -x kodi.bin >/dev/null 2>&1; then
+    # Kodi réécrit guisettings.xml en quittant : modifié maintenant, il serait perdu.
+    echec "Kodi tourne : quittez-le puis relancez, sinon il écraserait ce réglage en quittant"
+    return 1
+  else
+    faire runuser -u "$UTILISATEUR" -- mkdir -p "$(dirname "$reglages")" &&
+    faire runuser -u "$UTILISATEUR" -- python3 - appliquer "$reglages" "${voulus[@]}" \
+      <"$DEPOT/kodi/regler-guisettings.py" || return 1
+    ok "Kodi : contrôle par les programmes locaux autorisé (JSON-RPC sur localhost:9090), réseau fermé"
+  fi
 }
 
 # ── 6. Assistant vocal (s'il est livré) ───────────────────────────────────────
