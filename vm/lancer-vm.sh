@@ -17,6 +17,9 @@
 #   ./lancer-vm.sh               démarrages suivants : sur le disque installé
 #   ./lancer-vm.sh --ecran       ouvre une fenêtre au lieu de tourner sans écran
 #   ./lancer-vm.sh --iso CHEMIN  ISO rangée ailleurs que dans ce dossier
+#   ./lancer-vm.sh --disque NOM  un autre disque (ex. disque-hub-2.qcow2), avec
+#                                ses propres variables UEFI ; combiné à --installer,
+#                                une installation neuve sans toucher à l'essai en cours
 #
 # Une fois démarrée :  ssh -i cle-vm -p 2222 samuel@127.0.0.1
 
@@ -38,11 +41,19 @@ while [ $# -gt 0 ]; do
     --installer) INSTALLER=1 ;;
     --ecran)     ECRAN=1 ;;
     --iso)       shift; ISO="${1:?--iso attend un chemin}" ;;
-    -h|--help)   sed -n '2,24p' "$0"; exit 0 ;;
+    --disque)    shift; DISQUE="${1:?--disque attend un nom de fichier}" ;;
+    -h|--help)   sed -n '2,27p' "$0"; exit 0 ;;
     *) echo "argument inconnu : $1" >&2; exit 2 ;;
   esac
   shift
 done
+
+# Chaque disque garde ses variables UEFI. Partagées, l'installation d'un second disque
+# réécrirait l'entrée d'amorçage du premier, qui ne démarrerait plus que par hasard.
+# Le disque historique garde son fichier d'origine pour ne rien casser.
+if [ "$DISQUE" != "disque-hub.qcow2" ]; then
+  OVMF_VARS="${DISQUE%.qcow2}-uefi-variables.fd"
+fi
 
 refus() { printf '  ✗ %s\n' "$1" >&2; exit "${2:-1}"; }
 ok()    { printf '  ✓ %s\n' "$1"; }

@@ -4,10 +4,10 @@ rapport-*.local.md
 vm/.venv/
 vm/cle-vm
 vm/*.qcow2
-vm/uefi-variables.fd
+vm/*uefi-variables.fd
 vm/telechargement.log
 vm/cidata.iso
 vm/moniteur.sock
-vm/vm-installation.log
+vm/vm-*.log
 vm/noyau-installation
 vm/initrd-installation
