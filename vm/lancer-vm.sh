@@ -94,7 +94,15 @@ args=(
   -netdev "user,id=reseau,hostfwd=tcp:127.0.0.1:$PORT_SSH-:22"
   -device virtio-net-pci,netdev=reseau
   -device virtio-vga
+  # Pointeur ABSOLU : la souris relative par défaut ne se positionne pas de façon
+  # fiable, si bien qu'on ne peut ni cliquer depuis le moniteur ni viser juste en VNC.
+  # L'installateur d'Ubuntu 26.04 attend un clic sur « Install » (voir autoinstall).
+  -device qemu-xhci -device usb-tablet
   -audiodev none,id=son -device intel-hda -device hda-duplex,audiodev=son
+  # Moniteur QEMU sur une socket : il permet de capturer l'écran sans visionneuse.
+  # Sans lui, une installation arrêtée sur une question ressemble à une installation
+  # lente, et on attend pour rien.
+  -monitor "unix:$PWD/moniteur.sock,server,nowait"
 )
 if [ "$INSTALLER" = 1 ]; then
   args+=(
