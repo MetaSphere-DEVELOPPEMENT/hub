@@ -186,6 +186,22 @@ class ReprisesKodi(unittest.TestCase):
         self.assertEqual(hub_menu.reprises_kodi(self.kodi), [])
 
 
+class Images(unittest.TestCase):
+    def test_avatars_les_plus_recents_d_abord_et_seulement_des_images(self):
+        import os
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            for i, nom in enumerate(["ancienne.jpg", "recente.png", "notes.txt", "photo.WEBP"]):
+                (d / nom).write_bytes(b"x")
+                os.utime(d / nom, (1000 + i, 1000 + i))
+            os.utime(d / "recente.png", (5000, 5000))
+            noms = [Path(u).name for u in hub_menu.avatars([d])]
+        self.assertEqual(noms, ["recente.png", "photo.WEBP", "ancienne.jpg"])
+
+    def test_datagramme_avatars(self):
+        self.assertEqual(hub_menu.message_voix(b"avatars"), {"type": "avatars"})
+
+
 class Messages(unittest.TestCase):
     def test_commandes_vocales(self):
         self.assertEqual(hub_menu.message_voix(b"tv"), {"type": "commande", "nom": "tv"})

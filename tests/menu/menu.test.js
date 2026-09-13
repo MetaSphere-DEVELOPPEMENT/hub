@@ -39,6 +39,12 @@ const focus = () => page.evaluate(() => {
   return e && (e.dataset.mode || e.dataset.cle || e.dataset.action || e.textContent.trim());
 });
 const touche = async (...touches) => { for (const k of touches) { await page.keyboard.press(k); await page.waitForTimeout(60); } };
+// La machine de test peut être chargée : on attend un état, jamais une durée fixe.
+const attendreReglages = verifie => page.waitForFunction(v => {
+  const m = window.__messages.filter(x => x.type === "reglages").at(-1);
+  return m && new Function("d", `return (${v})(d)`)(m.donnees);
+}, verifie.toString(), { timeout: 5000 });
+const attendreChoix = () => page.waitForFunction(() => window.__messages.some(m => m.type === "choix"), null, { timeout: 5000 });
 const calques = () => page.evaluate(() => [...document.querySelectorAll(".calque.ouvert")].map(c => c.id));
 
 beforeEach(async () => { await page?.close(); });
@@ -56,10 +62,9 @@ test("les flèches changent de carte, Entrée lance le mode", async () => {
   await touche("ArrowRight", "ArrowRight");
   assert.equal(await focus(), "bureau");
   await touche("Enter");
-  await page.waitForTimeout(800);
+  await attendreChoix();
   assert.deepEqual(await messages("choix"), [{ type: "choix", mode: "bureau" }]);
-  const reglages = (await messages("reglages")).at(-1);
-  assert.equal(reglages.donnees.profils[0].dernier, "bureau", "le dernier mode est retenu dans le profil");
+  await attendreReglages(d => d.profils[0].dernier === "bureau");
 });
 
 test("Jeux n'est pas configuré : un message, et le menu reste ouvert", async () => {
@@ -86,7 +91,7 @@ test("éteindre demande confirmation, Annuler est sélectionné d'abord", async 
   assert.deepEqual(await calques(), []);
   assert.deepEqual(await messages("choix"), []);
   await touche("e", "ArrowRight", "Enter");
-  await page.waitForTimeout(800);
+  await attendreChoix();
   assert.deepEqual(await messages("choix"), [{ type: "choix", mode: "eteindre" }]);
 });
 
@@ -100,8 +105,7 @@ test("réglages : parcourir le sommaire change la section, choisir un fond l'enr
   await touche("ArrowRight");
   assert.equal(await focus(), "fond-aurore");
   await touche("ArrowRight", "Enter");
-  await page.waitForTimeout(600);
-  assert.equal((await messages("reglages")).at(-1).donnees.profils[0].fond, "nebuleuse");
+  await attendreReglages(d => d.profils[0].fond === "nebuleuse");
   assert.equal(await focus(), "fond-nebuleuse", "la sélection reste sur la vignette choisie");
   await touche("Escape");
   assert.deepEqual(await calques(), []);
@@ -113,10 +117,7 @@ test("thème et langue : T et L basculent, et c'est enregistré", async () => {
   assert.equal(await page.getAttribute("html", "data-theme"), "clair");
   await touche("l");
   assert.match(await page.textContent("#salut"), /^Good/);
-  await page.waitForTimeout(600);
-  const profil = (await messages("reglages")).at(-1).donnees.profils[0];
-  assert.equal(profil.theme, "clair");
-  assert.equal(profil.langue, "en");
+  await attendreReglages(d => d.profils[0].theme === "clair" && d.profils[0].langue === "en");
 });
 
 test("commandes vocales : ouvrir, revenir, lancer", async () => {
@@ -130,7 +131,7 @@ test("commandes vocales : ouvrir, revenir, lancer", async () => {
   await page.evaluate(() => window.hub.recevoir({ type: "commande", nom: "theme:clair" }));
   assert.equal(await page.getAttribute("html", "data-theme"), "clair");
   await page.evaluate(() => window.hub.recevoir({ type: "commande", nom: "tv" }));
-  await page.waitForTimeout(800);
+  await attendreChoix();
   assert.deepEqual(await messages("choix"), [{ type: "choix", mode: "tv" }]);
 });
 
@@ -147,13 +148,28 @@ test("profils : créer un profil au clavier, puis l'utiliser", async () => {
   assert.deepEqual(await calques(), ["profils", "editeur-profil"]);
   assert.equal(await page.textContent("#editeur-nom"), "Lea");
   await page.click('[data-action="enregistrer-profil"]');
-  await page.waitForTimeout(600);
+  await attendreReglages(d => d.profils.length === 2);
   const donnees = (await messages("reglages")).at(-1).donnees;
   assert.deepEqual(donnees.profils.map(p => p.nom), ["Samuel", "Lea"]);
   await page.click(`[data-cle="profil-${donnees.profils[1].id}"]`);
   assert.match(await page.textContent("#salut"), /Lea$/);
-  await page.waitForTimeout(600);
-  assert.equal((await messages("reglages")).at(-1).donnees.profilActif, donnees.profils[1].id);
+  await page.waitForFunction(id => window.__messages.filter(m => m.type === "reglages").at(-1)?.donnees.profilActif === id, donnees.profils[1].id, { timeout: 3000 });
+});
+
+test("photo de profil : choisie dans l'éditeur, affichée partout, liste rafraîchie", async () => {
+  const photo = "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="red"/></svg>');
+  await ouvrir({ retour: true, avatars: [] });
+  await touche("p");
+  await page.click('[data-action="gerer-profils"]');
+  await page.click('[data-cle="profil-samuel"]');
+  assert.deepEqual((await messages("avatars")).length, 1, "l'éditeur redemande la liste des photos");
+  assert.ok(await page.isVisible("#aide-photo"));
+  await page.evaluate(p => window.hub.recevoir({ type: "avatars", liste: [p] }), photo);
+  assert.ok(!(await page.isVisible("#aide-photo")));
+  await page.click('[data-cle="photo-0"]');
+  await page.click('[data-action="enregistrer-profil"]');
+  await attendreReglages(new Function("d", `return d.profils[0].photo === ${JSON.stringify(photo)}`));
+  await page.waitForFunction(() => document.querySelector("#avatar-profil").classList.contains("avec-photo"));
 });
 
 test("les réglages reçus au démarrage s'appliquent : profil, thème, langue", async () => {
@@ -204,7 +220,7 @@ test("continuer à regarder : une tuile par reprise, OK relance Kodi sur le fich
   await touche("ArrowDown");
   assert.equal(await focus(), "reprise-0");
   await touche("ArrowRight", "Enter");
-  await page.waitForTimeout(800);
+  await attendreChoix();
   assert.deepEqual(await messages("choix"), [{ type: "choix", mode: "tv", fichier: "/media/dune.mkv" }]);
 });
 
