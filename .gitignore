@@ -7,3 +7,5 @@ vm/*.qcow2
 vm/uefi-variables.fd
 vm/telechargement.log
 vm/cidata.iso
+vm/moniteur.sock
+vm/vm-installation.log
