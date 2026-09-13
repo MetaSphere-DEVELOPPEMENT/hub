@@ -6,13 +6,24 @@
 # après le programme) : le retour au HUB est la fin normale d'un mode, pas un
 # mécanisme à part.
 
-choix=$(/usr/local/bin/hub-menu)
+# Le menu écrit le mode sur sa première ligne et, pour « Continuer à regarder », le
+# fichier à reprendre sur la seconde. Deux lignes plutôt qu'un format à analyser :
+# un script de session doit se lire d'un coup d'œil un soir de panne.
+sortie=$(/usr/local/bin/hub-menu)
+choix=$(printf '%s\n' "$sortie" | sed -n 1p)
+fichier=$(printf '%s\n' "$sortie" | sed -n 2p)
 
 case "$choix" in
   tv)
     # Kodi dans la session kiosque, en client Wayland : le compositeur le met en
     # plein écran. Quitter Kodi rend la main à cette boucle.
-    kodi --windowing=wayland
+    if [ -n "$fichier" ]; then
+      # hub-kodi-lire lance Kodi lui-même et attend qu'il se ferme : pour cette
+      # boucle, c'est comme avoir lancé Kodi.
+      /usr/local/bin/hub-kodi-lire "$fichier"
+    else
+      kodi --windowing=wayland
+    fi
     ;;
   gaming)
     # Pas encore configuré : la source du streaming n'est pas décidée.
