@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Menu d'accueil du HUB : trois modes, un bouton pour éteindre.
+"""Menu d'accueil du HUB : les modes, les réglages, la météo.
 
 POURQUOI UN PROGRAMME GRAPHIQUE. La première version était un script bash qui lisait
 le clavier dans un terminal. Éprouvée sur Ubuntu 26.04 (Wayland seul, plus de
@@ -7,40 +7,299 @@ serveur Xorg), elle ne pouvait rien afficher : une session graphique n'a pas de
 terminal. Ce menu tourne dans la session kiosque de GNOME
 (gnome-kiosk-script-session), qui l'affiche en plein écran.
 
-POURQUOI WEBKIT. L'interface (menu/index.html) veut du verre dépoli, un fond animé et
-des cartes qui réagissent au choix. GTK n'a pas de flou d'arrière-plan ; WebKitGTK,
-si. La page est locale : aucun réseau n'est nécessaire. Si WebKit manque, le menu
+POURQUOI WEBKIT. L'interface (menu/) veut du verre dépoli, des fonds animés et des
+cartes qui réagissent au choix. GTK n'a pas de flou d'arrière-plan ; WebKitGTK, si.
+La page est locale : seule la météo a besoin du réseau. Si WebKit manque, le menu
 retombe sur des boutons GTK simples plutôt que de laisser la TV sur un écran noir.
 
-CE QU'IL FAIT. Il affiche les modes, attend un choix, écrit ce choix sur la sortie
-standard et se termine. Il ne lance rien lui-même : c'est le script de session qui
-lance le mode puis, quand le mode se termine, relance ce menu. Le dernier choix est
-retenu pour que le retour au menu remette la sélection là où on l'avait laissée.
+CE QU'IL FAIT. Il affiche la page, lui passe les réglages au démarrage, et répond à
+ses demandes (enregistrer les réglages, météo, minuteur, infos machine). Il relaie
+aussi les commandes de hub-voix, reçues sur un socket. Quand un mode est choisi, il
+l'écrit sur la sortie standard et se termine : c'est le script de session qui lance
+le mode puis, à sa fin, relance ce menu.
+
+Ce fichier n'importe GTK qu'au lancement : ses fonctions se testent sans écran
+(tests/test_hub_menu.py).
 """
 
+import json
 import os
+import shutil
+import socket
+import subprocess
 import sys
+import threading
+import time
+import urllib.parse
+import urllib.request
 from pathlib import Path
-from urllib.parse import urlencode
-
-import gi
-
-gi.require_version("Gdk", "4.0")
-gi.require_version("Gtk", "4.0")
-from gi.repository import Gdk, Gtk  # noqa: E402
-
-try:
-    gi.require_version("WebKit", "6.0")
-    from gi.repository import WebKit  # noqa: E402
-except (ValueError, ImportError):
-    WebKit = None
 
 MODES = ("tv", "gaming", "bureau", "eteindre")
-ETAT = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "hub" / "dernier-choix"
+COMMANDES = {
+    "tv", "gaming", "bureau", "eteindre", "reglages", "aide", "meteo", "profils",
+    "retour", "gauche", "droite", "haut", "bas", "ok", "theme:clair", "theme:sombre",
+}
+ETATS_VOIX = {"eveil", "repos", "incompris", "micro-absent", "micro-present"}
+
+URL_METEO = (
+    "https://api.open-meteo.com/v1/forecast?current=temperature_2m,apparent_temperature,"
+    "weather_code,is_day,wind_speed_10m,relative_humidity_2m&hourly=temperature_2m,"
+    "weather_code,precipitation_probability,is_day&daily=weather_code,temperature_2m_max,"
+    "temperature_2m_min,sunrise,sunset,precipitation_probability_max&timezone=auto&forecast_days=7"
+)
+URL_GEOCODAGE = "https://geocoding-api.open-meteo.com/v1/search"
+METEO_FRAICHE_S = 15 * 60
+UNITE_MINUTEUR = "hub-minuteur"
+
+
+def dossier(variable, defaut):
+    return Path(os.environ.get(variable) or defaut)
+
+
+def chemins():
+    maison = Path.home()
+    execution = dossier("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}") / "hub"
+    return {
+        "reglages": dossier("XDG_CONFIG_HOME", maison / ".config") / "hub" / "reglages.json",
+        "dernier": dossier("XDG_STATE_HOME", maison / ".local/state") / "hub" / "dernier-choix",
+        "meteo": dossier("XDG_CACHE_HOME", maison / ".cache") / "hub" / "meteo.json",
+        "execution": execution,
+        "socket": execution / "menu.sock",
+        "deja-ouvert": execution / "menu-deja-ouvert",
+        "minuteur": execution / "minuteur-fin",
+    }
+
+
+# ── Fichiers ──────────────────────────────────────────────────────────────
+def ecrire_atomique(chemin, texte):
+    """Un réglage à moitié écrit (coupure pendant l'écriture) ne doit jamais remplacer
+    le précédent : on écrit à côté, puis on renomme."""
+    chemin = Path(chemin)
+    chemin.parent.mkdir(parents=True, exist_ok=True)
+    provisoire = chemin.with_name(chemin.name + ".tmp")
+    provisoire.write_text(texte, encoding="utf-8")
+    os.replace(provisoire, chemin)
+
+
+def lire_json(chemin):
+    try:
+        return json.loads(Path(chemin).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def reglages_valides(donnees):
+    return (
+        isinstance(donnees, dict)
+        and isinstance(donnees.get("profils"), list)
+        and 0 < len(donnees["profils"]) <= 12
+        and all(isinstance(p, dict) and isinstance(p.get("id"), str) for p in donnees["profils"])
+        and len(json.dumps(donnees)) < 256_000
+    )
+
+
+def charger_reglages(c):
+    donnees = lire_json(c["reglages"])
+    return donnees if reglages_valides(donnees) else None
+
+
+def enregistrer_reglages(c, donnees):
+    if not reglages_valides(donnees):
+        return False
+    ecrire_atomique(c["reglages"], json.dumps(donnees, ensure_ascii=False, indent=2))
+    return True
+
+
+def dernier_choix(c):
+    try:
+        choix = Path(c["dernier"]).read_text().strip()
+    except OSError:
+        return None
+    return choix if choix in MODES else None
+
+
+def retenir(c, choix):
+    if choix in MODES and choix != "eteindre":
+        try:
+            ecrire_atomique(c["dernier"], choix + "\n")
+        except OSError:
+            pass
+
+
+def photos():
+    """Les images de Images/HUB (ou Pictures/HUB) deviennent un fond possible."""
+    candidats = [Path.home() / "Images" / "HUB", Path.home() / "Pictures" / "HUB"]
+    try:
+        images = subprocess.run(["xdg-user-dir", "PICTURES"], capture_output=True, text=True, timeout=2).stdout.strip()
+        if images:
+            candidats.insert(0, Path(images) / "HUB")
+    except (OSError, subprocess.SubprocessError):
+        pass
+    vues, liste = set(), []
+    for d in candidats:
+        if not d.is_dir() or d.resolve() in vues:
+            continue
+        vues.add(d.resolve())
+        for f in sorted(d.iterdir()):
+            if f.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"} and f.is_file():
+                liste.append(f.resolve().as_uri())
+    return liste[:200]
+
+
+# ── Météo ─────────────────────────────────────────────────────────────────
+def telecharger_json(url, delai=8):
+    requete = urllib.request.Request(url, headers={"User-Agent": "HUB-menu"})
+    with urllib.request.urlopen(requete, timeout=delai) as reponse:
+        return json.loads(reponse.read().decode("utf-8"))
+
+
+def meteo(c, lat, lon, maintenant=None, telecharger=telecharger_json):
+    """Relevé frais si possible, sinon le dernier en cache marqué « hors ligne ».
+
+    Le cache évite d'interroger Open-Meteo à chaque retour au menu (on revient de
+    Kodi dix fois par soirée) et donne encore quelque chose à afficher sans réseau."""
+    maintenant = maintenant or time.time()
+    cache = lire_json(c["meteo"])
+    meme_lieu = cache and abs(cache.get("lat", 999) - lat) < .01 and abs(cache.get("lon", 999) - lon) < .01
+    if meme_lieu and maintenant - cache.get("releve", 0) < METEO_FRAICHE_S:
+        return {"donnees": cache["donnees"], "releve": cache["releve"], "horsLigne": False}
+    try:
+        donnees = telecharger(f"{URL_METEO}&latitude={lat}&longitude={lon}")
+        if not isinstance(donnees, dict) or "current" not in donnees:
+            raise ValueError("réponse météo inattendue")
+        ecrire_atomique(c["meteo"], json.dumps({"lat": lat, "lon": lon, "releve": maintenant, "donnees": donnees}))
+        return {"donnees": donnees, "releve": maintenant, "horsLigne": False}
+    except (OSError, ValueError):
+        if meme_lieu:
+            return {"donnees": cache["donnees"], "releve": cache["releve"], "horsLigne": True}
+        return None
+
+
+def geocodage(nom, langue, telecharger=telecharger_json):
+    requete = urllib.parse.urlencode({"name": nom[:60], "count": 6, "language": langue if langue in ("fr", "en") else "fr"})
+    try:
+        resultats = telecharger(f"{URL_GEOCODAGE}?{requete}").get("results") or []
+    except (OSError, ValueError, AttributeError):
+        return []
+    garder = ("id", "name", "latitude", "longitude", "admin1", "country_code")
+    return [{k: r.get(k) for k in garder} for r in resultats if "latitude" in r and "longitude" in r]
+
+
+# ── Minuteur de mise en veille ────────────────────────────────────────────
+def commande_minuteur(minutes):
+    """Un minuteur systemd de l'utilisateur, et non un délai dans ce menu : le menu se
+    ferme dès qu'on lance Kodi, alors que l'extinction doit survenir pendant le film."""
+    if minutes <= 0:
+        return None
+    return [
+        "systemd-run", "--user", f"--unit={UNITE_MINUTEUR}", f"--on-active={minutes}m",
+        "--timer-property=AccuracySec=5s", "--description=HUB : minuteur de mise en veille",
+        "/bin/sh", "-c", "systemctl poweroff || gnome-session-quit --power-off --no-prompt",
+    ]
+
+
+def programmer_minuteur(c, minutes, executer=subprocess.run, maintenant=None):
+    executer(["systemctl", "--user", "stop", f"{UNITE_MINUTEUR}.timer"], capture_output=True)
+    commande = commande_minuteur(minutes)
+    if not commande:
+        Path(c["minuteur"]).unlink(missing_ok=True)
+        return None
+    resultat = executer(commande, capture_output=True)
+    if getattr(resultat, "returncode", 1) != 0:
+        return None
+    fin = int(((maintenant or time.time()) + minutes * 60) * 1000)
+    ecrire_atomique(c["minuteur"], str(fin))
+    return fin
+
+
+def minuteur_en_cours(c, maintenant=None):
+    try:
+        fin = int(Path(c["minuteur"]).read_text().strip())
+    except (OSError, ValueError):
+        return None
+    return fin if fin > (maintenant or time.time()) * 1000 else None
+
+
+# ── Infos machine ─────────────────────────────────────────────────────────
+def duree_lisible(secondes):
+    minutes = int(secondes // 60)
+    jours, minutes = divmod(minutes, 24 * 60)
+    heures, minutes = divmod(minutes, 60)
+    if jours:
+        return f"{jours} j {heures} h"
+    if heures:
+        return f"{heures} h {minutes:02d}"
+    return f"{minutes} min"
+
+
+def adresse_ip():
+    # Connecter un socket UDP n'envoie rien : cela demande seulement au noyau quelle
+    # interface il utiliserait, donc l'adresse du HUB sur le réseau local.
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("192.0.2.1", 9))
+            return s.getsockname()[0]
+    except OSError:
+        return None
+
+
+def infos():
+    systeme = None
+    try:
+        for ligne in Path("/etc/os-release").read_text().splitlines():
+            if ligne.startswith("PRETTY_NAME="):
+                systeme = ligne.split("=", 1)[1].strip('"')
+    except OSError:
+        pass
+    try:
+        allume = duree_lisible(float(Path("/proc/uptime").read_text().split()[0]))
+    except (OSError, ValueError, IndexError):
+        allume = None
+    libre = shutil.disk_usage("/").free
+    version = None
+    for chemin in ("/usr/local/share/hub/VERSION", Path(__file__).resolve().parent.parent / "VERSION"):
+        try:
+            version = Path(chemin).read_text().strip()
+            break
+        except OSError:
+            continue
+    return {
+        "machine": socket.gethostname(),
+        "systeme": systeme,
+        "adresse": adresse_ip(),
+        "allumeDepuis": allume,
+        "disqueLibre": f"{libre / 1e9:.0f} Go",
+        "version": version or "dev",
+    }
+
+
+# ── Messages ──────────────────────────────────────────────────────────────
+def message_voix(datagramme):
+    """Traduit un datagramme de hub-voix en message pour la page, ou None."""
+    try:
+        texte = datagramme.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        return None
+    if texte.startswith("voix:"):
+        etat, _, reste = texte[5:].partition(":")
+        if etat == "entendu":
+            return {"type": "voix", "etat": "entendu", "texte": reste[:120]}
+        return {"type": "voix", "etat": etat} if etat in ETATS_VOIX else None
+    return {"type": "commande", "nom": texte} if texte in COMMANDES else None
+
+
+def lire_message_page(brut):
+    """La page envoie du JSON ; les premières versions envoyaient le mode seul."""
+    if brut in MODES:
+        return {"type": "choix", "mode": brut}
+    try:
+        message = json.loads(brut)
+    except ValueError:
+        return None
+    return message if isinstance(message, dict) and isinstance(message.get("type"), str) else None
 
 
 def page_du_menu():
-    """La page installée, ou celle du dépôt quand on lance le menu depuis les sources."""
     for chemin in (
         os.environ.get("HUB_MENU_PAGE"),
         Path(__file__).resolve().parent / "menu" / "index.html",
@@ -51,89 +310,172 @@ def page_du_menu():
     return None
 
 
-def dernier_choix():
+# ── Interface ─────────────────────────────────────────────────────────────
+def lancer():
+    import gi
+
+    gi.require_version("Gdk", "4.0")
+    gi.require_version("Gtk", "4.0")
+    from gi.repository import Gdk, GLib, Gtk
+
     try:
-        choix = ETAT.read_text().strip()
-    except OSError:
-        return None
-    return choix if choix in MODES else None
+        gi.require_version("WebKit", "6.0")
+        from gi.repository import WebKit
+    except (ValueError, ImportError):
+        WebKit = None
 
+    c = chemins()
 
-def retenir(choix):
-    if choix == "eteindre":
-        return
-    try:
-        ETAT.parent.mkdir(parents=True, exist_ok=True)
-        ETAT.write_text(choix + "\n")
-    except OSError:
-        pass
+    class Menu(Gtk.Application):
+        def __init__(self):
+            super().__init__(application_id="fr.boudine.HubMenu")
+            self.choix = None
+            self.vue = None
+            self.ecoute = None
 
+        def do_activate(self):
+            fenetre = Gtk.ApplicationWindow(application=self, title="HUB")
+            page = page_du_menu()
+            fenetre.set_child(self.vue_web(page) if WebKit and page else self.vue_simple())
+            fenetre.fullscreen()
+            fenetre.present()
 
-class Menu(Gtk.Application):
-    def __init__(self):
-        super().__init__(application_id="fr.boudine.HubMenu")
-        self.choix = None
+        def do_shutdown(self):
+            if self.ecoute:
+                self.ecoute.close()
+                Path(c["socket"]).unlink(missing_ok=True)
+            Gtk.Application.do_shutdown(self)
 
-    def do_activate(self):
-        fenetre = Gtk.ApplicationWindow(application=self, title="HUB")
-        page = page_du_menu()
-        if WebKit and page:
-            fenetre.set_child(self.vue_web(page))
-        else:
-            fenetre.set_child(self.vue_simple())
-        fenetre.fullscreen()
-        fenetre.present()
+        # La page ──────────────────────────────────────────────────────────
+        def vue_web(self, page):
+            contenus = WebKit.UserContentManager()
+            contenus.register_script_message_handler("hub", None)
+            contenus.connect("script-message-received::hub", self.message_recu)
 
-    def vue_web(self, page):
-        contenus = WebKit.UserContentManager()
-        contenus.register_script_message_handler("hub", None)
-        contenus.connect("script-message-received::hub", self.message_recu)
+            deja_ouvert = Path(c["deja-ouvert"]).exists()
+            initial = {
+                "reglages": charger_reglages(c),
+                "dernier": dernier_choix(c),
+                "photos": photos(),
+                "minuteurFin": minuteur_en_cours(c),
+                # Le choix du profil se fait à l'allumage, pas à chaque retour de Kodi.
+                "retour": deja_ouvert,
+            }
+            cache = lire_json(c["meteo"])
+            if cache and "donnees" in cache:
+                initial["meteo"] = {"donnees": cache["donnees"], "releveLe": cache["releve"] * 1000, "horsLigne": False}
+            contenus.add_script(WebKit.UserScript.new(
+                f"window.HUB_INITIAL = {json.dumps(initial)};",
+                WebKit.UserContentInjectedFrames.TOP_FRAME,
+                WebKit.UserScriptInjectionTime.START, None, None))
+            try:
+                ecrire_atomique(c["deja-ouvert"], "1")
+            except OSError:
+                pass
 
-        vue = WebKit.WebView(user_content_manager=contenus)
-        # Même encre que la page : pas d'éclair blanc avant le premier dessin.
-        fond = Gdk.RGBA()
-        fond.parse("#06070c")
-        vue.set_background_color(fond)
-        vue.connect("context-menu", lambda *_: True)
-        reglages = vue.get_settings()
-        reglages.set_enable_developer_extras(False)
-        # Le rendu par le processeur graphique rend le verre et les animations fluides,
-        # mais sans pilote 3D (machine virtuelle) il laisse l'écran gris : on ne le
-        # demande que si le noyau expose un nœud de rendu.
-        if not any(Path("/dev/dri").glob("renderD*")):
-            reglages.set_hardware_acceleration_policy(WebKit.HardwareAccelerationPolicy.NEVER)
+            vue = WebKit.WebView(user_content_manager=contenus)
+            fond = Gdk.RGBA()
+            fond.parse("#06070c")
+            vue.set_background_color(fond)
+            vue.connect("context-menu", lambda *_: True)
+            reglages = vue.get_settings()
+            reglages.set_enable_developer_extras(False)
+            reglages.set_allow_file_access_from_file_urls(True)
+            reglages.set_media_playback_requires_user_gesture(False)
+            vue.load_uri(page.as_uri())
+            vue.grab_focus()
+            self.vue = vue
+            self.ecouter_voix()
+            return vue
 
-        dernier = dernier_choix()
-        adresse = page.as_uri() + ("?" + urlencode({"dernier": dernier}) if dernier else "")
-        vue.load_uri(adresse)
-        vue.grab_focus()
-        return vue
+        def vers_page(self, message):
+            if self.vue:
+                script = f"window.hub && window.hub.recevoir({json.dumps(message)});"
+                self.vue.evaluate_javascript(script, -1, None, None, None, None, None)
+            return False
 
-    def message_recu(self, _contenus, valeur):
-        choix = valeur.to_string()
-        if choix in MODES:
-            self.choisir(None, choix)
+        def en_fond(self, travail, *args):
+            """Réseau et systemd hors du fil graphique : le menu ne gèle jamais."""
+            def executer():
+                reponse = travail(*args)
+                if reponse:
+                    GLib.idle_add(self.vers_page, reponse)
+            threading.Thread(target=executer, daemon=True).start()
 
-    def vue_simple(self):
-        colonne = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=24)
-        colonne.set_halign(Gtk.Align.CENTER)
-        colonne.set_valign(Gtk.Align.CENTER)
-        premier = None
-        for cle, nom in zip(MODES, ("TV", "Jeux", "Bureau", "Éteindre")):
-            bouton = Gtk.Button(label=nom)
-            bouton.connect("clicked", self.choisir, cle)
-            colonne.append(bouton)
-            premier = premier or bouton
-        premier.grab_focus()
-        return colonne
+        def message_recu(self, _contenus, valeur):
+            message = lire_message_page(valeur.to_string())
+            if not message:
+                return
+            genre = message["type"]
+            if genre == "choix" and message.get("mode") in MODES:
+                self.choix = message["mode"]
+                retenir(c, self.choix)
+                self.quit()
+            elif genre == "reglages":
+                try:
+                    enregistrer_reglages(c, message.get("donnees"))
+                except OSError as erreur:
+                    print(f"hub-menu : réglages non enregistrés ({erreur})", file=sys.stderr)
+            elif genre == "meteo":
+                lat, lon = message.get("lat"), message.get("lon")
+                if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
+                    def releve():
+                        r = meteo(c, lat, lon)
+                        return r and {"type": "meteo", "donnees": r["donnees"], "releveLe": r["releve"] * 1000, "horsLigne": r["horsLigne"]}
+                    self.en_fond(releve)
+            elif genre == "geocodage" and isinstance(message.get("nom"), str):
+                self.en_fond(lambda: {"type": "geocodage", "resultats": geocodage(message["nom"], message.get("langue", "fr"))})
+            elif genre == "minuteur" and isinstance(message.get("minutes"), int):
+                minutes = max(0, min(message["minutes"], 240))
+                self.en_fond(lambda: {"type": "minuteur", "fin": programmer_minuteur(c, minutes)})
+            elif genre == "infos":
+                self.en_fond(lambda: {"type": "infos", **infos()})
 
-    def choisir(self, _bouton, cle):
-        self.choix = cle
-        retenir(cle)
-        self.quit()
+        # La voix ──────────────────────────────────────────────────────────
+        def ecouter_voix(self):
+            try:
+                Path(c["execution"]).mkdir(parents=True, exist_ok=True)
+                Path(c["socket"]).unlink(missing_ok=True)
+                s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+                s.bind(str(c["socket"]))
+                s.setblocking(False)
+            except OSError as erreur:
+                print(f"hub-menu : pas de socket pour la voix ({erreur})", file=sys.stderr)
+                return
+            self.ecoute = s
+            GLib.io_add_watch(s.fileno(), GLib.IO_IN, self.datagramme_recu)
 
+        def datagramme_recu(self, *_):
+            try:
+                while True:
+                    message = message_voix(self.ecoute.recv(4096))
+                    if message:
+                        self.vers_page(message)
+            except BlockingIOError:
+                pass
+            except OSError:
+                return False
+            return True
 
-def main():
+        # Repli sans WebKit ────────────────────────────────────────────────
+        def vue_simple(self):
+            colonne = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=24)
+            colonne.set_halign(Gtk.Align.CENTER)
+            colonne.set_valign(Gtk.Align.CENTER)
+            premier = None
+            for cle, nom in zip(MODES, ("TV", "Jeux", "Bureau", "Éteindre")):
+                bouton = Gtk.Button(label=nom)
+                bouton.connect("clicked", self.choisir, cle)
+                colonne.append(bouton)
+                premier = premier or bouton
+            premier.grab_focus()
+            return colonne
+
+        def choisir(self, _bouton, cle):
+            self.choix = cle
+            retenir(c, cle)
+            self.quit()
+
     menu = Menu()
     menu.run(None)
     if menu.choix:
@@ -143,4 +485,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(lancer())
