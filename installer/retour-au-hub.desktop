@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Retour au HUB
+Comment=Fermer le bureau et revenir au menu du HUB
+Exec=gnome-session-quit --logout --no-prompt
+Icon=go-home
+Categories=System;

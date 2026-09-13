@@ -1,0 +1,32 @@
+#!/bin/sh
+# Session HUB — ~/.local/bin/gnome-kiosk-script, lancé par gnome-kiosk-script-session.
+#
+# Une seule boucle : afficher le menu, lancer le mode choisi, puis revenir au menu
+# quand ce mode se termine. C'est le motif de l'exemple fourni par GNOME (« exec "$0" »
+# après le programme) : le retour au HUB est la fin normale d'un mode, pas un
+# mécanisme à part.
+
+choix=$(/usr/local/bin/hub-menu)
+
+case "$choix" in
+  tv)
+    # Kodi dans la session kiosque, en client Wayland : le compositeur le met en
+    # plein écran. Quitter Kodi rend la main à cette boucle.
+    kodi --windowing=wayland
+    ;;
+  gaming)
+    # Pas encore configuré : la source du streaming n'est pas décidée.
+    ;;
+  bureau)
+    # Le bureau GNOME ne se lance pas à l'intérieur d'une session kiosque. On
+    # choisit la session Ubuntu pour la prochaine connexion et on ferme celle-ci ;
+    # à la sortie du bureau, la connexion automatique ramène au HUB.
+    /usr/local/bin/hub-vers-bureau
+    ;;
+  eteindre)
+    systemctl poweroff
+    ;;
+esac
+
+sleep 1
+exec "$0" "$@"

@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=HUB — session par défaut
+Exec=/usr/local/bin/hub-session-par-defaut
+OnlyShowIn=ubuntu;
+NoDisplay=true

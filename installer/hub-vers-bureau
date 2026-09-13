@@ -1,0 +1,19 @@
+#!/bin/sh
+# Passer du HUB au bureau Ubuntu — /usr/local/bin/hub-vers-bureau
+#
+# Le bureau GNOME ne tourne pas à l'intérieur de la session kiosque : c'est une autre
+# session. On la choisit donc pour la prochaine connexion, puis on ferme la session
+# du HUB. GDM reconnecte aussitôt (connexion temporisée, voir custom.conf) et ouvre
+# le bureau. À l'ouverture du bureau, hub-session-par-defaut remet le HUB comme
+# session suivante : fermer le bureau ramène au HUB.
+
+set -u
+
+if ! busctl call org.freedesktop.Accounts "/org/freedesktop/Accounts/User$(id -u)" \
+     org.freedesktop.Accounts.User SetSession s ubuntu; then
+  # Sans ce choix, la déconnexion rouvrirait le HUB : on reste plutôt dans le menu.
+  echo "hub-vers-bureau : impossible de choisir la session Ubuntu" >&2
+  exit 1
+fi
+
+exec gnome-session-quit --logout --no-prompt
