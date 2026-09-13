@@ -1,37 +1,47 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════════
-#  hub-installer.sh — installe et paramètre le HUB sur une Ubuntu fraîche
+#  hub-installer.sh — installe et paramètre le HUB sur une Ubuntu 26.04 fraîche
 # ═══════════════════════════════════════════════════════════════════════════════
 #
-# IL SIMULE PAR DÉFAUT. Sans `--pour-de-vrai`, il n'écrit rien, n'installe rien,
-# ne touche à aucun fichier : il imprime exactement ce qu'il ferait. Ce n'est pas
-# de la prudence de façade — ce script n'a jamais été exécuté en conditions
-# réelles au moment où il a été écrit, et un script non éprouvé qui s'exécute en
-# root sur une machine neuve est un mauvais marché.
+# IL SIMULE PAR DÉFAUT. Sans `--pour-de-vrai`, il n'écrit rien, n'installe rien : il
+# imprime ce qu'il ferait. La simulation parcourt le même chemin que l'exécution,
+# si bien qu'elle montre aussi ce qui est déjà en place.
 #
-# IL AUDITE AVANT D'AGIR, et refuse si les conditions ne sont pas réunies. La
-# règle du projet — l'audit précède toute installation — est appliquée par le
-# code, pas laissée à la discipline de celui qui l'exécute.
+# IL AUDITE AVANT D'AGIR, et refuse si les conditions ne sont pas réunies. La règle
+# du projet — l'audit précède toute installation — est appliquée par le code, pas
+# laissée à la discipline de celui qui l'exécute.
 #
-# IL EST REJOUABLE. Chaque étape vérifie avant de faire. Le relancer sur une
-# machine déjà installée ne casse rien et ne réinstalle rien : il dit « déjà fait »
-# et passe. On peut donc l'interrompre et le reprendre.
+# IL S'ARRÊTE SUR UN ÉCHEC. Chaque commande est vérifiée ; une étape qui échoue est
+# abandonnée et comptée, et le démarrage automatique n'est pas basculé sur une
+# session HUB incomplète. Le code de sortie dit s'il faut relancer.
 #
-#   ./hub-installer.sh                 simule, n'écrit rien           (défaut)
-#   ./hub-installer.sh --pour-de-vrai  exécute
-#   ./hub-installer.sh --sans-audit    passe outre le refus (à ses risques)
+# IL EST REJOUABLE. Chaque étape compare avant d'agir et dit « déjà fait ». On peut
+# l'interrompre, corriger, relancer.
 #
-# Ce qu'il NE fait pas, et c'est délibéré :
-#   - il n'installe aucun client de jeu, tant que « streamer depuis quoi ? » n'est
-#     pas tranché ;
-#   - il ne dessine pas le menu du HUB, tant que « avec quoi pilote-t-on ? » n'est
-#     pas tranché. Il pose une session HUB minimale qui liste les modes et suffit
-#     à prouver que l'aller-retour fonctionne.
+#   ./hub-installer.sh                      simule, n'écrit rien          (défaut)
+#   sudo ./hub-installer.sh --pour-de-vrai  exécute
+#   ... --sans-audit                        passe outre le refus (à ses risques)
+#
+# LA FORME INSTALLÉE (éprouvée en machine virtuelle, voir ARCHITECTURE.md) :
+#   GDM ouvre seul la session « gnome-kiosk-script-wayland » ; elle exécute
+#   ~/.local/bin/gnome-kiosk-script, une boucle menu → mode → menu. Kodi tourne
+#   dans cette session ; le bureau Ubuntu est une autre session, choisie pour la
+#   connexion suivante, et qui remet le HUB par défaut dès qu'elle s'ouvre.
+#
+# Ce qu'il NE fait pas, délibérément :
+#   - aucun client de jeu, tant que « streamer depuis quoi ? » n'est pas tranché ;
+#   - aucun réglage audio ou vidéo de Kodi : ils se mesurent devant la TV
+#     (ARCHITECTURE.md, cases à cocher) ;
+#   - il n'écrase jamais ~/.config/hub/reglages.json, qui appartient au menu.
+#
+# Codes de sortie : 0 tout est en place · 1 au moins une étape en échec ·
+#                   2 argument invalide · 3 refusé par l'audit
 
 set -uo pipefail
 
+DEPOT="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"   # le dossier installer/
 VERSION_ATTENDUE="26.04"
-UTILISATEUR="${SUDO_USER:-$USER}"
+SESSION_HUB="gnome-kiosk-script-wayland"
 JOURNAL="/var/log/hub-installer.log"
 POUR_DE_VRAI=0
 SANS_AUDIT=0
@@ -40,7 +50,7 @@ for arg in "$@"; do
   case "$arg" in
     --pour-de-vrai) POUR_DE_VRAI=1 ;;
     --sans-audit)   SANS_AUDIT=1 ;;
-    -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,39p' "$0"; exit 0 ;;
     *) echo "argument inconnu : $arg" >&2; exit 2 ;;
   esac
 done
@@ -57,40 +67,119 @@ deja()   { printf '  %s·%s %s %s(déjà fait)%s\n' "$GRIS" "$RAZ" "$1" "$GRIS" 
 alerte() { printf '  %s!%s %s\n' "$JAUNE" "$RAZ" "$1"; }
 refus()  { printf '  %s✗%s %s\n' "$ROUGE" "$RAZ" "$1"; }
 
-# `faire` est le seul endroit qui exécute. En simulation il imprime et rend 0 :
-# tout le reste du script s'écrit donc sans jamais se demander dans quel mode il
-# tourne, et la simulation parcourt exactement le même chemin que l'exécution.
+ECHECS=0
+
+# `faire` est le seul endroit qui exécute. En simulation il imprime et rend 0 : le
+# reste du script s'écrit sans se demander dans quel mode il tourne.
+#
+# La version précédente jetait le code de retour : un apt-get en échec affichait ✓
+# et la suite s'installait sur du vide. Ici un échec est affiché avec la fin du
+# journal, compté, et rendu à l'appelant, qui abandonne son étape (`|| return 1`).
 faire() {
-  if [ "$POUR_DE_VRAI" = 1 ]; then
-    printf '  %s$ %s%s\n' "$GRIS" "$*" "$RAZ"
-    "$@" >>"$JOURNAL" 2>&1
-  else
+  if [ "$POUR_DE_VRAI" != 1 ]; then
     printf '  %s[simulation]%s %s\n' "$GRIS" "$RAZ" "$*"
+    return 0
   fi
+  printf '  %s$ %s%s\n' "$GRIS" "$*" "$RAZ"
+  printf '\n[%s] $ %s\n' "$(date '+%F %T')" "$*" >>"$JOURNAL"
+  "$@" >>"$JOURNAL" 2>&1
+  local code=$?
+  if [ "$code" -ne 0 ]; then
+    refus "échec (code $code) : $*"
+    tail -n 8 "$JOURNAL" | sed 's/^/      /'
+    ECHECS=$((ECHECS+1))
+  fi
+  return "$code"
 }
 
-# Écrire un fichier passe aussi par une seule porte, pour la même raison.
-ecrire() { # $1 = chemin, entrée standard = contenu
-  local cible="$1"
-  if [ "$POUR_DE_VRAI" = 1 ]; then
-    install -D /dev/stdin "$cible"
+# Une étape qui ne peut pas continuer sans avoir échoué par `faire` (un préalable
+# manquant, un fichier du dépôt absent) passe par ici pour être comptée aussi.
+echec() { refus "$1"; ECHECS=$((ECHECS+1)); return 1; }
+
+paquet_present() {
+  [ "$(dpkg-query -W -f='${db:Status-Status}' "$1" 2>/dev/null)" = installed ]
+}
+
+APT_A_JOUR=0
+# Installe ce qui manque, et rien d'autre. `--no-install-recommends` est passé par
+# l'appelant quand les recommandations ont un effet visible (voir Kodi).
+installer_paquets() { # [options apt…] -- paquets…
+  local options=() manquants=() p
+  while [ $# -gt 0 ] && [ "$1" != -- ]; do options+=("$1"); shift; done
+  shift
+  for p in "$@"; do
+    if paquet_present "$p"; then deja "$p"; else manquants+=("$p"); fi
+  done
+  [ ${#manquants[@]} -eq 0 ] && return 0
+  if [ "$APT_A_JOUR" = 0 ]; then
+    faire apt-get update -q || return 1
+    APT_A_JOUR=1
+  fi
+  # Une Ubuntu fraîche lance ses mises à jour automatiques au premier démarrage et
+  # tient le verrou d'apt plusieurs minutes : on attend au lieu d'échouer.
+  faire env DEBIAN_FRONTEND=noninteractive apt-get install -y -q \
+    -o DPkg::Lock::Timeout=900 "${options[@]}" "${manquants[@]}" || return 1
+  ok "installé : ${manquants[*]}"
+}
+
+# Pose un fichier du dépôt s'il est absent ou différent. Pour les fichiers de
+# l'utilisateur, les dossiers parents sont créés À SON NOM : `install -D` lancé en
+# root laisserait un ~/.kodi ou un ~/.config/hub appartenant à root, et Kodi ou le
+# menu ne pourraient plus y écrire.
+poser() { # source destination mode [utilisateur]
+  local src="$1" dst="$2" mode="$3" qui="${4:-}"
+  [ -f "$src" ] || { echec "absent du dépôt : $src"; return 1; }
+  if [ -f "$dst" ] && cmp -s "$src" "$dst" && [ "$(stat -c %a "$dst")" = "${mode#0}" ] &&
+     { [ -z "$qui" ] || [ "$(stat -c %U "$dst")" = "$qui" ]; }; then
+    deja "$dst"; return 0
+  fi
+  if [ -n "$qui" ]; then
+    faire runuser -u "$qui" -- mkdir -p "$(dirname "$dst")" || return 1
+    faire install -o "$qui" -g "$(id -gn "$qui")" -m "$mode" "$src" "$dst" || return 1
   else
-    printf '  %s[simulation]%s écrirait %s :\n' "$GRIS" "$RAZ" "$cible"
-    sed 's/^/      /'
+    faire install -D -m "$mode" "$src" "$dst" || return 1
   fi
+  ok "$dst"
 }
 
-present() { command -v "$1" >/dev/null 2>&1; }
+# Remplace un répertoire entier par celui du dépôt. Copier fichier par fichier
+# laisserait en place ce que le dépôt a supprimé ; on construit la nouvelle version
+# à côté et on l'échange, pour ne jamais laisser un menu à moitié copié.
+poser_repertoire() { # source destination
+  local src="$1" dst="$2"
+  [ -d "$src" ] || { echec "absent du dépôt : $src"; return 1; }
+  if [ -d "$dst" ] && diff -r -q "$src" "$dst" >/dev/null 2>&1; then
+    deja "$dst/"; return 0
+  fi
+  faire mkdir -p "$(dirname "$dst")" &&
+  faire rm -rf "$dst.nouveau" &&
+  faire cp -r "$src" "$dst.nouveau" &&
+  faire chmod -R u=rwX,go=rX "$dst.nouveau" &&
+  faire rm -rf "$dst" &&
+  faire mv "$dst.nouveau" "$dst" || return 1
+  ok "$dst/"
+}
 
 # ── En-tête ───────────────────────────────────────────────────────────────────
 printf '\n%s  HUB — installation%s   %s\n' "$GRAS" "$RAZ" "$(date '+%F %Hh%M')"
 if [ "$POUR_DE_VRAI" = 1 ]; then
   printf '  %sMODE RÉEL — la machine va être modifiée%s\n' "$ROUGE$GRAS" "$RAZ"
-  [ "$(id -u)" -ne 0 ] && { refus "à lancer avec sudo en mode réel"; exit 1; }
-  touch "$JOURNAL" 2>/dev/null && ok "journal : $JOURNAL"
+  [ "$(id -u)" -eq 0 ] || { refus "à lancer avec sudo en mode réel"; exit 1; }
+  touch "$JOURNAL" 2>/dev/null || { refus "journal impossible à écrire : $JOURNAL"; exit 1; }
+  ok "journal : $JOURNAL"
 else
-  printf '  %sSIMULATION — rien ne sera modifié. Ajoutez --pour-de-vrai pour exécuter.%s\n' "$JAUNE" "$RAZ"
+  printf '  %sSIMULATION — rien ne sera modifié. Ajoutez --pour-de-vrai (avec sudo) pour exécuter.%s\n' "$JAUNE" "$RAZ"
 fi
+
+# Le HUB s'installe pour la personne qui lance sudo. Lancé depuis un shell root sans
+# sudo, il se serait installé pour root, que GDM ne connecte jamais.
+UTILISATEUR="${SUDO_USER:-$USER}"
+if [ -z "$UTILISATEUR" ] || [ "$UTILISATEUR" = root ] || ! id "$UTILISATEUR" >/dev/null 2>&1; then
+  refus "utilisateur du HUB introuvable : lancez « sudo $0 » depuis son compte"
+  exit 1
+fi
+MAISON="$(getent passwd "$UTILISATEUR" | cut -d: -f6)"
+ok "installation pour $UTILISATEUR ($MAISON)"
 
 # ── 1. L'audit, et le refus ───────────────────────────────────────────────────
 etape "1. Audit préalable"
@@ -102,17 +191,31 @@ version=$( . /etc/os-release 2>/dev/null && echo "${VERSION_ID:-inconnue}" )
 if [ "$version" = "$VERSION_ATTENDUE" ]; then
   ok "Ubuntu $version"
 else
-  refus "Ubuntu $version — ce script vise la $VERSION_ATTENDUE"
+  refus "Ubuntu $version — ce script vise la $VERSION_ATTENDUE (sessions et écrans d'accueil en dépendent)"
+  bloquants=$((bloquants+1))
+fi
+
+# Tout le HUB repose sur GDM : connexion automatique et choix de session.
+if [ -f /etc/gdm3/custom.conf ]; then
+  ok "GDM présent"
+else
+  refus "GDM absent (/etc/gdm3/custom.conf) — ce n'est pas une Ubuntu Desktop"
   bloquants=$((bloquants+1))
 fi
 
 # Un appareil de salon doit s'allumer comme une TV. Une phrase de passe au
 # démarrage rend tout le reste inutile : c'est un refus, pas un avertissement.
-if lsblk -o TYPE,MOUNTPOINT 2>/dev/null | grep -q '^crypt.*/$'; then
+if lsblk -o TYPE,MOUNTPOINTS 2>/dev/null | grep -Eq '^crypt[[:space:]]+/$'; then
   refus "la racine est chiffrée — le HUB ne pourra pas démarrer sans clavier"
   bloquants=$((bloquants+1))
 else
   ok "racine non chiffrée : démarrage sans clavier possible"
+fi
+
+virt=$(systemd-detect-virt 2>/dev/null)
+if [ -n "$virt" ] && [ "$virt" != none ]; then
+  alerte "machine virtuelle ($virt) : les mesures matérielles ci-dessous ne décrivent pas le M720q"
+  avertissements=$((avertissements+1))
 fi
 
 filaire=""
@@ -120,22 +223,33 @@ for i in /sys/class/net/*; do
   n=$(basename "$i"); [ "$n" = lo ] && continue
   [ -e "$i/device" ] || continue
   [ -d "$i/wireless" ] && continue
-  [ "$(cat "$i/carrier" 2>/dev/null)" = 1 ] && filaire="$n"
+  [ "$(cat "$i/carrier" 2>/dev/null)" = 1 ] && { filaire="$n"; break; }
 done
 if [ -n "$filaire" ]; then
-  ok "Ethernet branché sur $filaire ($(cat /sys/class/net/$filaire/speed 2>/dev/null || echo '?') Mb/s)"
+  # Le noyau écrit -1 quand le pilote ne connaît pas le débit (carte virtuelle,
+  # lien pas encore négocié). L'afficher tel quel faisait lire « -1 Mb/s ».
+  debit=$(cat "/sys/class/net/$filaire/speed" 2>/dev/null)
+  if [[ "$debit" =~ ^[0-9]+$ ]] && [ "$debit" -gt 0 ]; then
+    ok "Ethernet branché sur $filaire (lien négocié à $debit Mb/s — un débit annoncé, pas mesuré)"
+  else
+    ok "Ethernet branché sur $filaire (débit non annoncé par le pilote)"
+  fi
 else
   alerte "aucun Ethernet branché — le wifi USB 2,4 GHz ne tiendra pas le streaming"
   avertissements=$((avertissements+1))
 fi
 
-if ls /sys/class/drm/card*-*/status >/dev/null 2>&1 &&
-   grep -qx connected /sys/class/drm/card*-*/status 2>/dev/null; then
-  for c in /sys/class/drm/card*-*; do
-    [ "$(cat "$c/status" 2>/dev/null)" = connected ] &&
-      ok "écran sur $(basename "${c#card?-}") — mode préféré $(head -1 "$c/modes" 2>/dev/null)"
-  done
-else
+ecrans=0
+for c in /sys/class/drm/card*-*; do
+  [ "$(cat "$c/status" 2>/dev/null)" = connected ] || continue
+  ecrans=$((ecrans+1))
+  # « card1-HDMI-A-1 » → « HDMI-A-1 ». L'ancienne version retirait le préfixe du
+  # chemin complet, où il ne figure pas en tête, et affichait « card1-Virtual-1 ».
+  nom=$(basename "$c"); nom="${nom#card*-}"
+  mode=$(head -n 1 "$c/modes" 2>/dev/null)
+  ok "écran sur $nom — mode préféré ${mode:-non annoncé}"
+done
+if [ "$ecrans" -eq 0 ]; then
   alerte "aucun écran détecté — résolution et audio HDMI resteront non mesurés"
   avertissements=$((avertissements+1))
 fi
@@ -163,103 +277,192 @@ fi
 [ "$bloquants" -gt 0 ] && alerte "points bloquants ignorés sur demande (--sans-audit)"
 
 # ── 2. De quoi finir l'audit ──────────────────────────────────────────────────
-# L'audit lui-même ne sait pas tout mesurer tant que ces outils manquent : le
-# décodage matériel, le rendu OpenGL, le débit du lien filaire. On les pose en
-# premier pour que le prochain passage de audit.sh soit complet.
-etape "2. Outils de mesure"
-mesure_manquants=()
-for p in vainfo mesa-utils ethtool; do
-  case "$p" in
-    mesa-utils) present glxinfo && { deja "$p"; continue; } ;;
-    *)          present "$p"    && { deja "$p"; continue; } ;;
-  esac
-  mesure_manquants+=("$p")
-done
-if [ ${#mesure_manquants[@]} -gt 0 ]; then
-  faire apt-get update -qq
-  faire apt-get install -y "${mesure_manquants[@]}"
-  ok "à installer : ${mesure_manquants[*]}"
-fi
+# audit.sh ne sait pas tout mesurer tant que ces outils manquent : le décodage
+# matériel, le rendu OpenGL, le débit du lien filaire. On les pose en premier pour
+# que le prochain passage de l'audit soit complet.
+etape_mesure() {
+  etape "2. Outils de mesure"
+  installer_paquets -- vainfo mesa-utils ethtool
+}
 
-# ── 3. Mode TV ────────────────────────────────────────────────────────────────
-etape "3. Mode TV — Kodi"
-if present kodi; then
-  deja "kodi"
-else
-  faire apt-get install -y kodi
-  ok "kodi"
-fi
-# `kodi-standalone` ouvre sa propre session : Kodi devient un mode à part entière
-# et non une fenêtre posée sur un bureau. Quitter Kodi termine la session, ce qui
-# est précisément le « retour au HUB » qu'on veut, sans rien écrire pour l'obtenir.
-if [ -f /usr/share/xsessions/kodi.desktop ] || [ -f /usr/share/wayland-sessions/kodi.desktop ]; then
-  deja "session Kodi déclarée"
-else
-  alerte "le paquet kodi ne déclare pas de session — à vérifier après installation"
-fi
-
-# ── 4. La session HUB ─────────────────────────────────────────────────────────
-etape "4. Session HUB"
-
-# Le menu lui-même reste volontairement rudimentaire : son dessin dépend de ce
-# avec quoi on pilotera (manette, télécommande CEC, clavier), qui n'est pas
-# tranché. Ce qui est posé ici suffit à prouver l'aller-retour entre les modes,
-# et c'est ce qu'un prototype doit prouver.
-ecrire /usr/local/bin/hub-menu <<'MENU'
-#!/usr/bin/env bash
-# Menu d'accueil du HUB. Rudimentaire par choix : le dessin définitif dépend du
-# périphérique de pilotage, qui n'est pas arrêté. Lancer un mode, c'est ouvrir
-# une session ; en sortir ramène ici.
-set -uo pipefail
-while true; do
-  clear
-  cat <<'ECRAN'
-
-    H U B
-
-    1   TV        Kodi
-    2   Gaming    (non configuré — source de streaming à décider)
-    3   Desktop   Ubuntu
-    q   Éteindre
-
-ECRAN
-  read -rsn1 -p "  choix : " c; echo
-  case "$c" in
-    1) kodi-standalone ;;
-    2) echo "  Le mode Gaming n'est pas encore configuré."; read -rsn1 ;;
-    3) exec gnome-session ;;
-    q) systemctl poweroff ;;
-  esac
-done
-MENU
-faire chmod +x /usr/local/bin/hub-menu
-
-ecrire /usr/share/xsessions/hub.desktop <<'SESSION'
-[Desktop Entry]
-Name=HUB
-Comment=Menu d'accueil du HUB
-Exec=/usr/local/bin/hub-menu
-Type=Application
-SESSION
-ok "session HUB déclarée"
-
-# ── 5. Démarrage automatique ──────────────────────────────────────────────────
-etape "5. Démarrage automatique sur le HUB"
-# Un appareil de salon s'allume sur son menu, pas sur un écran de connexion.
-# GDM lit ce fichier ; on n'y touche que ces trois lignes et on garde une copie
-# de l'original, parce que ce fichier appartient au système et pas à ce script.
-if [ -f /etc/gdm3/custom.conf ]; then
-  if grep -q '^AutomaticLoginEnable=true' /etc/gdm3/custom.conf 2>/dev/null; then
-    deja "connexion automatique"
-  else
-    faire cp -n /etc/gdm3/custom.conf /etc/gdm3/custom.conf.avant-hub
-    ok "sauvegarde : /etc/gdm3/custom.conf.avant-hub"
-    alerte "à ajouter dans [daemon] : AutomaticLoginEnable=true / AutomaticLogin=$UTILISATEUR"
-    alerte "et dans AccountsService : XSession=hub"
+# ── 3. Session et menu ────────────────────────────────────────────────────────
+etape_session() {
+  etape "3. Session HUB et menu"
+  # gnome-kiosk-script-session fournit la session Wayland plein écran : Ubuntu 26.04
+  # n'a plus de Xorg, /usr/share/xsessions ne sert plus à rien. Le menu est une page
+  # web locale affichée par WebKitGTK depuis Python.
+  installer_paquets -- gnome-kiosk-script-session python3-gi gir1.2-gtk-4.0 gir1.2-webkit-6.0 || return 1
+  if [ "$POUR_DE_VRAI" = 1 ] && [ ! -f "/usr/share/wayland-sessions/$SESSION_HUB.desktop" ]; then
+    echec "la session $SESSION_HUB n'est pas déclarée après installation du paquet"; return 1
   fi
-else
-  alerte "gdm3 absent — démarrage automatique non configuré"
-fi
+
+  poser "$DEPOT/hub-menu.py"              /usr/local/bin/hub-menu              0755 || return 1
+  poser_repertoire "$DEPOT/menu"          /usr/local/share/hub/menu            || return 1
+  poser "$DEPOT/hub-vers-bureau"          /usr/local/bin/hub-vers-bureau       0755 || return 1
+  poser "$DEPOT/hub-session-par-defaut"   /usr/local/bin/hub-session-par-defaut 0755 || return 1
+  poser "$DEPOT/hub-session-par-defaut.desktop" /etc/xdg/autostart/hub-session-par-defaut.desktop 0644 || return 1
+  poser "$DEPOT/retour-au-hub.desktop"    /usr/share/applications/retour-au-hub.desktop 0644 || return 1
+  # Le script que gnome-kiosk-script-session exécute. S'il manque, la session en crée
+  # un d'exemple et ouvre un éditeur de texte sur la TV.
+  poser "$DEPOT/gnome-kiosk-script" "$MAISON/.local/bin/gnome-kiosk-script" 0755 "$UTILISATEUR" || return 1
+
+  # Les réglages appartiennent au menu, qui les écrit. On prépare leur dossier au nom
+  # de l'utilisateur, et on ne touche jamais au fichier : le relancer après un
+  # changement de langue ou de fond ne doit rien défaire.
+  if [ -f "$MAISON/.config/hub/reglages.json" ]; then
+    deja "$MAISON/.config/hub/reglages.json conservé tel quel"
+  elif [ -d "$MAISON/.config/hub" ]; then
+    deja "$MAISON/.config/hub/ (le menu y écrira ses réglages)"
+  else
+    faire runuser -u "$UTILISATEUR" -- mkdir -p "$MAISON/.config/hub" || return 1
+    ok "$MAISON/.config/hub/ (le menu y écrira ses réglages)"
+  fi
+
+  # L'installateur précédent déclarait une session X11 « hub » : sur 26.04 elle
+  # n'apparaît nulle part, mais elle induirait le prochain lecteur en erreur.
+  if [ -f /usr/share/xsessions/hub.desktop ]; then
+    faire rm -f /usr/share/xsessions/hub.desktop || return 1
+    ok "ancienne session X11 retirée"
+  fi
+}
+
+# ── 4. Écrans d'accueil d'Ubuntu ──────────────────────────────────────────────
+etape_accueil() {
+  etape "4. Écrans d'accueil d'Ubuntu"
+  # gnome-initial-setup s'ouvre à la première connexion (« Bienvenue ») puis après
+  # chaque montée de version (« Help Improve Ubuntu », service
+  # gnome-initial-setup-upgrade-login). Dans la session kiosque, il se pose PAR-DESSUS
+  # le menu et attend une souris. Vu en machine virtuelle le 13 septembre 2026. Le
+  # second marqueur porte le numéro de version : on le dérive d'os-release pour ne pas
+  # revoir l'écran à la 28.04.
+  local f
+  for f in "$MAISON/.config/gnome-initial-setup-done" \
+           "$MAISON/.config/gnome-initial-setup/upgrade-$version-done"; do
+    if [ -f "$f" ]; then
+      deja "$f"
+    else
+      faire runuser -u "$UTILISATEUR" -- mkdir -p "$(dirname "$f")" &&
+      faire runuser -u "$UTILISATEUR" -- sh -c 'echo yes > "$1"' marqueur "$f" || return 1
+      ok "$f"
+    fi
+  done
+}
+
+# ── 5. Mode TV : Kodi ─────────────────────────────────────────────────────────
+etape_kodi() {
+  etape "5. Mode TV — Kodi"
+  # Sans les recommandations. Le paquet kodi recommande kodi-visualization-spectrum ;
+  # installé par apt, cet add-on n'est pas dans le manifeste de Kodi, qui l'inscrit
+  # donc « désactivé » et ouvre au premier lancement « Disabled add-ons — enable
+  # Spectrum? » (CApplication::ConfigureAndEnableAddons, Kodi 21.3). Sur une TV, cette
+  # question sans réponse évidente bloque la télécommande. Une visualisation musicale
+  # n'a rien à faire dans le HUB ; le dépôt officiel, lui, est gardé explicitement.
+  installer_paquets --no-install-recommends -- kodi kodi-repository-kodi || return 1
+  if paquet_present kodi-visualization-spectrum; then
+    alerte "kodi-visualization-spectrum est installé : Kodi demandera une fois s'il faut l'activer"
+    alerte "  (sudo apt-get remove kodi-visualization-spectrum pour ne jamais voir la question)"
+  fi
+
+  # Kodi n'a pas besoin de session à lui : il tourne dans la session HUB, lancé par
+  # gnome-kiosk-script. Le quitter rend la main au menu. Ce raccourci l'y ramène
+  # d'une touche (Accueil ou F12).
+  poser "$DEPOT/kodi/keymaps/hub.xml" "$MAISON/.kodi/userdata/keymaps/hub.xml" 0644 "$UTILISATEUR" || return 1
+}
+
+# ── 6. Assistant vocal (s'il est livré) ───────────────────────────────────────
+etape_voix() {
+  etape "6. Assistant vocal"
+  local voix="$DEPOT/voix"
+  if [ ! -f "$voix/hub-voix.py" ]; then
+    deja "aucun service vocal dans le dépôt ($voix) — étape sautée"
+    return 0
+  fi
+  poser "$voix/hub-voix.py" /usr/local/bin/hub-voix 0755 || return 1
+  if [ -f "$voix/hub-voix.service" ]; then
+    # Unité UTILISATEUR : le service vit dans la session, avec l'audio de PipeWire
+    # de l'utilisateur. /usr/local/lib/systemd/user est le pendant local de
+    # /usr/lib/systemd/user, comme /usr/local/bin l'est de /usr/bin.
+    poser "$voix/hub-voix.service" /usr/local/lib/systemd/user/hub-voix.service 0644 || return 1
+    if [ "$(systemctl --global is-enabled hub-voix.service 2>/dev/null)" = enabled ]; then
+      deja "hub-voix.service activé pour les sessions"
+    else
+      faire systemctl --global enable hub-voix.service || return 1
+      ok "hub-voix.service activé à l'ouverture des sessions"
+    fi
+  fi
+}
+
+# ── 7. Démarrage automatique sur le HUB ───────────────────────────────────────
+etape_demarrage() {
+  etape "7. Démarrage automatique sur le HUB"
+  # Basculer le démarrage sur une session dont une pièce manque, c'est allumer la TV
+  # sur un écran noir sans clavier pour réparer. On ne le fait que sur un parcours
+  # sans échec.
+  if [ "$ECHECS" -gt 0 ]; then
+    echec "$ECHECS échec(s) plus haut : le démarrage n'est pas basculé sur une session incomplète"
+    return 1
+  fi
+
+  # La session se choisit dans AccountsService, pas dans un fichier qu'on écrirait
+  # soi-même : c'est lui que GDM consulte, et que hub-vers-bureau modifie ensuite.
+  local compte actuelle
+  compte=$(busctl call org.freedesktop.Accounts /org/freedesktop/Accounts \
+             org.freedesktop.Accounts FindUserByName s "$UTILISATEUR" 2>/dev/null |
+           awk '{gsub(/"/, "", $2); print $2}')
+  actuelle=$(busctl get-property org.freedesktop.Accounts "${compte:-/}" \
+               org.freedesktop.Accounts.User Session 2>/dev/null | awk '{gsub(/"/, "", $2); print $2}')
+  if [ -z "$compte" ]; then
+    echec "AccountsService ne connaît pas $UTILISATEUR"; return 1
+  elif [ "$actuelle" = "$SESSION_HUB" ]; then
+    deja "session par défaut : $SESSION_HUB"
+  else
+    faire busctl call org.freedesktop.Accounts "$compte" org.freedesktop.Accounts.User \
+      SetSession s "$SESSION_HUB" || return 1
+    ok "session par défaut : $SESSION_HUB (était : ${actuelle:-aucune})"
+  fi
+
+  # GDM : connexion automatique au démarrage ET connexion temporisée. Sans la
+  # seconde, fermer le bureau Ubuntu laisse l'écran de connexion : la connexion
+  # automatique ne vaut qu'une fois par démarrage. Vu en machine virtuelle.
+  local conf=/etc/gdm3/custom.conf
+  local cles=(AutomaticLoginEnable=true "AutomaticLogin=$UTILISATEUR"
+              TimedLoginEnable=true "TimedLogin=$UTILISATEUR" TimedLoginDelay=1)
+  local nouveau
+  nouveau=$(awk -v bloc="$(printf '%s\n' "${cles[@]}")" '
+    BEGIN { n = split(bloc, lignes, "\n"); for (i = 1; i <= n; i++) if (lignes[i] != "") {
+              split(lignes[i], kv, "="); cle[kv[1]] = 1; ordre[++m] = lignes[i] } }
+    function poser_bloc() { for (i = 1; i <= m; i++) print ordre[i]; pose = 1 }
+    /^[[:space:]]*\[/ { section = $0; gsub(/[[:space:]]/, "", section)
+                        print; if (section == "[daemon]") poser_bloc(); next }
+    section == "[daemon]" && match($0, /^[[:space:]]*[A-Za-z]+[[:space:]]*=/) {
+      k = substr($0, RSTART, RLENGTH); gsub(/[[:space:]=]/, "", k); if (k in cle) next }
+    { print }
+    END { if (!pose) { print ""; print "[daemon]"; poser_bloc() } }
+  ' "$conf")
+  if [ "$nouveau" = "$(cat "$conf")" ]; then
+    deja "GDM : connexion automatique et temporisée pour $UTILISATEUR"
+  else
+    # Ce fichier appartient au système : on garde l'original une fois pour toutes.
+    if [ ! -f "$conf.avant-hub" ]; then
+      faire cp -p "$conf" "$conf.avant-hub" || return 1
+      ok "sauvegarde : $conf.avant-hub"
+    fi
+    if [ "$POUR_DE_VRAI" = 1 ]; then
+      printf '%s\n' "$nouveau" >"$conf.hub" && faire install -m 0644 "$conf.hub" "$conf"
+      local code=$?; rm -f "$conf.hub"; [ "$code" -eq 0 ] || return 1
+    else
+      faire "écrire dans [daemon] de $conf :" "${cles[@]}"
+    fi
+    ok "GDM : connexion automatique et temporisée pour $UTILISATEUR"
+  fi
+}
+
+etape_mesure
+etape_session
+etape_accueil
+etape_kodi
+etape_voix
+etape_demarrage
 
 # ── Fin ───────────────────────────────────────────────────────────────────────
 etape "Ce qui reste à faire à la main"
@@ -268,6 +471,16 @@ cat <<'RESTE'
   [ ] trancher d'où vient le streaming de jeu, puis relancer pour le mode Gaming
   [ ] relancer audit/audit.sh une fois la TV branchée, pour les trois mesures
       qui n'existent qu'à ce moment-là
+  [ ] régler l'audio de Kodi après mesure (ARCHITECTURE.md, section Audio)
 RESTE
 printf '\n'
-[ "$POUR_DE_VRAI" = 1 ] || printf '  %sRien n%sa été modifié.%s\n\n' "$JAUNE" "'" "$RAZ"
+if [ "$POUR_DE_VRAI" != 1 ]; then
+  printf '  %sRien n%sa été modifié.%s\n\n' "$JAUNE" "'" "$RAZ"
+  exit 0
+fi
+if [ "$ECHECS" -gt 0 ]; then
+  printf '  %s%d échec(s).%s Détail dans %s ; corrigez puis relancez, le script reprend où il en est.\n\n' \
+    "$ROUGE$GRAS" "$ECHECS" "$RAZ" "$JOURNAL"
+  exit 1
+fi
+printf '  %sHUB en place.%s Redémarrez pour arriver sur le menu.\n\n' "$VERT$GRAS" "$RAZ"
