@@ -1,0 +1,1040 @@
+#!/usr/bin/env python3
+"""Habiller le bureau, Kodi et le mode Jeux aux couleurs du profil HUB actif.
+
+    hub-theme [--theme sombre|clair] [--profil ID] [--simuler] COMMANDE
+
+    bureau          session GNOME : clair/sombre, accent, Yaru, fond, verrouillage, dock
+    tv              Kodi/Estuary : couleur du skin et fond de l'accueil (Kodi fermé seulement)
+    jeux            Moonlight : couleurs via l'environnement ; Steam : rien d'écrivable
+    apercu          génère le fond du profil sans rien appliquer (pour le menu)
+    etat            ce qui serait appliqué, sans rien écrire
+    restaurer       remet les réglages GNOME d'avant le premier passage de hub-theme
+    plymouth DOSSIER  écrit un thème Plymouth « hub » dans DOSSIER (à installer en root)
+
+Sortie : un résumé JSON sur la sortie standard.
+Codes : 0 fait · 1 erreur · 2 usage · 3 Kodi ouvert, rien écrit.
+
+POURQUOI UN SEUL OUTIL. Le HUB a trois modes et un seul profil actif ; si chaque mode
+lisait les réglages à sa façon, un profil recoloré dans le menu garderait l'ancienne
+couleur ailleurs. Toutes les décisions (quel thème, quelle couleur, quel fond) passent
+par les mêmes fonctions, et chaque mode n'est qu'une traduction vers son logiciel.
+
+Rien hors de la bibliothèque standard de Python : l'outil tourne dans la session kiosque
+avant Kodi, là où une dépendance manquante casserait le mode TV.
+"""
+
+import argparse
+import datetime
+import hashlib
+import json
+import math
+import os
+import shutil
+import struct
+import subprocess
+import sys
+import tempfile
+import xml.etree.ElementTree as ET
+import zlib
+from pathlib import Path
+from typing import NamedTuple, Optional
+
+# ── Données recopiées du menu ─────────────────────────────────────────────
+# Recopiées de installer/menu/hub.js (COULEURS_PROFIL, PALETTES, NAPPES) plutôt que lues
+# à l'exécution : le JavaScript n'est pas un format de données, et l'analyser au
+# démarrage de Kodi serait fragile. test_tables_synchronisees_avec_le_menu échoue dès
+# que les deux divergent.
+COULEURS_PROFIL = {
+    "turquoise": (62, 224, 208),
+    "violet": (158, 110, 255),
+    "ambre": (255, 170, 60),
+    "corail": (255, 112, 102),
+    "bleu": (80, 150, 255),
+    "vert": (80, 200, 120),
+    "rose": (255, 100, 180),
+}
+
+PALETTES = {
+    "aurore": {
+        "sombre": {"base": "#06070c", "nappes": [(62, 224, 208), (110, 90, 255), (62, 140, 255), (30, 40, 90)]},
+        "clair": {"base": "#e9edf5", "nappes": [(120, 230, 215), (190, 175, 255), (150, 195, 255), (255, 214, 186)]},
+    },
+    "nebuleuse": {
+        "sombre": {"base": "#07050d", "nappes": [(150, 50, 190), (220, 70, 130), (70, 50, 210), (25, 10, 45)]},
+        "clair": {"base": "#f2edf7", "nappes": [(225, 180, 245), (255, 190, 215), (195, 190, 255), (245, 230, 250)]},
+    },
+    "ocean": {
+        "sombre": {"base": "#030a14", "nappes": [(10, 110, 176), (15, 60, 115), (20, 170, 190), (5, 22, 55)]},
+        "clair": {"base": "#e6f1f8", "nappes": [(140, 205, 240), (175, 215, 238), (150, 232, 230), (212, 236, 250)]},
+    },
+    "braise": {
+        "sombre": {"base": "#0c0605", "nappes": [(200, 75, 30), (130, 30, 60), (235, 130, 40), (45, 12, 10)]},
+        "clair": {"base": "#f8efe9", "nappes": [(255, 192, 150), (245, 178, 196), (255, 216, 160), (250, 232, 220)]},
+    },
+    "minimal": {
+        "sombre": {"base": "#0a0c13", "nappes": [(42, 48, 70)]},
+        "clair": {"base": "#eef1f6", "nappes": [(255, 255, 255)]},
+    },
+}
+
+# Position de repos des nappes du menu (x, y, rayon, phase), en fractions de l'écran.
+NAPPES = [(.18, .22, .50, 0), (.86, .18, .44, 2), (.66, .95, .52, 4), (.10, .90, .50, 1)]
+
+THEMES = ("sombre", "clair")
+DEFAUTS_PROFIL = {"couleur": "turquoise", "theme": "sombre", "fond": "aurore", "teinteMode": True}
+
+# accent-color de GNOME 47+ : énumération fermée (gdesktop-enums.h, gsettings-desktop-schemas).
+# Teintes de libadwaita, celles que l'utilisateur voit réellement pour chaque valeur.
+ACCENTS_GNOME = {
+    "blue": "#3584e4", "teal": "#2190a4", "green": "#3a944a", "yellow": "#c88800", "orange": "#ed5b00",
+    "red": "#e62d42", "pink": "#d56199", "purple": "#9141ac", "slate": "#6f8396",
+}
+
+# Variantes de Yaru et leur accent (ubuntu/yaru, common/accent-colors.scss.in).
+# Ubuntu 26.04 n'en installe qu'une partie (liste des fichiers de yaru-theme-gtk et
+# yaru-theme-icon pour « resolute » sur packages.ubuntu.com, relevée le 15/09/2026 :
+# ni bark ni viridian). On garde la liste complète et on filtre sur le disque : un
+# thème absent donnerait des fenêtres GTK 3 sans style.
+ACCENTS_YARU = {
+    "Yaru": "#e95420", "Yaru-bark": "#787859", "Yaru-sage": "#657b69", "Yaru-olive": "#4b8501",
+    "Yaru-viridian": "#03875b", "Yaru-prussiangreen": "#308280", "Yaru-blue": "#0073e5",
+    "Yaru-purple": "#7764d8", "Yaru-magenta": "#b34cb3", "Yaru-red": "#da3450",
+    "Yaru-yellow": "#c88800", "Yaru-wartybrown": "#b39169",
+}
+
+# button_focus de chaque colors/*.xml d'Estuary, Kodi 21 « Omega » (dépôt xbmc/xbmc,
+# branche Omega, relevé le 15/09/2026). defaults.xml se choisit sous le nom SKINDEFAULT.
+# Repli seulement : le skin installé est relu quand il est présent.
+ESTUARY_KODI_21 = {
+    "SKINDEFAULT": (0x12, 0xA0, 0xC7), "brown": (0x83, 0x51, 0x3F), "charcoal": (0xA2, 0xA2, 0xA2),
+    "chartreuse": (0x4F, 0xAF, 0x00), "concrete": (0x60, 0x7D, 0x8B), "gold": (0xCF, 0xA7, 0x00),
+    "green": (0x24, 0xCA, 0x7A), "maroon": (0xC4, 0x03, 0x00), "midnight": (0x28, 0x66, 0xA4),
+    "orange": (0xFF, 0x98, 0x00), "pink": (0xE9, 0x1E, 0x63), "rose": (0xFF, 0x8E, 0xC4),
+    "teal": (0x00, 0x96, 0x88), "violet": (0xC0, 0x50, 0xFF),
+}
+
+# Entrées de l'accueil d'Estuary qui cherchent une image de fond : les identifiants de
+# Home.xml, plus ceux que Variables.xml (HomeFanartVar) ajoute pour les boutons du haut.
+ENTREES_ACCUEIL_ESTUARY = (
+    "movies", "tvshows", "music", "musicvideos", "video", "livetv", "radio", "games", "addons",
+    "pictures", "disc", "favorites", "weather", "power", "settings", "search",
+)
+SKINS_ESTUARY = [Path("/usr/share/kodi/addons/skin.estuary"), Path.home() / ".kodi/addons/skin.estuary"]
+PROCESSUS_KODI = {"kodi", "kodi.bin", "kodi-x11", "kodi-wayland", "kodi-gbm", "kodi-standalone"}
+
+# Change quand le dessin change : les fonds déjà générés portent ce numéro dans leur
+# empreinte, ils sont donc refaits au lieu d'être réutilisés.
+VERSION_RENDU = 1
+LARGEUR_FOND, HAUTEUR_FOND = 3840, 2160
+EXTENSIONS_PHOTO = {".jpg", ".jpeg", ".png", ".webp"}
+
+
+class ErreurTheme(Exception):
+    pass
+
+
+class KodiOuvert(ErreurTheme):
+    pass
+
+
+class Apparence(NamedTuple):
+    theme: str
+    couleur: tuple
+    fond: str
+    fond_uri: str
+    base: str
+    photo: Optional[Path] = None
+
+
+# ── Couleurs ──────────────────────────────────────────────────────────────
+def hex_rvb(texte):
+    texte = texte.lstrip("#")
+    return tuple(int(texte[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def rvb_hex(rvb):
+    return "#" + "".join(f"{max(0, min(255, round(c))):02x}" for c in rvb)
+
+
+def melange(a, b, t):
+    return tuple(x + (y - x) * t for x, y in zip(a, b))
+
+
+def oklab(rvb):
+    def lineaire(c):
+        c /= 255
+        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+    r, g, b = (lineaire(c) for c in rvb)
+    l = (0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b) ** (1 / 3)
+    m = (0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b) ** (1 / 3)
+    s = (0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b) ** (1 / 3)
+    return (0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+            1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+            0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s)
+
+
+def distance(a, b):
+    """Distance perçue (OKLab), clarté comptée au tiers.
+
+    Les couleurs de profil sont des pastels lumineux faits pour un fond noir ; les
+    accents de GNOME, de Yaru et d'Estuary sont des teintes moyennes faites pour du
+    texte blanc. L'écart de clarté est donc systématique et ne dit rien de la teinte
+    voulue : compté en entier, il envoie le violet du HUB vers le bleu d'Adwaita. À la
+    moitié, le turquoise part encore vers le vert menthe d'Estuary plutôt que vers son
+    « teal ». Au tiers, les trois tables (GNOME, Yaru, Estuary) donnent pour chaque
+    couleur de profil la teinte qu'on nommerait à l'œil ; en dessous (un quart), le
+    corail bascule du orange au rouge sur GNOME."""
+    la, lb = oklab(a), oklab(b)
+    return (0.35 * (la[0] - lb[0])) ** 2 + (la[1] - lb[1]) ** 2 + (la[2] - lb[2]) ** 2
+
+
+def plus_proche(rvb, candidats):
+    """candidats : {nom: (r, v, b)}. None s'il n'y en a aucun."""
+    if not candidats:
+        return None
+    return min(candidats, key=lambda nom: (distance(rvb, candidats[nom]), nom))
+
+
+def accent_gnome(rvb, permis=None):
+    candidats = {n: hex_rvb(h) for n, h in ACCENTS_GNOME.items() if permis is None or n in permis}
+    return plus_proche(rvb, candidats)
+
+
+def variante_yaru(rvb, sombre, disponibles):
+    """Nom de thème Yaru (GTK et icônes) le plus proche, parmi ceux présents sur le disque."""
+    def nom(base):
+        if not sombre:
+            return base
+        return "Yaru-dark" if base == "Yaru" else base + "-dark"
+    candidats = {nom(b): hex_rvb(h) for b, h in ACCENTS_YARU.items() if nom(b) in disponibles}
+    return plus_proche(rvb, candidats)
+
+
+def variantes_yaru(dossiers_themes=None, dossiers_icones=None):
+    """Variantes utilisables : un thème GTK 3 ET un jeu d'icônes du même nom."""
+    maison = Path.home()
+    if dossiers_themes is None:
+        dossiers_themes = [Path("/usr/share/themes"), maison / ".local/share/themes", maison / ".themes"]
+    if dossiers_icones is None:
+        dossiers_icones = [Path("/usr/share/icons"), maison / ".local/share/icons", maison / ".icons"]
+
+    def noms(dossiers, fichier):
+        trouves = set()
+        for d in dossiers:
+            try:
+                for e in Path(d).iterdir():
+                    if e.name.startswith("Yaru") and (e / fichier).exists():
+                        trouves.add(e.name)
+            except OSError:
+                pass
+        return trouves
+    return noms(dossiers_themes, "gtk-3.0") & noms(dossiers_icones, "index.theme")
+
+
+def couleurs_estuary(skins=None):
+    """{valeur de lookandfeel.skincolors: button_focus} lue dans le skin installé."""
+    for skin in (SKINS_ESTUARY if skins is None else skins):
+        table = {}
+        try:
+            fichiers = sorted((Path(skin) / "colors").glob("*.xml"))
+        except OSError:
+            continue
+        for f in fichiers:
+            try:
+                for c in ET.parse(f).getroot().iter("color"):
+                    if c.get("name") == "button_focus" and c.text and len(c.text.strip()) == 8:
+                        nom = "SKINDEFAULT" if f.stem == "defaults" else f.stem
+                        table[nom] = hex_rvb(c.text.strip()[2:])
+            except (ET.ParseError, OSError, ValueError):
+                continue
+        if table:
+            return table
+    return dict(ESTUARY_KODI_21)
+
+
+def couleur_estuary(rvb, table=None):
+    return plus_proche(rvb, table or ESTUARY_KODI_21)
+
+
+# ── Réglages du HUB ───────────────────────────────────────────────────────
+def chemins(maison=None, env=None):
+    maison = Path(maison or Path.home())
+    env = env or {}
+
+    def xdg(variable, defaut):
+        return Path(env.get(variable) or maison / defaut)
+    config, donnees = xdg("XDG_CONFIG_HOME", ".config"), xdg("XDG_DATA_HOME", ".local/share")
+    etat, cache = xdg("XDG_STATE_HOME", ".local/state"), xdg("XDG_CACHE_HOME", ".cache")
+    kodi = Path(env.get("KODI_DATA") or maison / ".kodi")
+    return {
+        "maison": maison,
+        "reglages": config / "hub" / "reglages.json",
+        "meteo": cache / "hub" / "meteo.json",
+        "fonds": donnees / "hub" / "fonds",
+        "origine": etat / "hub" / "theme-origine.json",
+        "jeux_env": config / "hub" / "jeux.env",
+        "guisettings": kodi / "userdata" / "guisettings.xml",
+        "skin_estuary": kodi / "userdata" / "addon_data" / "skin.estuary" / "settings.xml",
+    }
+
+
+def lire_json(chemin):
+    try:
+        return json.loads(Path(chemin).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def profil_actif(reglages, identifiant=None):
+    profils = reglages.get("profils") if isinstance(reglages, dict) else None
+    profils = [p for p in profils if isinstance(p, dict)] if isinstance(profils, list) else []
+    voulu = identifiant or (reglages or {}).get("profilActif") if isinstance(reglages, dict) else identifiant
+    choisi = next((p for p in profils if p.get("id") == voulu), profils[0] if profils else {})
+    return {**DEFAUTS_PROFIL, **choisi}
+
+
+def resoudre_theme(profil, force=None, maintenant=None, meteo=None):
+    """Même règle que themeEffectif() du menu : le soleil du jour s'il est connu, sinon
+    8 h–20 h. Le menu et le bureau ne doivent pas se contredire à la même minute."""
+    if force in THEMES:
+        return force
+    choix = profil.get("theme")
+    if choix in THEMES:
+        return choix
+    if choix != "auto":
+        return "sombre"
+    maintenant = maintenant or datetime.datetime.now()
+    jour = ((meteo or {}).get("donnees") or {}).get("daily") or {}
+    aujourdhui = maintenant.date().isoformat()
+    try:
+        levers, couchers = jour.get("sunrise") or [], jour.get("sunset") or []
+        # Le cache peut dater de plusieurs jours : on ne prend que la ligne d'aujourd'hui.
+        i = next(i for i, l in enumerate(levers) if str(l).startswith(aujourdhui))
+        lever = datetime.datetime.fromisoformat(levers[i])
+        coucher = datetime.datetime.fromisoformat(couchers[i])
+        return "clair" if lever <= maintenant < coucher else "sombre"
+    except (StopIteration, IndexError, ValueError, TypeError):
+        return "clair" if 8 <= maintenant.hour < 20 else "sombre"
+
+
+def dossiers_images_hub(maison):
+    candidats = [maison / "Images" / "HUB", maison / "Pictures" / "HUB"]
+    try:
+        images = subprocess.run(["xdg-user-dir", "PICTURES"], capture_output=True, text=True, timeout=2).stdout.strip()
+        if images:
+            candidats.insert(0, Path(images) / "HUB")
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return [d for d in candidats if d.is_dir()]
+
+
+def choisir_photo(dossiers, date):
+    """Une photo de Images/HUB, qui change chaque jour mais reste la même toute la
+    journée : relancer hub-theme dix fois ne doit pas changer dix fois le fond."""
+    photos = sorted({f.resolve() for d in dossiers if Path(d).is_dir() for f in Path(d).iterdir()
+                     if f.is_file() and f.suffix.lower() in EXTENSIONS_PHOTO})
+    return photos[date.toordinal() % len(photos)] if photos else None
+
+
+# ── Fond d'écran ──────────────────────────────────────────────────────────
+def nappes(fond, theme, accent, largeur, hauteur, teinter=True):
+    """Les nappes du menu figées à l'instant zéro de leur animation (dessinerFond)."""
+    palette = PALETTES.get(fond, PALETTES["aurore"])[theme]
+    resultat = []
+    for i, teinte_base in enumerate(palette["nappes"]):
+        x0, y0, r0, phase = NAPPES[i]
+        if fond == "ocean":
+            x, y = x0 + math.sin(phase) * .3, y0 + math.sin(phase) * .05
+        elif fond == "braise":
+            x, y = x0 + math.sin(phase) * .1, (y0 % 1.4 + 1.4) % 1.4 - .2
+        else:
+            x, y = x0 + math.sin(phase) * .16, y0 + math.cos(phase) * .14
+        if fond == "minimal":
+            y, rayon = -.3, 1.1
+            alpha = .9 if theme == "clair" else .5
+        else:
+            rayon = r0 * (1 + math.sin(phase) * .08)
+            alpha = (.6 if i == 0 else .5) if theme == "clair" else (.35 if i == 3 else .34 if i == 0 else .2)
+        couleur = teinte_base
+        if teinter and fond != "minimal":
+            couleur = melange(teinte_base, accent, .75 if i == 0 else .25)
+        resultat.append({
+            "x": x * largeur, "y": y * hauteur, "r": rayon * largeur, "alpha": alpha,
+            "couleur": tuple(round(c) for c in couleur),
+        })
+    return resultat
+
+
+def fond_svg(fond, theme, accent, largeur=LARGEUR_FOND, hauteur=HAUTEUR_FOND, teinter=True):
+    base = PALETTES.get(fond, PALETTES["aurore"])[theme]["base"]
+    dessin = nappes(fond, theme, accent, largeur, hauteur, teinter)
+    # Le menu additionne la lumière en sombre (« lighter ») ; SVG n'a pas d'addition
+    # portable, « screen » en est le plus proche et librsvg le connaît.
+    melange_css = ' style="mix-blend-mode:screen"' if theme == "sombre" else ""
+    degrades, calques = [], []
+    for i, n in enumerate(dessin):
+        couleur = rvb_hex(n["couleur"])
+        degrades.append(
+            f'<radialGradient id="n{i}" gradientUnits="userSpaceOnUse" cx="{n["x"]:.1f}" cy="{n["y"]:.1f}" r="{n["r"]:.1f}">'
+            f'<stop offset="0" stop-color="{couleur}" stop-opacity="{n["alpha"]}"/>'
+            f'<stop offset="1" stop-color="{couleur}" stop-opacity="0"/></radialGradient>')
+        calques.append(f'<rect width="{largeur}" height="{hauteur}" fill="url(#n{i})"{melange_css}/>')
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{largeur}" height="{hauteur}" viewBox="0 0 {largeur} {hauteur}">\n'
+        f'<defs>{"".join(degrades)}</defs>\n'
+        f'<rect width="{largeur}" height="{hauteur}" fill="{base}"/>\n'
+        f'<g style="isolation:isolate">{"".join(calques)}</g>\n</svg>\n')
+
+
+# Tramage ordonné 4×4 : un dégradé très étiré sur 8 bits fait des bandes visibles sur
+# une TV ; un bruit régulier d'un demi-niveau les efface sans grain perceptible.
+BAYER = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]]
+
+
+def rendre_fond(fond, theme, accent, largeur, hauteur, teinter=True):
+    """Le même dessin en pixels, sans bibliothèque : Kodi ne lit pas le SVG. Rendu exact
+    du menu (addition en sombre, recouvrement en clair)."""
+    base = hex_rvb(PALETTES.get(fond, PALETTES["aurore"])[theme]["base"])
+    dessin = nappes(fond, theme, accent, largeur, hauteur, teinter)
+    additif = theme == "sombre"
+    lignes = []
+    for y in range(hauteur):
+        canaux = [[float(base[c])] * largeur for c in range(3)]
+        for n in dessin:
+            dy2 = (y + .5 - n["y"]) ** 2
+            r = n["r"]
+            if dy2 >= r * r:
+                continue
+            cx, a = n["x"], n["alpha"]
+            demi = math.sqrt(r * r - dy2)
+            debut, fin = max(0, int(cx - demi)), min(largeur, int(cx + demi) + 1)
+            col = n["couleur"]
+            for x in range(debut, fin):
+                t = 1 - math.sqrt((x + .5 - cx) ** 2 + dy2) / r
+                if t <= 0:
+                    continue
+                al = a * t
+                for c in range(3):
+                    if additif:
+                        canaux[c][x] += col[c] * al
+                    else:
+                        canaux[c][x] += (col[c] - canaux[c][x]) * al
+        ligne = bytearray(largeur * 3)
+        bayer = BAYER[y % 4]
+        for x in range(largeur):
+            tramage = (bayer[x % 4] + .5) / 16
+            for c in range(3):
+                ligne[x * 3 + c] = max(0, min(255, int(canaux[c][x] + tramage)))
+        lignes.append(ligne)
+    return largeur, hauteur, lignes
+
+
+def ecrire_atomique(chemin, donnees):
+    """Écrire à côté puis renommer : une coupure ne laisse jamais un fichier tronqué
+    à un logiciel qui le remplacerait par des valeurs vierges."""
+    chemin = Path(chemin)
+    chemin.parent.mkdir(parents=True, exist_ok=True)
+    provisoire = chemin.with_name(chemin.name + ".hub-tmp")
+    if isinstance(donnees, str):
+        donnees = donnees.encode("utf-8")
+    provisoire.write_bytes(donnees)
+    os.replace(provisoire, chemin)
+
+
+def ecrire_png(chemin, largeur, hauteur, lignes):
+    canaux = len(lignes[0]) // largeur
+    brut = b"".join(b"\x00" + bytes(l) for l in lignes)
+
+    def bloc(genre, corps):
+        return struct.pack(">I", len(corps)) + genre + corps + struct.pack(">I", zlib.crc32(genre + corps) & 0xFFFFFFFF)
+    png = (b"\x89PNG\r\n\x1a\n"
+           + bloc(b"IHDR", struct.pack(">IIBBBBB", largeur, hauteur, 8, 6 if canaux == 4 else 2, 0, 0, 0))
+           + bloc(b"IDAT", zlib.compress(brut, 9)) + bloc(b"IEND", b""))
+    ecrire_atomique(chemin, png)
+
+
+def empreinte(*elements):
+    return hashlib.sha256(json.dumps([VERSION_RENDU, *elements], default=str).encode()).hexdigest()[:10]
+
+
+def generer_fond_svg(dossier, fond, theme, accent, teinter=True, nettoyer=True):
+    """Le nom porte l'empreinte du contenu : GNOME ne recharge pas une image dont
+    l'adresse n'a pas changé, et un nom stable rend l'écriture idempotente."""
+    dossier = Path(dossier)
+    svg = fond_svg(fond, theme, accent, teinter=teinter)
+    chemin = dossier / f"hub-{fond}-{theme}-{hashlib.sha256(svg.encode()).hexdigest()[:10]}.svg"
+    if not chemin.exists() or chemin.read_text(encoding="utf-8") != svg:
+        ecrire_atomique(chemin, svg)
+    if nettoyer:
+        for ancien in dossier.glob("hub-*.svg"):
+            if ancien != chemin:
+                ancien.unlink(missing_ok=True)
+    return chemin
+
+
+def construire_apparence(profil, theme, c, date=None, generer=True, dossier_fonds=None):
+    date = date or datetime.date.today()
+    couleur = COULEURS_PROFIL.get(profil.get("couleur"), COULEURS_PROFIL["turquoise"])
+    fond = profil.get("fond") if profil.get("fond") in PALETTES or profil.get("fond") == "photos" else "aurore"
+    photo = None
+    if fond == "photos":
+        photo = choisir_photo(dossiers_images_hub(c["maison"]), date)
+        # Comme le menu : pas de photo, pas de fond vide — l'aurore.
+        fond = "photos" if photo else "aurore"
+    base = PALETTES["aurore" if fond == "photos" else fond][theme]["base"]
+    if photo:
+        uri = photo.as_uri()
+    elif generer:
+        uri = generer_fond_svg(dossier_fonds or c["fonds"], fond, theme, couleur,
+                               teinter=profil.get("teinteMode", True) is not False,
+                               nettoyer=dossier_fonds is None).as_uri()
+    else:
+        uri = ""
+    return Apparence(theme=theme, couleur=couleur, fond=fond, fond_uri=uri, base=base, photo=photo)
+
+
+# ── Bureau : gsettings ────────────────────────────────────────────────────
+def formater_gvariant(valeur):
+    if isinstance(valeur, bool):
+        return "true" if valeur else "false"
+    if isinstance(valeur, (int, float)):
+        return repr(valeur)
+    return "'" + str(valeur).replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def lire_gvariant(texte):
+    """Le peu de GVariant texte que rendent les clés touchées ici : chaîne, booléen, nombre."""
+    texte = texte.strip()
+    for prefixe in ("uint32 ", "int32 ", "uint64 ", "int64 ", "byte "):
+        if texte.startswith(prefixe):
+            texte = texte[len(prefixe):]
+    if texte in ("true", "false"):
+        return texte == "true"
+    if len(texte) >= 2 and texte[0] == texte[-1] and texte[0] in "'\"":
+        sortie, i = [], 1
+        while i < len(texte) - 1:
+            if texte[i] == "\\" and i + 1 < len(texte) - 1:
+                i += 1
+            sortie.append(texte[i])
+            i += 1
+        return "".join(sortie)
+    for conversion in (int, float):
+        try:
+            return conversion(texte)
+        except ValueError:
+            pass
+    return texte
+
+
+def egales(a, b):
+    if isinstance(a, float) or isinstance(b, float):
+        try:
+            return math.isclose(float(a), float(b), abs_tol=1e-6)
+        except (TypeError, ValueError):
+            return False
+    return type(a) is type(b) and a == b
+
+
+def executer_systeme(argv):
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=10)
+        return r.returncode, r.stdout
+    except (OSError, subprocess.SubprocessError):
+        return 127, ""
+
+
+def valeurs_bureau(apparence, accent, yaru):
+    sombre = apparence.theme == "sombre"
+    i, fond, verrou, dock = ("org.gnome.desktop.interface", "org.gnome.desktop.background",
+                             "org.gnome.desktop.screensaver", "org.gnome.shell.extensions.dash-to-dock")
+    valeurs = {(i, "color-scheme"): "prefer-dark" if sombre else "default"}
+    if accent:
+        valeurs[(i, "accent-color")] = accent
+    if yaru:
+        valeurs[(i, "gtk-theme")] = yaru
+        valeurs[(i, "icon-theme")] = yaru
+    options = "zoom"
+    valeurs.update({
+        (fond, "picture-uri"): apparence.fond_uri,
+        # GNOME prend picture-uri-dark en mode sombre : sans elle, le fond ne suivrait
+        # le profil qu'une moitié de la journée.
+        (fond, "picture-uri-dark"): apparence.fond_uri,
+        (fond, "picture-options"): options,
+        # Couleur affichée le temps que l'image se charge : celle du fond, pas le bleu d'Ubuntu.
+        (fond, "primary-color"): apparence.base,
+        (verrou, "picture-uri"): apparence.fond_uri,
+        (verrou, "picture-options"): options,
+        (verrou, "primary-color"): apparence.base,
+        # Dock d'Ubuntu : la teinte du fond HUB en verre fumé, pour que le dock appartienne
+        # au décor au lieu d'y poser la barre grise d'Ubuntu.
+        (dock, "transparency-mode"): "FIXED",
+        (dock, "custom-background-color"): True,
+        (dock, "background-color"): apparence.base,
+        (dock, "background-opacity"): 0.6 if sombre else 0.7,
+    })
+    return valeurs
+
+
+def cle_texte(cle):
+    return f"{cle[0]} {cle[1]}"
+
+
+def lire_cles(executer, cles):
+    """Valeurs actuelles, en texte GVariant. Une clé illisible (schéma absent — dock
+    désinstallé, GNOME trop ancien pour accent-color) est omise, donc jamais écrite."""
+    actuelles = {}
+    for schema, cle in cles:
+        code, sortie = executer(["gsettings", "get", schema, cle])
+        if code == 0:
+            actuelles[(schema, cle)] = sortie.strip()
+    return actuelles
+
+
+def commandes_gsettings(voulues, actuelles):
+    return [["gsettings", "set", schema, cle, formater_gvariant(valeur)]
+            for (schema, cle), valeur in voulues.items()
+            if (schema, cle) in actuelles and not egales(lire_gvariant(actuelles[(schema, cle)]), valeur)]
+
+
+def accents_permis(executer):
+    code, sortie = executer(["gsettings", "range", "org.gnome.desktop.interface", "accent-color"])
+    lignes = sortie.split()
+    if code != 0 or not lignes or lignes[0] != "enum":
+        return None
+    return {lire_gvariant(l) for l in lignes[1:]}
+
+
+def appliquer_bureau(apparence, executer, chemin_origine, yaru_dispo=None, sauvegarder=True):
+    sombre = apparence.theme == "sombre"
+    accent = accent_gnome(apparence.couleur, accents_permis(executer))
+    yaru = variante_yaru(apparence.couleur, sombre, variantes_yaru() if yaru_dispo is None else yaru_dispo)
+    voulues = valeurs_bureau(apparence, accent, yaru)
+    actuelles = lire_cles(executer, voulues)
+    commandes = commandes_gsettings(voulues, actuelles)
+
+    if commandes and sauvegarder:
+        # La sauvegarde précède l'écriture et ne retient que la première valeur jamais vue :
+        # au second passage, la valeur actuelle est celle du HUB, pas celle de l'utilisateur.
+        origine = lire_json(chemin_origine) or {}
+        nouvelles = {cle_texte((c[2], c[3])): actuelles[(c[2], c[3])] for c in commandes
+                     if cle_texte((c[2], c[3])) not in origine}
+        if nouvelles:
+            origine.update(nouvelles)
+            ecrire_atomique(chemin_origine, json.dumps(origine, indent=2, ensure_ascii=False))
+    erreurs = [c for c in commandes if executer(c)[0] != 0]
+    return {"accent": accent, "yaru": yaru,
+            "ecrites": [cle_texte((c[2], c[3])) for c in commandes if c not in erreurs],
+            "erreurs": [cle_texte((c[2], c[3])) for c in erreurs]}
+
+
+def restaurer_bureau(executer, chemin_origine):
+    origine = lire_json(chemin_origine)
+    if not isinstance(origine, dict):
+        return {"restaurees": []}
+    cles = [tuple(k.split(" ", 1)) for k in origine]
+    actuelles = lire_cles(executer, cles)
+    restaurees = []
+    for cle in cles:
+        brut = origine[cle_texte(cle)]
+        if cle in actuelles and not egales(lire_gvariant(actuelles[cle]), lire_gvariant(brut)):
+            if executer(["gsettings", "set", cle[0], cle[1], brut])[0] == 0:
+                restaurees.append(cle_texte(cle))
+    Path(chemin_origine).unlink(missing_ok=True)
+    return {"restaurees": restaurees}
+
+
+# ── Kodi ──────────────────────────────────────────────────────────────────
+def kodi_tourne(proc=Path("/proc")):
+    try:
+        entrees = list(Path(proc).iterdir())
+    except OSError:
+        return False
+    for e in entrees:
+        if not e.name.isdigit():
+            continue
+        try:
+            if (e / "comm").read_text().strip() in PROCESSUS_KODI:
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def regler_xml(chemin, valeurs, version="2", type_=None):
+    """Poser des <setting id=…> sans toucher aux autres ; True si le fichier a changé.
+
+    Même principe que installer/kodi/regler-guisettings.py : ces fichiers portent les
+    réglages que l'utilisateur a faits devant la TV. Un fichier illisible n'est pas
+    remplacé : mieux vaut un thème non appliqué qu'un Kodi remis à zéro."""
+    chemin = Path(chemin)
+    if chemin.exists():
+        try:
+            arbre = ET.parse(chemin)
+        except ET.ParseError as e:
+            raise ErreurTheme(f"{chemin} illisible, laissé tel quel : {e}")
+        racine = arbre.getroot()
+    else:
+        racine = ET.Element("settings", version=version)
+        arbre = ET.ElementTree(racine)
+    existants = {e.get("id"): e for e in racine.iter("setting")}
+    change = False
+    for cle, valeur in valeurs.items():
+        element = existants.get(cle)
+        if element is not None and (element.text or "") == valeur:
+            continue
+        if element is None:
+            element = ET.SubElement(racine, "setting", id=cle)
+            if type_:
+                element.set("type", type_)
+        element.text = valeur
+        # Kodi marque default="true" les valeurs par défaut ; le laisser ferait passer
+        # notre choix pour un défaut, que Kodi peut réécrire.
+        element.attrib.pop("default", None)
+        change = True
+    if change:
+        ET.indent(arbre, space="    ")
+        provisoire = chemin.with_name(chemin.name + ".hub-tmp")
+        chemin.parent.mkdir(parents=True, exist_ok=True)
+        arbre.write(provisoire, encoding="utf-8", xml_declaration=True)
+        os.replace(provisoire, chemin)
+    return change
+
+
+def lier(cible, lien):
+    try:
+        lien.symlink_to(cible)
+    except OSError:
+        shutil.copyfile(lien.parent / cible if not Path(cible).is_absolute() else cible, lien)
+
+
+def preparer_fonds_kodi(apparence, dossier_kodi, taille):
+    """Un dossier dont chaque entrée de l'accueil a son image, nommé par l'empreinte du
+    contenu. Kodi garde en cache une texture par chemin (Textures13.db) et ne revérifie
+    les fichiers locaux que rarement : réécrire la même adresse montrerait l'ancien fond."""
+    if apparence.photo:
+        photo = Path(apparence.photo)
+        etat = photo.stat()
+        cle = empreinte("photo", str(photo), etat.st_mtime_ns, etat.st_size)
+        extension = photo.suffix.lower()
+    else:
+        cle = empreinte(apparence.fond, "sombre", apparence.couleur, taille)
+        extension = ".png"
+    dossier = Path(dossier_kodi) / cle
+    if not dossier.is_dir():
+        provisoire = Path(tempfile.mkdtemp(prefix=".hub-", dir=_creer(dossier_kodi)))
+        if apparence.photo:
+            source = Path(apparence.photo).resolve()
+        else:
+            source = Path("fond.png")
+            # Toujours la version sombre : Estuary n'a pas de thème clair, et il pose le
+            # fond à 19 % d'opacité (bg_overlay = 30FFFFFF) sur sa couleur de base. Un
+            # fond clair y deviendrait un voile gris.
+            ecrire_png(provisoire / source, *rendre_fond(apparence.fond, "sombre", apparence.couleur, *taille))
+        for entree in ENTREES_ACCUEIL_ESTUARY:
+            lier(source, provisoire / f"{entree}{extension}")
+        os.replace(provisoire, dossier)
+    for autre in Path(dossier_kodi).iterdir():
+        if autre != dossier and autre.is_dir():
+            shutil.rmtree(autre, ignore_errors=True)
+    return dossier, extension
+
+
+def _creer(dossier):
+    Path(dossier).mkdir(parents=True, exist_ok=True)
+    return dossier
+
+
+def appliquer_tv(apparence, c, tourne=kodi_tourne, skins=None, taille=(960, 540)):
+    """taille : Estuary dessine en 1080p et étire les fonds ; 960×540 tramé suffit à un
+    dégradé sans détail, et se calcule en quelques secondes en Python pur."""
+    if tourne():
+        # Kodi réécrit guisettings.xml et les réglages du skin en quittant : écrire
+        # maintenant serait effacé, ou pire, mélangé.
+        raise KodiOuvert("Kodi est ouvert : réglages non modifiés (relancer après sa fermeture)")
+    table = couleurs_estuary(skins)
+    couleur = couleur_estuary(apparence.couleur, table)
+    resume = {"skincolors": None, "fond_accueil": None}
+
+    skin_actuel = None
+    if c["guisettings"].exists():
+        try:
+            skin_actuel = next((e.text for e in ET.parse(c["guisettings"]).getroot().iter("setting")
+                                if e.get("id") == "lookandfeel.skin"), None)
+        except ET.ParseError as e:
+            raise ErreurTheme(f"{c['guisettings']} illisible, laissé tel quel : {e}")
+    # Les noms de couleurs sont ceux d'Estuary : sur un autre skin ils ne veulent rien dire.
+    if skin_actuel in (None, "skin.estuary"):
+        regler_xml(c["guisettings"], {"lookandfeel.skincolors": couleur})
+        resume["skincolors"] = couleur
+
+    dossier, extension = preparer_fonds_kodi(apparence, c["fonds"] / "kodi", taille)
+    regler_xml(c["skin_estuary"], {
+        "HomeFanart.path": str(dossier) + "/",
+        "HomeFanart.ext": extension,
+        "HomeFanart.name": "HUB",
+    }, version="1", type_="string")
+    resume["fond_accueil"] = str(dossier)
+    return resume
+
+
+# ── Jeux ──────────────────────────────────────────────────────────────────
+def environnement_moonlight(apparence):
+    """Moonlight-qt impose le thème Material sombre mais laisse l'accent et la couleur
+    primaire à l'environnement (main.cpp : QT_QUICK_CONTROLS_MATERIAL_ACCENT et
+    _PRIMARY ne sont posés que s'ils sont absents). Le thème, lui, est forcé à Dark :
+    inutile de le passer."""
+    primaire = melange(apparence.couleur, (0, 0, 0), .55)
+    return {
+        "QT_QUICK_CONTROLS_MATERIAL_ACCENT": rvb_hex(apparence.couleur),
+        "QT_QUICK_CONTROLS_MATERIAL_PRIMARY": rvb_hex(primaire),
+    }
+
+
+def presence_jeux(maison):
+    moonlight = shutil.which("moonlight-qt") or shutil.which("moonlight")
+    if not moonlight:
+        for racine in (maison / ".local/share/flatpak/app", Path("/var/lib/flatpak/app")):
+            if (racine / "com.moonlight_stream.Moonlight").is_dir():
+                moonlight = "flatpak:com.moonlight_stream.Moonlight"
+    steam = shutil.which("steam")
+    if not steam and (maison / ".steam/steam").exists():
+        steam = str(maison / ".steam/steam")
+    return {"moonlight": moonlight, "steam": steam}
+
+
+def appliquer_jeux(apparence, c, presence=None):
+    presence = presence if presence is not None else presence_jeux(c["maison"])
+    resume = {"moonlight": bool(presence.get("moonlight")), "steam": bool(presence.get("steam")), "env": None}
+    if presence.get("moonlight"):
+        texte = "# Écrit par hub-theme : couleurs du profil HUB pour Moonlight. À sourcer avant de le lancer.\n"
+        texte += "".join(f"{k}='{v}'\n" for k, v in environnement_moonlight(apparence).items())
+        if not c["jeux_env"].exists() or c["jeux_env"].read_text(encoding="utf-8") != texte:
+            ecrire_atomique(c["jeux_env"], texte)
+        resume["env"] = str(c["jeux_env"])
+    if presence.get("steam"):
+        # Big Picture (client web depuis 2023) n'a ni thème ni couleur réglables par
+        # fichier ; seule la vidéo de démarrage se remplace, et elle doit être un WebM.
+        resume["steam_note"] = "rien d'applicable par fichier (voir README)"
+    return resume
+
+
+# ── Plymouth ──────────────────────────────────────────────────────────────
+def _distance_segment(px, py, ax, ay, bx, by):
+    dx, dy = bx - ax, by - ay
+    t = max(0, min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy or 1)))
+    return math.hypot(px - (ax + t * dx), py - (ay + t * dy))
+
+
+def _distance_arc(px, py, cx, cy, r, cote):
+    """Demi-cercle : « bas » (y ≥ cy) ou « droite » (x ≥ cx). Hors du demi-plan, la
+    distance aux extrémités, pour que le trait se raccorde aux segments."""
+    dedans = py >= cy if cote == "bas" else px >= cx
+    if dedans:
+        return abs(math.hypot(px - cx, py - cy) - r)
+    bouts = [(cx - r, cy), (cx + r, cy)] if cote == "bas" else [(cx, cy - r), (cx, cy + r)]
+    return min(math.hypot(px - x, py - y) for x, y in bouts)
+
+
+# Les trois lettres en traits (unités : hauteur de lettre = 1). Dessinées ici plutôt que
+# rendues avec une police : Plymouth tourne dans l'initramfs, où le greffon de texte
+# et les polices ne sont pas garantis. Une image, elle, s'affiche toujours.
+LETTRES = [
+    [("s", 0, 0, 0, 1), ("s", .7, 0, .7, 1), ("s", 0, .5, .7, .5)],
+    [("s", 0, 0, 0, .65), ("s", .7, 0, .7, .65), ("a", .35, .65, .35, "bas")],
+    [("s", 0, 0, 0, 1), ("s", 0, 0, .33, 0), ("s", 0, .47, .38, .47), ("s", 0, 1, .38, 1),
+     ("a", .33, .235, .235, "droite"), ("a", .38, .735, .265, "droite")],
+]
+
+
+def image_mot_hub(hauteur_lettre=96, couleur=(240, 242, 248)):
+    epaisseur, avance, marge = .15, 1.05, .15
+    largeur = int((marge * 2 + avance * 2 + .7) * hauteur_lettre) + 1
+    hauteur = int((marge * 2 + 1) * hauteur_lettre) + 1
+    lignes = []
+    for y in range(hauteur):
+        ligne = bytearray(largeur * 4)
+        v = (y + .5) / hauteur_lettre - marge
+        for x in range(largeur):
+            u = (x + .5) / hauteur_lettre - marge
+            d = 9.0
+            for i, traits in enumerate(LETTRES):
+                lu = u - i * avance
+                if -.3 < lu < 1:
+                    for t in traits:
+                        if t[0] == "s":
+                            d = min(d, _distance_segment(lu, v, *t[1:]))
+                        else:
+                            d = min(d, _distance_arc(lu, v, *t[1:]))
+            # Couverture d'un pixel : bord adouci sur un pixel de large.
+            couverture = max(0.0, min(1.0, (epaisseur / 2 - d) * hauteur_lettre + .5))
+            ligne[x * 4:x * 4 + 4] = bytes((*couleur, round(255 * couverture)))
+        lignes.append(ligne)
+    return largeur, hauteur, lignes
+
+
+def image_point(diametre, couleur):
+    lignes = []
+    r = diametre / 2
+    for y in range(diametre):
+        ligne = bytearray(diametre * 4)
+        for x in range(diametre):
+            couverture = max(0.0, min(1.0, r - math.hypot(x + .5 - r, y + .5 - r)))
+            ligne[x * 4:x * 4 + 4] = bytes((*couleur, round(255 * couverture)))
+        lignes.append(ligne)
+    return diametre, diametre, lignes
+
+
+SCRIPT_PLYMOUTH = """\
+# Thème Plymouth « hub » — généré par hub-theme plymouth. Le mot HUB, et trois points
+# aux couleurs du profil qui respirent l'un après l'autre : de quoi voir que la machine
+# vit, sans animation qui attire l'œil sur une TV de salon.
+
+Window.SetBackgroundTopColor({haut});
+Window.SetBackgroundBottomColor({bas});
+
+accent_r = {ar};
+accent_v = {av};
+accent_b = {ab};
+
+logo.image = Image("hub.png");
+logo.sprite = Sprite(logo.image);
+logo.x = Window.GetX() + Window.GetWidth() / 2 - logo.image.GetWidth() / 2;
+logo.y = Window.GetY() + Window.GetHeight() / 2 - logo.image.GetHeight() / 2;
+logo.sprite.SetPosition(logo.x, logo.y, 1);
+logo.sprite.SetOpacity(0);
+
+point_image = Image("point.png");
+ecart = point_image.GetWidth() * 2.2;
+for (i = 0; i < 3; i++) {{
+  point[i].sprite = Sprite(point_image);
+  point[i].sprite.SetPosition(Window.GetX() + Window.GetWidth() / 2 + (i - 1) * ecart - point_image.GetWidth() / 2,
+                              logo.y + logo.image.GetHeight() + point_image.GetHeight() * 1.5, 1);
+  point[i].sprite.SetOpacity(0.2);
+}}
+
+# « global. » partout où une fonction écrit : Plymouth crée sinon une variable locale,
+# et un sprite local disparaît au retour de la fonction.
+global.temps = 0;
+fun rafraichir() {{
+  # Appelée à 50 Hz par Plymouth.
+  global.temps++;
+  logo.sprite.SetOpacity(Math.Min(1, global.temps / 40));
+  for (i = 0; i < 3; i++) {{
+    phase = global.temps / 60 * 2 * Math.Pi - i * 0.9;
+    point[i].sprite.SetOpacity(0.2 + 0.8 * (0.5 + 0.5 * Math.Sin(phase)));
+  }}
+}}
+Plymouth.SetRefreshFunction(rafraichir);
+
+# Messages (fsck, mise à jour) : en couleur d'accent sous les points. Image.Text demande le
+# greffon « label » ; s'il manque, l'image est vide et rien ne casse.
+fun afficher_message(texte) {{
+  global.message.image = Image.Text(texte, accent_r, accent_v, accent_b);
+  global.message.sprite = Sprite(global.message.image);
+  global.message.sprite.SetPosition(Window.GetX() + Window.GetWidth() / 2 - global.message.image.GetWidth() / 2,
+                             Window.GetY() + Window.GetHeight() * 0.85, 2);
+}}
+Plymouth.SetMessageFunction(afficher_message);
+
+fun effacer_message() {{
+  global.message.sprite = NULL;
+}}
+Plymouth.SetHideMessageFunction(effacer_message);
+"""
+
+PLYMOUTH_INI = """\
+[Plymouth Theme]
+Name=HUB
+Description=Démarrage du HUB : le mot HUB et trois points aux couleurs du profil
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/hub
+ScriptFile=/usr/share/plymouth/themes/hub/hub.script
+"""
+
+
+def generer_plymouth(dossier, apparence):
+    """Plymouth s'affiche avant toute session : il ne suit pas le profil en direct. Le
+    thème prend les couleurs du profil au moment où l'installateur le génère ; toujours
+    sombre, parce qu'un écran blanc au démarrage éblouit dans un salon le soir."""
+    dossier = Path(dossier)
+    fond = apparence.fond if apparence.fond in PALETTES else "aurore"
+    base = hex_rvb(PALETTES[fond]["sombre"]["base"])
+    bas = melange(base, apparence.couleur, .08)
+
+    def flottants(rvb):
+        return ", ".join(f"{c / 255:.3f}" for c in rvb)
+    ar, av, ab = (f"{c / 255:.3f}" for c in apparence.couleur)
+    ecrire_atomique(dossier / "hub.plymouth", PLYMOUTH_INI)
+    ecrire_atomique(dossier / "hub.script", SCRIPT_PLYMOUTH.format(haut=flottants(base), bas=flottants(bas), ar=ar, av=av, ab=ab))
+    ecrire_png(dossier / "hub.png", *image_mot_hub())
+    ecrire_png(dossier / "point.png", *image_point(18, apparence.couleur))
+    return {"dossier": str(dossier), "fichiers": ["hub.plymouth", "hub.script", "hub.png", "point.png"]}
+
+
+# ── Ligne de commande ─────────────────────────────────────────────────────
+def executer_simule(argv):
+    """--simuler : les lectures sont réelles (elles ne changent rien), les écritures
+    sont affichées au lieu d'être faites."""
+    if argv[:2] == ["gsettings", "set"]:
+        print("simulé :", " ".join(argv), file=sys.stderr)
+        return 0, ""
+    return executer_systeme(argv)
+
+
+def main(arguments=None):
+    analyseur = argparse.ArgumentParser(prog="hub-theme", description=__doc__.split("\n")[0])
+    analyseur.add_argument("commande", choices=["bureau", "tv", "jeux", "apercu", "etat", "restaurer", "plymouth"])
+    analyseur.add_argument("dossier", nargs="?", help="plymouth : dossier où écrire le thème")
+    analyseur.add_argument("--theme", choices=THEMES, help="forcer sombre ou clair (sinon celui du profil)")
+    analyseur.add_argument("--profil", help="identifiant du profil (sinon le profil actif)")
+    analyseur.add_argument("--simuler", action="store_true", help="bureau/restaurer : afficher sans écrire")
+    options = analyseur.parse_args(arguments)
+
+    c = chemins(Path.home(), os.environ)
+    executer = executer_simule if options.simuler else executer_systeme
+    try:
+        if options.commande == "restaurer":
+            resume = restaurer_bureau(executer, c["origine"])
+        else:
+            profil = profil_actif(lire_json(c["reglages"]), options.profil)
+            theme = resoudre_theme(profil, options.theme, meteo=lire_json(c["meteo"]))
+            commande = options.commande
+            # etat n'écrit rien ; apercu écrit dans un dossier à part, pour ne jamais
+            # effacer le fond qu'utilise le bureau en ce moment.
+            apparence = construire_apparence(
+                profil, theme, c, generer=commande != "etat",
+                dossier_fonds=c["fonds"] / "apercu" if commande == "apercu" else None)
+            resume = {"profil": profil.get("id"), "theme": theme, "couleur": rvb_hex(apparence.couleur),
+                      "fond": apparence.fond, "fond_uri": apparence.fond_uri}
+            if commande == "bureau":
+                resume.update(appliquer_bureau(apparence, executer, c["origine"], sauvegarder=not options.simuler))
+            elif commande == "tv":
+                resume.update(appliquer_tv(apparence, c))
+            elif commande == "jeux":
+                resume.update(appliquer_jeux(apparence, c))
+            elif commande == "etat":
+                resume.update({
+                    "accent_gnome": accent_gnome(apparence.couleur, accents_permis(executer_systeme)),
+                    "yaru": variante_yaru(apparence.couleur, theme == "sombre", variantes_yaru()),
+                    "estuary": couleur_estuary(apparence.couleur, couleurs_estuary()),
+                    "kodi_ouvert": kodi_tourne(),
+                    "jeux": presence_jeux(c["maison"]),
+                })
+            elif commande == "plymouth":
+                if not options.dossier:
+                    analyseur.error("plymouth demande un DOSSIER")
+                resume.update(generer_plymouth(options.dossier, apparence))
+    except KodiOuvert as e:
+        print(f"hub-theme : {e}", file=sys.stderr)
+        return 3
+    except (ErreurTheme, OSError) as e:
+        print(f"hub-theme : {e}", file=sys.stderr)
+        return 1
+    print(json.dumps(resume, ensure_ascii=False, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
