@@ -61,7 +61,9 @@ sur le processeur, et un i3-8100T à 35 W ne tiendra pas la 4K AV1.
 
 UHD 630. Le mode Gaming sera du **streaming**, pas du jeu exécuté sur la machine.
 
-> **Question ouverte, et c'est la seule qui reste entière : streamer depuis quoi ?**
+> **Question ouverte : streamer depuis quoi ?** Réponse provisoire du 15 septembre 2026 :
+> des services en nuage dans Chrome (section « Streaming et jeu en nuage »).
+> **Question d'origine :**
 > Il n'y a pas de PC de jeu, et un Mac mini ne fait pas tourner les jeux Windows.
 > Sans source locale, « Gaming » se réduit à un service en ligne — architecture
 > très différente. À trancher avant le prototype.
@@ -237,6 +239,71 @@ Captures et journaux dans `vm/preuves-2026-09-15/` (hors git).
 Le rendu réel (UHD 630, HDMI, fréquence), l'audio, le démarrage à froid du M720q, et
 le pilotage autrement qu'au clavier. La VM n'a ni GPU 3D ni sortie audio.
 
+## Streaming et jeu en nuage
+
+État au 15 septembre 2026. Répond à « le mode Gaming streame depuis quoi ? » **sans PC de
+jeu** : des services en nuage, ouverts dans un navigateur en plein écran.
+
+### La forme
+
+| Pièce | Rôle |
+|---|---|
+| Menu : rangée « Streaming » de l'accueil | YouTube, Netflix, Prime Video, Disney+, Canal+, Twitch, Arte, France.tv — à une touche Bas des cartes. Pas de sous-écran « TV & streaming » : il aurait ajouté un OK devant Kodi pour tout le monde |
+| Menu : carte Jeux → sous-écran | GeForce NOW, Xbox Cloud Gaming, Boosteroid ; Steam (Big Picture) et Moonlight **seulement s'ils sont installés** |
+| Réglages → Streaming et jeux | afficher / masquer chaque service **par profil** ; un profil restreint ne peut rien rallumer ; un mode interdit emporte ses services (pas de Netflix sans le mode TV) |
+| Protocole | le menu écrit `web` puis le **nom** du service (`netflix`), jamais une adresse. Voix et télécommande : `web:<service>` |
+| `/usr/local/bin/hub-web` | liste blanche nom → adresse ; Google Chrome en `--kiosk`, `--user-data-dir` **par profil HUB** (`~/.local/share/hub/navigateur/<profil>`) ; rend la main à `gnome-kiosk-script` quand le navigateur se ferme |
+| Retour au HUB | **F12**, **Échap maintenue 2 s**, manette : **bouton central** ou **Select + Start** maintenus 1 s. `hub-web --fermer` pour la voix et la télécommande |
+
+**Pourquoi Chrome (.deb de Google).** GeForce NOW et Xbox Cloud Gaming ne prennent en
+charge que les navigateurs Chromium. Ubuntu 26.04 ne livre Chromium et Firefox qu'en
+snap, où VA-API et Widevine dépendent du confinement. Le paquet de Google embarque
+Widevine ; l'installateur pose son dépôt avec une clé dont il vérifie l'empreinte
+(`EB4C1BFD4F042F6DDDCCEC917721F63BD38B4796`), dans le même fichier `.sources` que la
+tâche cron du paquet (sinon apt refuse deux `Signed-By`).
+
+**Pourquoi le protocole DevTools.** Chrome 137 a retiré `--load-extension` des versions
+de Google : pas d'extension pour la touche de retour. `hub-web` lance Chrome avec
+`--remote-debugging-pipe` (aucun port réseau), pose un script avant la page, en reçoit
+les demandes (« retour », « flèche ») et envoie de vraies touches. Il ouvre `about:blank`
+puis navigue, pour que le script soit là avant le service.
+
+**`--password-store=basic`.** La session kiosque n'a pas de trousseau déverrouillé :
+sans cela Chrome ouvre « Déverrouiller le trousseau » par-dessus Netflix. Contrepartie :
+les mots de passe enregistrés par Chrome ne sont chiffrés qu'avec une clé fixe. Les
+sessions (cookies) restent séparées par profil.
+
+### Compatibilité réelle sous Linux (sources consultées le 15 septembre 2026)
+
+| Service | Sous Linux dans Chrome | Remarque |
+|---|---|---|
+| YouTube (`youtube.com/tv`) | interface TV **seulement avec un agent de console** (sinon renvoi vers youtube.com) | agent `PS4; Leanback Shell … Cobalt` relevé dans VacuumTube ; **AV1 refusé à la page** par `hub-web` pour obtenir du VP9 décodé par l'UHD 630. 4K : à mesurer (HDMI 30 Hz probable, contrainte TV) |
+| Netflix | **720p** (Widevine L3, limite annoncée par Netflix pour Chrome) | ni 1080p garanti, ni 4K, ni HDR ; décodage logiciel |
+| Prime Video | **SD à 720p** | Widevine L3 |
+| Disney+ | **720p au mieux** | Widevine L3, ni 4K ni HDR |
+| Canal+ | lecteur HTML5 dans Chrome, 720p attendu | Linux non listé par Canal+ : **à éprouver** |
+| Twitch, Arte, France.tv (replay) | 1080p, sans DRM | directs protégés de France.tv : Widevine L3 |
+| GeForce NOW | page web : **1440p max** sous Linux | l'**appli Linux native** de NVIDIA (Flatpak `com.nvidia.geforcenow`, sortie de bêta le 13 août 2026, Ubuntu 24.04+) monte jusqu'à 5K/120 : `hub-web` la préfère si elle est installée. Non installée par l'installateur |
+| Xbox Cloud Gaming | Chrome/Edge sous Linux, 1080p | manette par Gamepad API |
+| Boosteroid | page web 1080p60 ; appli Linux existe | appli non gérée par `hub-web` |
+
+Le réseau décide plus que le navigateur : **Ethernet obligatoire** (contrainte n° 1).
+
+### Éprouvé, et ce qui reste
+
+- [x] `hub-web --essai` sur la machine de travail (Ubuntu 24.04, Chrome 153, Wayland) :
+      page locale ouverte en fenêtre, AV1 refusé et VP9 accepté par `MediaSource`, flèche
+      relayée reçue comme vraie touche (`isTrusted`), F12 → Chrome fermé, code 0, 2 s
+- [x] installateur en simulation sur cette machine : dépôt, clé et paquets reconnus « déjà faits »
+- [ ] en VM : installateur réel (dépôt Google, Chrome, `intel-media-va-driver`), tuile → Chrome
+      en kiosque dans `gnome-kiosk-script-wayland`, retour au menu
+- [ ] sur la TV : `vainfo` puis `chrome://gpu` (décodage matériel sous Wayland), YouTube TV
+      pilotable aux flèches, résolution réellement servie par chaque service
+- [ ] manette réelle : indices du bouton central (16) et de Select/Start (8/9) dans Chrome
+- [ ] Steam `-gamepadui` et Moonlight dans la session kiosque (XWayland pour Steam)
+- [ ] connexion aux comptes (Xbox ouvre une fenêtre de connexion : elle n'a pas le script
+      de retour, fermer la page principale suffit)
+
 ## Audio
 
 ### Le matériel
@@ -291,7 +358,7 @@ enceintes.
 
 1. **Avec quoi pilote-t-on ?** Clé Bluetooth (manette, télécommande), adaptateur
    USB-CEC (télécommande de la TV), ou clavier sans fil. Décide l'interface.
-2. **Le mode Gaming streame depuis quoi ?** Aucune réponse aujourd'hui.
+2. **Le mode Gaming streame depuis quoi ?** Services en nuage dans Chrome en attendant mieux (voir « Streaming et jeu en nuage ») ; Moonlight si un PC de jeu arrive.
 
 ## Ce qui n'est pas encore mesuré
 
