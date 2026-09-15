@@ -743,6 +743,156 @@ class ServiceHTTPS(AvecDossier):
         self.assertFalse(self.service.consommer_ticket(ticket))
 
 
+# ── Dictée ──────────────────────────────────────────────────────────────────
+def wav(secondes=1.0, taux=16000, canaux=1, largeur=2):
+    import io
+    import math
+    import wave
+    tampon = io.BytesIO()
+    with wave.open(tampon, "wb") as w:
+        w.setnchannels(canaux)
+        w.setsampwidth(largeur)
+        w.setframerate(taux)
+        n = int(secondes * taux)
+        w.writeframes(b"".join(int(8000 * math.sin(i / 8)).to_bytes(2, "little", signed=True) * canaux
+                               for i in range(n)) if largeur == 2 else b"\x80" * n)
+    return tampon.getvalue()
+
+
+class FauxDicteur:
+    def __init__(self, texte="télé", erreur=None):
+        self.texte, self.erreur, self.appels = texte, erreur, []
+
+    def reconnaitre(self, pcm, langue):
+        self.appels.append((len(pcm), langue))
+        if self.erreur:
+            raise T.DicteeIndisponible(self.erreur)
+        return self.texte
+
+    def entretien(self):
+        pass
+
+
+@unittest.skipUnless(T.VOIX, "hub_voix_logique introuvable")
+class Dictee(AvecServeur):
+    def setUp(self):
+        super().setUp()
+        self.dicteur = FauxDicteur()
+        self.service.dicteur = self.dicteur
+
+    def dicter(self, octets, jeton, type_contenu="audio/wav"):
+        return self.requete("POST", "/api/dictee", brut=octets, jeton=jeton,
+                            entetes={"Content-Type": type_contenu})
+
+    def test_jeton_type_et_format_exiges(self):
+        self.assertEqual(self.dicter(wav(), None)[0], 401)
+        jeton = self.appairer()
+        self.assertEqual(self.dicter(wav(), jeton, "text/plain")[0], 415)
+        for mauvais in (wav(taux=8000), wav(canaux=2), wav(largeur=1), b"RIFF\x00\x00", JPEG):
+            self.assertEqual(self.dicter(mauvais, jeton)[0], 400)
+        self.assertEqual(self.dicter(wav(0.1), jeton)[2]["erreur"], "trop-court")
+        self.assertEqual(self.dicter(b"RIFF" + b"\x00" * (T.TAILLE_MAX_DICTEE + 1), jeton)[0], 413)
+        self.assertEqual(self.dicteur.appels, [], "rien d'invalide n'atteint le reconnaisseur")
+
+    def test_commande_reconnue_datagrammes_au_menu(self):
+        jeton = self.appairer()
+        menu = FauxMenu(self.chemins["socket"])
+        try:
+            statut, _h, rep = self.dicter(wav(1.2), jeton)
+            self.assertEqual(statut, 200, rep)
+            self.assertEqual((rep["ok"], rep["commande"], rep["cible"], rep["texte"]), (True, "tv", "menu", "télé"))
+            self.assertEqual([menu.recevoir() for _ in range(3)], ["voix:entendu:télé", "tv", "voix:repos"])
+            self.assertEqual(self.dicteur.appels, [(int(1.2 * 16000) * 2, "fr")])
+        finally:
+            menu.fermer()
+
+    def test_phrase_hors_grammaire_incomprise(self):
+        jeton = self.appairer()
+        self.dicteur.texte = "bureau jouer films ouvre"
+        menu = FauxMenu(self.chemins["socket"])
+        try:
+            _s, _h, rep = self.dicter(wav(), jeton)
+            self.assertEqual((rep["ok"], rep["raison"], rep["commande"]), (False, "incompris", None))
+            self.assertEqual([menu.recevoir() for _ in range(3)],
+                             ["voix:entendu:bureau jouer films ouvre", "voix:incompris", "voix:repos"])
+        finally:
+            menu.fermer()
+
+    def test_langue_du_profil_actif(self):
+        self.chemins["reglages"].parent.mkdir(parents=True, exist_ok=True)
+        self.chemins["reglages"].write_text(json.dumps({"profilActif": "b", "profils": [
+            {"id": "a", "langue": "fr"}, {"id": "b", "langue": "en"}]}))
+        jeton = self.appairer()
+        self.dicteur.texte = "go home"
+        _s, _h, rep = self.dicter(wav(), jeton)
+        self.assertEqual(self.dicteur.appels[-1][1], "en")
+        self.assertEqual(rep["commande"], "retour")
+
+    def test_eteindre_dicte_menu_ferme_refuse(self):
+        jeton = self.appairer()
+        self.processus = {"kodi", "gnome-shell"}
+        self.dicteur.texte = "éteins"
+        _s, _h, rep = self.dicter(wav(), jeton)
+        self.assertEqual((rep["commande"], rep["ok"]), ("eteindre", False))
+        self.assertEqual(self.executes, [])
+
+    def test_reconnaisseur_indisponible(self):
+        jeton = self.appairer()
+        self.service.dicteur = FauxDicteur(erreur="vosk-absent")
+        statut, _h, rep = self.dicter(wav(), jeton)
+        self.assertEqual((statut, rep["erreur"], rep["raison"]), (503, "voix-indisponible", "vosk-absent"))
+
+    def test_micro_permis_a_cette_origine_seule(self):
+        _s, h, _ = self.requete("GET", "/")
+        self.assertIn("microphone=(self)", h["permissions-policy"])
+        self.assertIn("camera=()", h["permissions-policy"])
+
+
+class TravailleurDictee(AvecDossier):
+    def test_sans_vosk_erreur_propre(self):
+        d = T.Dicteur(python=sys.executable if not _vosk_importable(sys.executable) else "/bin/false",
+                      script=ICI.parent / "voix" / "hub-voix.py")
+        try:
+            with self.assertRaises(T.DicteeIndisponible):
+                d.reconnaitre(b"\x00" * 16000, "fr")
+        finally:
+            d.arreter()
+
+    @unittest.skipUnless(os.environ.get("HUB_VOIX_PYTHON") and os.environ.get("HUB_VOIX_MODELES")
+                         and os.environ.get("HUB_TEST_DICTEE_WAV"),
+                         "vrai Vosk : HUB_VOIX_PYTHON, HUB_VOIX_MODELES et HUB_TEST_DICTEE_WAV (« télé »)")
+    def test_vrai_vosk_de_bout_en_bout(self):
+        """Le vrai modèle, le vrai travailleur et le vrai service : « télé » → datagramme tv."""
+        routeur = T.Routeur(self.chemins["socket"], executer=lambda *a, **k: None,
+                            processus=lambda n: [], kodi_http=None)
+        service = T.Service(self.chemins, routeur=routeur, dicteur=T.Dicteur(script=ICI.parent / "voix" / "hub-voix.py"))
+        serveur = T.creer_serveur(service, "127.0.0.1", 0)
+        threading.Thread(target=serveur.serve_forever, args=(0.05,), daemon=True).start()
+        menu = FauxMenu(self.chemins["socket"])
+        try:
+            port = serveur.server_address[1]
+            def post(chemin, corps, entetes):
+                c = http.client.HTTPConnection("127.0.0.1", port, timeout=40)
+                c.request("POST", chemin, body=corps, headers={"Host": f"127.0.0.1:{port}", **entetes})
+                r = c.getresponse()
+                return r.status, json.loads(r.read())
+            _s, rep = post("/api/appairer", json.dumps({"code": service.appairage.code}).encode(),
+                           {"Content-Type": "application/json"})
+            statut, rep = post("/api/dictee", Path(os.environ["HUB_TEST_DICTEE_WAV"]).read_bytes(),
+                               {"Content-Type": "audio/wav", "Authorization": f"Bearer {rep['jeton']}"})
+            self.assertEqual((statut, rep["commande"], rep["cible"]), (200, "tv", "menu"), rep)
+            self.assertEqual([menu.recevoir() for _ in range(3)], ["voix:entendu:télé", "tv", "voix:repos"])
+        finally:
+            menu.fermer()
+            service.dicteur.arreter()
+            serveur.shutdown()
+            serveur.server_close()
+
+
+def _vosk_importable(python):
+    return subprocess.run([python, "-c", "import vosk"], capture_output=True).returncode == 0
+
+
 class Protocole(unittest.TestCase):
     def test_memes_noms_que_le_menu(self):
         import ast
