@@ -145,7 +145,14 @@ function meteoProfil() { return profil().meteo || reglages.systeme.meteo; }
 function sonsActifs() { return profil().sons ?? reglages.systeme.sons; }
 function veilleMinutes() { return profil().veille ?? reglages.systeme.veille; }
 function modeAutorise(mode, p = profil()) { return p.modes?.[mode] !== false; }
-function estRestreint(p = profil()) { return ["tv", "gaming", "bureau"].some(m => !modeAutorise(m, p)); }
+// Fonctionnalités chargées à part (temps-ecran.js, allumage.js, cadre.js) : elles
+// s'accrochent à ces points plutôt que de grossir ce fichier, que plusieurs mains modifient.
+const extensions = { restrictions: [], apparence: [], avantLancer: [], sections: [], contenus: {}, messages: {}, ambiant: [] };
+window.hubExtensions = extensions;
+function estRestreint(p = profil()) {
+  return ["tv", "gaming", "bureau"].some(m => !modeAutorise(m, p)) || extensions.restrictions.some(f => f(p));
+}
+function lancementRefuse(mode) { return extensions.avantLancer.some(f => f(mode) === false); }
 
 let minuterieSauvegarde;
 function sauver() {
@@ -219,6 +226,7 @@ function appliquerApparence() {
   const couleur = COULEURS_PROFIL[profil().couleur] || COULEURS_PROFIL.turquoise;
   habillerAvatar($("avatar-profil"), profil());
   $("nom-profil").textContent = profil().nom;
+  extensions.apparence.forEach(f => f());
 }
 
 // ── Fonds animés ──────────────────────────────────────────────────────────
@@ -738,6 +746,7 @@ function lancer(carte) {
   if (verrou) return;
   if (APERCU) { son("ok"); return annoncer(t("apercu.mode", { mode: carte.querySelector(".nom").textContent })); }
   if (!modeAutorise(carte.dataset.mode)) { son("erreur"); return annoncer(t("mode.interdit")); }
+  if (lancementRefuse(carte.dataset.mode)) return;
   if (carte.dataset.indisponible) {
     son("erreur");
     annoncer(t(carte.dataset.indisponible));
@@ -791,7 +800,7 @@ function rendreReprises() {
 }
 
 function lancerReprise(tuile, reprise) {
-  if (verrou || pile.at(-1) !== "accueil") return;
+  if (verrou || pile.at(-1) !== "accueil" || lancementRefuse("tv")) return;
   verrou = true;
   son("ok");
   profil().dernier = "tv";
@@ -1094,7 +1103,8 @@ function validerCode() {
   if (!demande) return;
   const { p, mode, saisie } = demande;
   if (mode === "verifier") {
-    if (p.pin && empreinteCode(saisie, p.pin.sel) === p.pin.empreinte) {
+    // demande.verifier : un code accepté de plusieurs profils (n'importe quel parent).
+    if (demande.verifier ? demande.verifier(saisie) : p.pin && empreinteCode(saisie, p.pin.sel) === p.pin.empreinte) {
       delete echecsCode[p.id];
       deverrouilles.add(p.id);
       if (p.id === profil().id) { verrouAccueil = false; document.body.classList.remove("verrouille"); }
@@ -1205,7 +1215,12 @@ let infosMachine = null;
 function rendreReglages() {
   const sommaire = $("sommaire");
   sommaire.querySelectorAll(".entree").forEach(e => e.remove());
-  for (const [id, icone] of SECTIONS) {
+  const sections = [...SECTIONS];
+  for (const x of extensions.sections) {
+    const i = sections.findIndex(([id]) => id === x.apres);
+    sections.splice(i < 0 ? sections.length : i + 1, 0, [x.id, x.icone]);
+  }
+  for (const [id, icone] of sections) {
     sommaire.append(el("button", { class: "entree", "data-nav": true, "data-section": id, "data-cle": `section-${id}` },
       el("span", { html: `<svg viewBox="0 0 24 24">${icone}</svg>` }), t(`section.${id}`)));
   }
@@ -1352,6 +1367,8 @@ function rendreSection(garderFocus = true) {
       break;
     }
   }
+
+  extensions.contenus[sectionCourante]?.(zone);
 
   if (cle && pile.at(-1) === "reglages") {
     const retrouve = zone.querySelector(`[data-cle="${CSS.escape(cle)}"]`);
@@ -1569,6 +1586,7 @@ function reveiller() {
   derniereAction = Date.now();
   if (!document.body.classList.contains("ambiant")) return false;
   document.body.classList.remove("ambiant");
+  extensions.ambiant.forEach(f => f(false));
   if (verrouAccueil) setTimeout(exigerDeverrouillage, 0);
   return true;
 }
@@ -1577,6 +1595,7 @@ function entrerAmbiant() {
   fermerTout();
   if (profil().verrouVeille) verrouillerAccueil();
   document.body.classList.add("ambiant");
+  extensions.ambiant.forEach(f => f(true));
   relancerFond();
 }
 setInterval(() => {
@@ -1709,6 +1728,8 @@ window.hub = {
         infosMachine = message;
         if (pile.at(-1) === "reglages" && sectionCourante === "apropos") rendreSection();
         return;
+      default:
+        return extensions.messages[message.type]?.(message);
     }
   },
 };

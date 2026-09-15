@@ -15,6 +15,7 @@
   dans localStorage et va chercher la météo lui-même.
 -->
 <link rel="stylesheet" href="hub.css">
+<link rel="stylesheet" href="extensions.css">
 </head>
 <body>
 <canvas id="fond" width="192" height="108"></canvas>
@@ -232,5 +233,9 @@
 
 <script src="i18n.js"></script>
 <script src="hub.js"></script>
+<!-- Après hub.js : elles s'accrochent à window.hubExtensions. -->
+<script src="temps-ecran.js"></script>
+<script src="allumage.js"></script>
+<script src="cadre.js"></script>
 </body>
 </html>

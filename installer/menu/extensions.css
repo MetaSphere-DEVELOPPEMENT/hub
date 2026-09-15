@@ -1,0 +1,47 @@
+/* Temps d'écran, allumage programmé, cadre photo (temps-ecran.js, allumage.js, cadre.js).
+   À part de hub.css pour la même raison que leurs scripts : plusieurs mains éditent hub.css. */
+
+/* ── Jauge du temps restant sur la puce du profil ────────────────────────── */
+.jauge-temps { display: inline-flex; align-items: center; gap: .5rem; margin-left: .3rem; font-size: .85rem; font-variant-numeric: tabular-nums; color: var(--texte-doux); }
+.jauge-temps .barre { width: 3.6rem; height: .35rem; border-radius: 99rem; background: var(--verre-fort); overflow: hidden; }
+.jauge-temps .barre i { display: block; height: 100%; border-radius: inherit; background: rgb(var(--accent)); transition: width .8s var(--souple); }
+.jauge-temps.bas .barre i { background: #ffb547; }
+.jauge-temps.bas .reste { color: #ffb547; }
+.jauge-temps.epuise .barre i { background: #ff6b6b; }
+.jauge-temps.epuise .reste { color: #ff6b6b; }
+
+/* ── Réglages → Temps d'écran : sept jours ───────────────────────────────── */
+.rangee.large.temps-profil { grid-template-columns: minmax(12rem, 1fr) auto auto; align-items: center; }
+.histo-temps { display: flex; align-items: flex-end; gap: .45rem; height: 4.2rem; }
+.jour-temps { display: grid; justify-items: center; gap: .3rem; }
+.jour-temps .colonne { position: relative; width: 1.1rem; height: 3.2rem; border-radius: .35rem; background: var(--verre); overflow: hidden; }
+.jour-temps .colonne i { position: absolute; left: 0; right: 0; bottom: 0; border-radius: .35rem; background: rgb(var(--accent) / .85); }
+.jour-temps .colonne i.depasse { background: #ff8a4c; }
+.jour-temps .colonne .limite { position: absolute; left: -.1rem; right: -.1rem; height: 2px; background: var(--texte-doux); z-index: 1; }
+.etiquette-jour { font-size: .72rem; color: var(--texte-pale); text-transform: uppercase; }
+
+/* ── Réglages → Allumage ─────────────────────────────────────────────────── */
+.horaire-allumage { display: grid; gap: .7rem; justify-items: end; }
+.jours-allumage .option { min-width: 3.4rem; text-transform: capitalize; }
+.etat-allumage { margin: .2rem 0 .6rem; }
+.adresses-mac { display: grid; gap: .5rem; }
+.valeur.mac { font-family: ui-monospace, "DejaVu Sans Mono", monospace; letter-spacing: .04em; }
+
+/* ── Cadre photo du mode ambiant ─────────────────────────────────────────── */
+#cadre { position: absolute; inset: 0; overflow: hidden; background: #000; }
+.cadre-photo { position: absolute; inset: 0; background: center / contain no-repeat; opacity: 0; transition: opacity 2.4s var(--souple); }
+/* Le flou de la même photo remplit les bandes noires d'un portrait sur une TV 16/9. */
+.cadre-photo::before { content: ""; position: absolute; inset: -6%; background: inherit; background-size: cover; filter: blur(40px) brightness(.55); z-index: -1; }
+.cadre-photo.visible { opacity: 1; }
+.cadre-photo.travelling { animation: cadre-travelling 30s ease-in-out both; }
+@keyframes cadre-travelling { from { transform: scale(1); } to { transform: scale(1.06); } }
+#cadre.reduit .cadre-photo { transition: none; animation: none; }
+.cadre-souvenir { position: absolute; top: calc(var(--marge, 5) * 1vh); left: calc(var(--marge, 5) * 1vw); padding: .45rem 1rem; border-radius: 99rem; font-size: 1.3rem; color: #fff; background: rgb(0 0 0 / .4); backdrop-filter: blur(8px); }
+
+/* Horloge et météo passent en surimpression discrète, en bas à droite. */
+body.cadre-actif #ambiant { place-items: end; background: none; }
+body.cadre-actif .ambiant-corps { position: relative; margin: 0 calc(var(--marge, 5) * 1vw) calc(var(--marge, 5) * 1vh) 0; text-align: right; color: #fff; text-shadow: 0 .15rem 1.2rem rgb(0 0 0 / .7); }
+body.cadre-actif .ambiant-heure { font-size: 6rem; font-weight: 300; }
+body.cadre-actif .ambiant-date { font-size: 1.4rem; margin-top: .3rem; color: rgb(255 255 255 / .85); }
+body.cadre-actif .ambiant-meteo { justify-content: flex-end; font-size: 1.3rem; margin-top: .8rem; color: rgb(255 255 255 / .85); }
+body.cadre-actif .ambiant-meteo .picto-meteo { width: 2.4rem; height: 2.4rem; }
