@@ -29,7 +29,8 @@
 #   connexion suivante, et qui remet le HUB par défaut dès qu'elle s'ouvre.
 #
 # Ce qu'il NE fait pas, délibérément :
-#   - aucun client de jeu, tant que « streamer depuis quoi ? » n'est pas tranché ;
+#   - aucun client de jeu natif (Steam, Moonlight, appli GeForce NOW) : le mode Jeux
+#     propose les services en nuage dans Chrome, et les applis si on les installe ;
 #   - aucun réglage audio ou vidéo de Kodi : ils se mesurent devant la TV
 #     (ARCHITECTURE.md, cases à cocher) ;
 #   - il n'écrase jamais ~/.config/hub/reglages.json, qui appartient au menu.
@@ -355,6 +356,9 @@ etape_session() {
   poser_repertoire "$DEPOT/menu" /usr/local/share/hub/menu "${ajouts[@]}" || return 1
   poser_version || return 1
   poser "$DEPOT/hub-vers-bureau"          /usr/local/bin/hub-vers-bureau       0755 || return 1
+  # hub-web à côté de hub-menu : le menu l'importe pour savoir quelles tuiles proposer,
+  # et gnome-kiosk-script le lance pour le mode « web ».
+  poser "$DEPOT/hub-web"                  /usr/local/bin/hub-web               0755 || return 1
   poser "$DEPOT/hub-session-par-defaut"   /usr/local/bin/hub-session-par-defaut 0755 || return 1
   poser "$DEPOT/hub-session-par-defaut.desktop" /etc/xdg/autostart/hub-session-par-defaut.desktop 0644 || return 1
   poser "$DEPOT/retour-au-hub.desktop"    /usr/share/applications/retour-au-hub.desktop 0644 || return 1
@@ -755,6 +759,69 @@ etape_voix() {
   activer_unite_globale hub-voix.service
 }
 
+# ── 11. Streaming et jeu en nuage : Google Chrome ─────────────────────────────
+# Empreinte de la clé « Google Inc. (Linux Packages Signing Authority) », relevée le
+# 15 septembre 2026 (gpg --show-keys /usr/share/keyrings/google-chrome.gpg). La clé
+# téléchargée doit la porter : un fichier remplacé en chemin n'entre pas dans apt.
+EMPREINTE_GOOGLE="EB4C1BFD4F042F6DDDCCEC917721F63BD38B4796"
+DEPOT_CHROME='Types: deb
+URIs: https://dl.google.com/linux/chrome-stable/deb/
+Suites: stable
+Components: main
+Architectures: amd64
+Signed-By: /usr/share/keyrings/google-chrome.gpg'
+
+etape_navigateur() {
+  etape "11. Streaming et jeu en nuage — Google Chrome"
+  # Chrome et non le Chromium ou le Firefox d'Ubuntu, livrés en snap : GeForce NOW et
+  # Xbox Cloud Gaming n'acceptent que Chromium, et Widevine comme VA-API dépendent du
+  # confinement du snap. Le .deb de Google porte Widevine (Netflix, Disney+, Canal+).
+  if [ "$(dpkg --print-architecture)" != amd64 ]; then
+    alerte "Google Chrome n'existe qu'en amd64 : services web non installés"
+    return 0
+  fi
+  installer_paquets -- curl gpg || return 1
+  local cle=/usr/share/keyrings/google-chrome.gpg sources=/etc/apt/sources.list.d/google-chrome.sources
+  if [ -f "$cle" ] && gpg --show-keys --with-colons "$cle" 2>/dev/null | grep -q "^fpr:*$EMPREINTE_GOOGLE:"; then
+    deja "$cle (empreinte vérifiée)"
+  elif [ "$POUR_DE_VRAI" = 1 ]; then
+    local tmp; tmp=$(mktemp -d) || { echec "mktemp impossible"; return 1; }
+    faire curl -fsSL --retry 3 -o "$tmp/cle.asc" https://dl.google.com/linux/linux_signing_key.pub ||
+      { rm -rf "$tmp"; return 1; }
+    if ! gpg --show-keys --with-colons "$tmp/cle.asc" 2>/dev/null | grep -q "^fpr:*$EMPREINTE_GOOGLE:"; then
+      rm -rf "$tmp"; echec "la clé de Google téléchargée ne porte pas l'empreinte attendue"; return 1
+    fi
+    faire gpg --batch --yes --dearmor -o "$tmp/cle.gpg" "$tmp/cle.asc" &&
+    faire install -D -m 0644 "$tmp/cle.gpg" "$cle"
+    local code=$?; rm -rf "$tmp"; [ "$code" -eq 0 ] || return 1
+    ok "$cle (empreinte $EMPREINTE_GOOGLE)"
+  else
+    faire "télécharger linux_signing_key.pub, vérifier l'empreinte $EMPREINTE_GOOGLE, la poser dans $cle"
+  fi
+  # Même fichier et même contenu que ceux qu'écrit la tâche cron du paquet
+  # (/etc/cron.daily/google-chrome) : sinon apt voit deux sources avec deux Signed-By
+  # différents et refuse de se mettre à jour.
+  if [ "$(grep -v '^#' "$sources" 2>/dev/null | grep -v '^X-Repolib' | sed '/^$/d')" = "$DEPOT_CHROME" ]; then
+    deja "$sources"
+  elif [ "$POUR_DE_VRAI" = 1 ]; then
+    printf '%s\n' "$DEPOT_CHROME" >"$sources.hub" && faire install -m 0644 "$sources.hub" "$sources"
+    local code=$?; rm -f "$sources.hub"; [ "$code" -eq 0 ] || return 1
+    APT_A_JOUR=0
+    ok "$sources"
+  else
+    faire "écrire $sources (dépôt stable de Google, Signed-By $cle)"
+  fi
+  # intel-media-va-driver : le pilote VA-API (iHD) de l'UHD 630, pour que Chrome décode
+  # H.264, HEVC et VP9 par la puce. Vérifier ensuite avec vainfo et chrome://gpu.
+  installer_paquets -- google-chrome-stable intel-media-va-driver || return 1
+  if [ -d "$MAISON/.local/share/hub/navigateur" ]; then
+    deja "$MAISON/.local/share/hub/navigateur/ (un dossier par profil)"
+  else
+    faire runuser -u "$UTILISATEUR" -- mkdir -p "$MAISON/.local/share/hub/navigateur" || return 1
+    ok "$MAISON/.local/share/hub/navigateur/ (un dossier par profil, créé au premier lancement)"
+  fi
+}
+
 etape_mesure
 etape_session
 etape_accueil
@@ -766,6 +833,8 @@ etape_mise_a_jour
 # La voix vient après la bascule du démarrage : elle télécharge (pip, modèles) et un
 # réseau capricieux ne doit pas priver le salon de son HUB. Son échec reste compté.
 etape_voix
+# Chrome aussi après la bascule : 110 Mo à télécharger, et Kodi ne doit pas en dépendre.
+etape_navigateur
 
 # ── Fin ───────────────────────────────────────────────────────────────────────
 etape "Ce qui reste à faire à la main"
@@ -775,6 +844,7 @@ cat <<'RESTE'
   [ ] relancer audit/audit.sh une fois la TV branchée, pour les trois mesures
       qui n'existent qu'à ce moment-là
   [ ] régler l'audio de Kodi après mesure (ARCHITECTURE.md, section Audio)
+  [ ] vérifier le décodage matériel de Chrome : vainfo, puis chrome://gpu (hub-web --essai)
 RESTE
 printf '\n'
 if [ "$POUR_DE_VRAI" != 1 ]; then
