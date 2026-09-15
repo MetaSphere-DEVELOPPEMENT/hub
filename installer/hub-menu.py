@@ -67,6 +67,7 @@ def chemins():
         "socket": execution / "menu.sock",
         "deja-ouvert": execution / "menu-deja-ouvert",
         "minuteur": execution / "minuteur-fin",
+        "telecommande": execution / "telecommande.json",
     }
 
 
@@ -366,6 +367,17 @@ def infos():
     }
 
 
+# ── Télécommande ──────────────────────────────────────────────────────────
+def etat_telecommande(c):
+    """Ce que hub-telecommande publie pour l'écran d'appairage ; None s'il ne tourne pas
+    (il supprime son fichier en s'arrêtant)."""
+    donnees = lire_json(c["telecommande"])
+    if not isinstance(donnees, dict) or not isinstance(donnees.get("url"), str) or not isinstance(donnees.get("code"), str):
+        return None
+    garder = ("url", "code", "expire", "telephones", "appairageLe")
+    return {k: donnees.get(k) for k in garder}
+
+
 # ── Messages ──────────────────────────────────────────────────────────────
 def message_voix(datagramme):
     """Traduit un datagramme de hub-voix en message pour la page, ou None."""
@@ -375,6 +387,8 @@ def message_voix(datagramme):
         return None
     if texte == "avatars":
         return {"type": "avatars"}
+    if texte.startswith("texte:"):
+        return {"type": "texte", "texte": texte[6:200]}
     if texte.startswith("voix:"):
         etat, _, reste = texte[5:].partition(":")
         if etat == "entendu":
@@ -454,6 +468,7 @@ def lancer():
                 "dernier": dernier_choix(c),
                 "photos": photos(),
                 "avatars": avatars(),
+                "telecommande": etat_telecommande(c),
                 "minuteurFin": minuteur_en_cours(c),
                 "reprises": reprises_kodi(Path.home() / ".kodi"),
                 # Le choix du profil se fait à l'allumage, pas à chaque retour de Kodi.
@@ -484,7 +499,16 @@ def lancer():
             vue.grab_focus()
             self.vue = vue
             self.ecouter_voix()
+            self.telecommande = initial["telecommande"]
+            GLib.timeout_add_seconds(2, self.surveiller_telecommande)
             return vue
+
+        def surveiller_telecommande(self):
+            etat = etat_telecommande(c)
+            if etat != self.telecommande:
+                self.telecommande = etat
+                self.vers_page({"type": "telecommande", "etat": etat})
+            return True
 
         def vers_page(self, message):
             if self.vue:
