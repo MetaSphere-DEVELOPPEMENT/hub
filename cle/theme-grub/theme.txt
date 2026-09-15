@@ -18,7 +18,7 @@ terminal-box: "cadre_*.png"
     width = 100%
     align = "center"
     text = "H  U  B"
-    font = "Ubuntu Bold Regular 64"
+    font = "Ubuntu Bold 64"
     color = "#f3f5fb"
 }
 + label {
@@ -36,12 +36,12 @@ terminal-box: "cadre_*.png"
     top = 44%
     height = 36%
     item_font = "Ubuntu Regular 26"
-    selected_item_font = "Ubuntu Bold Regular 26"
+    selected_item_font = "Ubuntu Bold 26"
     item_color = "#c9d1e1"
     selected_item_color = "#06070c"
-    item_height = 58
+    item_height = 60
     item_padding = 26
-    item_spacing = 14
+    item_spacing = 22
     item_pixmap_style = "entree_*.png"
     selected_item_pixmap_style = "choix_*.png"
     scrollbar = false

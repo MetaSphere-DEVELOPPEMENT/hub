@@ -3,13 +3,25 @@
 # disque interne. Le menu du HUB s'ouvre en plein écran dans le navigateur de la
 # session live ; ses réglages vivent le temps de la session.
 write_files:
+  - path: /usr/local/bin/hub-apercu
+    permissions: "0755"
+    content: |
+      #!/bin/sh
+      # L'assistant d'installation d'Ubuntu s'ouvre de lui-même dans la session live
+      # et recouvrirait le menu : l'aperçu promet de ne rien installer, on le ferme.
+      sleep 5
+      for p in $(pgrep -f 'desktop-(bootstrap|installer)'); do
+        [ "$p" = "$$" ] || kill "$p" 2>/dev/null
+      done
+      exec firefox --kiosk "file:///home/ubuntu/HUB/index.html?apercu"
   - path: /etc/xdg/autostart/hub-apercu.desktop
     content: |
       [Desktop Entry]
       Type=Application
       Name=Aperçu du HUB
-      Exec=sh -c 'sleep 4; firefox --kiosk "file:///home/ubuntu/HUB/index.html?apercu"'
+      Exec=/usr/local/bin/hub-apercu
       X-GNOME-Autostart-enabled=true
 runcmd:
   # Firefox est un snap : il lit le dossier personnel, pas /cdrom. On y copie le menu.
-  - [sh, -c, "mkdir -p /home/ubuntu/HUB && cp -r /cdrom/hub/installer/menu/. /home/ubuntu/HUB/ && cp /cdrom/hub/installer/telecommande/qrcode.js /home/ubuntu/HUB/ && chown -R 999:999 /home/ubuntu/HUB 2>/dev/null; chown -R ubuntu: /home/ubuntu/HUB 2>/dev/null; true"]
+  - [sh, -c, "mkdir -p /home/ubuntu/HUB && cp -r /cdrom/hub/installer/menu/. /home/ubuntu/HUB/ && cp /cdrom/hub/installer/telecommande/qrcode.js /home/ubuntu/HUB/ && chown -R ubuntu: /home/ubuntu/HUB; true"]
+  - [sh, -c, "for f in /etc/xdg/autostart/*.desktop; do grep -qiE 'desktop-(bootstrap|installer)' \"$f\" && rm -f \"$f\"; done; true"]

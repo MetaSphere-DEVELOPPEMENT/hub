@@ -62,7 +62,7 @@ cp apercu/user-data apercu/meta-data "$travail/nocloud-apercu/"
 python3 theme-grub/generer.py "$travail/boot/grub/themes/hub"
 cp theme-grub/theme.txt "$travail/boot/grub/themes/hub/"
 for s in 20 24 26; do grub-mkfont -s "$s" -o "$travail/boot/grub/themes/hub/ubuntu-regular-$s.pf2" /usr/share/fonts/truetype/ubuntu/Ubuntu-R.ttf 2>/dev/null; done
-for s in 26 64; do grub-mkfont -n "Ubuntu Bold" -s "$s" -o "$travail/boot/grub/themes/hub/ubuntu-bold-$s.pf2" /usr/share/fonts/truetype/ubuntu/Ubuntu-B.ttf 2>/dev/null; done
+for s in 26 64; do grub-mkfont -b -s "$s" -o "$travail/boot/grub/themes/hub/ubuntu-bold-$s.pf2" /usr/share/fonts/truetype/ubuntu/Ubuntu-B.ttf 2>/dev/null; done
 if grep -n '"@[A-Z_]*@"' "$travail/nocloud/user-data"; then echo "  ✗ valeur non remplie" >&2; exit 5; fi
 
 printf '  … assemblage de l’image (xorriso)\n'

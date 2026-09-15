@@ -28,29 +28,31 @@ chvt 1 2>/dev/null || true
 setterm --blank 0 --powersave off 2>/dev/null || true
 clear 2>/dev/null || true
 
-printf '\n\n   H U B — première mise en route\n'
-printf '   ────────────────────────────────\n\n'
-printf '   Ne pas éteindre la machine. Cela peut prendre 20 à 40 minutes.\n\n'
+# Couleurs du HUB sur la console : turquoise pour l'avancement, ambre pour ce qui attend.
+T=$'\e[1;38;2;62;224;208m'; A=$'\e[38;2;255;181;71m'; D=$'\e[38;2;154;166;189m'; Z=$'\e[0m'
+printf '\n\n   %s▪  H U B%s\n' "$T" "$Z"
+printf '   %spremière mise en route%s\n\n' "$D" "$Z"
+printf '   %sNe pas éteindre la machine : 20 à 40 minutes. Elle redémarrera toute seule.%s\n\n' "$A" "$Z"
 
 # ── Réseau : l'installateur télécharge Kodi, WebKit, les modèles de voix… ────
 attente=0
 until getent hosts archive.ubuntu.com >/dev/null 2>&1; do
   if [ $((attente % 30)) -eq 0 ]; then
-    printf '   … en attente du réseau : branchez le câble Ethernet (%d s)\n' "$attente"
+    printf '   %s… en attente du réseau : branchez le câble Ethernet (%d s)%s\n' "$A" "$attente" "$Z"
   fi
   sleep 5
   attente=$((attente+5))
 done
-printf '   ✓ réseau disponible\n\n'
+printf '   %s✓%s réseau disponible\n\n' "$T" "$Z"
 
 # ── Audit : la règle du projet, même ici ─────────────────────────────────────
-printf '   1/2  Audit du matériel…\n'
+printf '   %s[1/2]%s Audit du matériel…\n' "$T" "$Z"
 rapport="$JOURNAL/audit-$(date +%F-%H%M).md"
 runuser -u "$UTILISATEUR" -- bash "$DEPOT/audit/audit.sh" > "$rapport" 2>&1
 printf '   ✓ audit écrit dans %s\n\n' "$rapport"
 
 # ── Installation du HUB ─────────────────────────────────────────────────────
-printf '   2/2  Installation du HUB…\n\n'
+printf '   %s[2/2]%s Installation du HUB…\n\n' "$T" "$Z"
 cd "$DEPOT" || exit 1
 if SUDO_USER="$UTILISATEUR" DEBIAN_FRONTEND=noninteractive bash installer/hub-installer.sh --pour-de-vrai; then
   cp "$rapport" "/home/$UTILISATEUR/audit-premier-demarrage.md" 2>/dev/null && chown "$UTILISATEUR:" "/home/$UTILISATEUR/audit-premier-demarrage.md"
