@@ -116,6 +116,10 @@ class Configurations(unittest.TestCase):
         self.assertEqual(self.valeur(a, "-p"), "7000")
         self.assertEqual(self.valeur(a, "-vs"), "waylandsink")
 
+    def test_uxplay_ne_plante_pas_sans_bureau_declare(self):
+        self.assertEqual(E.environnement_uxplay({"A": "1"}), {"A": "1", "XDG_CURRENT_DESKTOP": "GNOME"})
+        self.assertEqual(E.environnement_uxplay({"XDG_CURRENT_DESKTOP": "GNOME-Kiosk"})["XDG_CURRENT_DESKTOP"], "GNOME-Kiosk")
+
     def test_ports_airplay_et_ecran_ne_se_chevauchent_pas(self):
         base, etendue = E.PORTS_UDP_AIRPLAY
         airplay = set(range(base, base + etendue)) | {E.PORT_AIRPLAY}

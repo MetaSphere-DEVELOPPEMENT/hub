@@ -1,0 +1,27 @@
+# AirPlay (son) du HUB (shairport-sync) — unité UTILISATEUR.
+#
+# Le paquet Ubuntu livre un service SYSTÈME qui sort en ALSA direct : l'installateur
+# le masque, sinon il prendrait la carte son à PipeWire, à Kodi et au menu. Celui-ci
+# sort par PipeWire (couche PulseAudio) et publie ses métadonnées dans un tube que
+# hub-enceinte lit. Sa configuration est regénérée à chaque démarrage (nom du menu).
+
+[Unit]
+Description=HUB : AirPlay, réception du son (shairport-sync)
+Documentation=file:///usr/local/lib/hub/enceinte/README.md
+PartOf=graphical-session.target
+Wants=hub-enceinte.service
+After=graphical-session.target hub-enceinte.service pipewire-pulse.service
+
+[Service]
+Type=simple
+ExecCondition=/usr/local/bin/hub-enceinte actif airplay
+ExecStart=/usr/local/bin/hub-enceinte lancer airplay
+ExecStopPost=/usr/local/bin/hub-enceinte evenement airplay arret
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=yes
+UMask=0077
+MemoryMax=200M
+
+[Install]
+WantedBy=graphical-session.target

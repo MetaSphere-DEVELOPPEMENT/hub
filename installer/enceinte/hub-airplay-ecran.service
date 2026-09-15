@@ -1,0 +1,31 @@
+# Recopie d'écran AirPlay du HUB (UxPlay) — unité UTILISATEUR.
+#
+# UxPlay attend en tâche de fond et n'ouvre sa fenêtre qu'à la connexion d'un iPhone
+# ou d'un Mac. Il lui faut le Wayland de la session (WAYLAND_DISPLAY, importé dans le
+# gestionnaire utilisateur par GNOME) : le compositeur kiosque met cette fenêtre plein
+# écran par-dessus le menu ou Kodi, et la ferme à la fin de la recopie.
+#
+# hub-enceinte l'enveloppe pour lire son journal : c'est ainsi qu'on sait qu'une
+# recopie commence (Kodi en pause) et finit (le menu reprend la main).
+
+[Unit]
+Description=HUB : AirPlay, recopie d'écran (UxPlay)
+Documentation=file:///usr/local/lib/hub/enceinte/README.md
+PartOf=graphical-session.target
+Wants=hub-enceinte.service
+After=graphical-session.target hub-enceinte.service pipewire-pulse.service
+
+[Service]
+Type=simple
+ExecCondition=/usr/local/bin/hub-enceinte actif ecran
+ExecStart=/usr/local/bin/hub-enceinte lancer ecran
+ExecStopPost=/usr/local/bin/hub-enceinte evenement ecran arret
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=yes
+UMask=0077
+# Décodage H.264 1080p : la mémoire des tampons vidéo, pas plus.
+MemoryMax=600M
+
+[Install]
+WantedBy=graphical-session.target
