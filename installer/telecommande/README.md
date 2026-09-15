@@ -1,9 +1,10 @@
 # Télécommande téléphone
 
 Le téléphone devient la télécommande du HUB : on scanne le QR code affiché sur la TV,
-on tape le code à 6 chiffres, et la page offre croix directionnelle, OK, Retour,
-Accueil, les trois modes, le volume, l'envoi de texte (recherche dans Kodi) et l'envoi
-d'une photo de profil.
+on tape le code à 6 chiffres, et la page offre un pavé tactile (ou la croix
+directionnelle), OK, Retour, Accueil, les modes, le volume, la dictée d'une commande,
+l'envoi de texte (recherche dans Kodi) et l'envoi d'une photo de profil. Elle
+s'ajoute à l'écran d'accueil et s'ouvre alors comme une app.
 
 **Pourquoi.** Le M720q n'a ni Bluetooth ni HDMI-CEC (ARCHITECTURE.md, contraintes 2
 et 3) : la télécommande de la TV ne pilote rien. Un téléphone sur le wifi de la
@@ -18,6 +19,8 @@ maison n'a rien à installer.
 | `hub-telecommande.service` | unité systemd **utilisateur** |
 | `qrcode.js` | générateur de QR code pour le menu (MIT, vendorisé, voir l'en-tête) |
 | `test_telecommande.py` | tests : `python3 -m unittest installer/telecommande/test_telecommande.py` |
+| `test_navigateur.mjs` | tests dans Chrome en vue téléphone (voir « Ce qui est prouvé ») |
+| `banc_essai.py` | le service sur 127.0.0.1 avec un faux menu, pour `test_navigateur.mjs` — **pas installé** |
 
 ## Installation — ce que `hub-installer.sh` doit faire
 
@@ -42,15 +45,26 @@ systemctl --global enable hub-telecommande.service
   fermé ; le journal le signale au démarrage.
 - **Pare-feu.** `ufw` est inactif par défaut sur Ubuntu. S'il est activé :
   `ufw allow from 192.168.0.0/16 to any port 8790 proto tcp` (adapter au réseau).
-- Aucune dépendance à installer : `python3`, `wpctl` (paquet `wireplumber`) et
-  `gnome-session-quit` sont déjà sur Ubuntu Desktop.
+- **Pare-feu, HTTPS.** Ouvrir aussi 8791 (l'installateur le fait pour les deux ports).
+- **Dictée.** Rien à ajouter si la commande vocale est installée (étape 10) : le
+  service trouve `hub-voix.py` dans `/opt/hub-voix/`, lance son travailleur avec
+  `/opt/hub-voix/venv/bin/python` et les modèles de `/opt/hub-voix/modeles`
+  (`HUB_VOIX_DOSSIER`, `HUB_VOIX_PYTHON`, `HUB_VOIX_MODELES` pour forcer). Sans elle,
+  la dictée répond « non installée » et tout le reste marche.
+- **Le menu doit afficher l'empreinte** `empreinteRacine` du fichier d'état à côté du
+  code (voir plus bas) : c'est ce que le téléphone compare avant de faire confiance
+  au certificat. Tant qu'il ne le fait pas : `hub-telecommande --empreinte`.
+- Aucune dépendance à installer : `python3`, `openssl`, `wpctl` (paquet
+  `wireplumber`) et `gnome-session-quit` sont déjà sur Ubuntu Desktop.
 
 Essai sans installer : `python3 installer/telecommande/hub_telecommande.py -v`.
 
 ## Port et adresse
 
 **Port 8790, fixe** : l'URL finit en favori sur les téléphones, et le jeton est lié à
-l'origine `http://ip:8790`.
+l'origine `http://ip:8790`. **Port 8791 : le même service en HTTPS** (dictée). Deux
+origines distinctes pour le navigateur : le passage de l'une à l'autre se fait par un
+ticket (« Ouvrir la version sécurisée »), sans retaper de code.
 
 Le service écoute **sur l'adresse du réseau local seule**, pas sur `0.0.0.0` : celle de
 l'interface qui porte la route par défaut (Ethernet sur le HUB). Une interface de VM,
@@ -81,20 +95,58 @@ la télécommande n'est ouverte ni à un invité, ni à une page web étrangère
   gauche droite haut bas ok theme:clair theme:sombre` (les noms du socket du menu, un
   test vérifie qu'ils sont identiques à `hub-menu.py`) plus `accueil volume:+
   volume:- texte`. Tout le reste : 400.
-- **Rien d'autre n'est servi** que `/` (la page, lue une fois au démarrage) et l'API.
+- **Rien d'autre n'est servi** que `/` (la page, lue une fois au démarrage), le
+  manifeste, les icônes (calculées en mémoire), le certificat **racine** (public) et
+  l'API. Les clés privées ne sont lues par aucune route (test sur les deux ports).
   Aucun chemin reçu du réseau ne touche le disque : le nom des photos est fabriqué
   par le serveur.
 - **En-têtes.** CSP `default-src 'none'`, script et style autorisés **par empreinte**
   (pas de `unsafe-inline`), `connect-src 'self'`, `frame-ancestors 'none'` ;
+  `manifest-src 'self'` ; sur la page http seulement, `connect-src` admet aussi
+  l'origine `https://même-nom:8791` (sonde du certificat) ;
   `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`,
-  `Cache-Control: no-store`. **Aucun en-tête CORS.**
+  `Cache-Control: no-store`, `Permissions-Policy: microphone=(self), camera=()`.
+  **Aucun en-tête CORS.**
 - **Rebinding DNS.** L'en-tête `Host` doit être `ip:8790`, `nom-machine:8790` ou
   `nom-machine.local:8790`, sinon 421. Les POST exigent `application/json` (ou
   `image/jpeg` pour la photo) : une page étrangère ne peut les envoyer sans prévol
-  CORS, auquel on ne répond jamais favorablement. `Sec-Fetch-Site: cross-site` : 403.
+  CORS, auquel on ne répond jamais favorablement. `Sec-Fetch-Site: cross-site` : 403,
+  sauf une **navigation de premier niveau vers `/`** (c'est ce qu'envoie le passage
+  http → https, schéma différent donc « autre site ») et `/sonde` en https (204 vide).
 - **Éteindre** ne part qu'au menu, qui demande confirmation sur la TV. Menu fermé,
   c'est refusé.
-- Corps limités à 2 Kio (JSON) et 2 Mio (photo) ; délai de 10 s par connexion.
+- Corps limités à 2 Kio (JSON), 2 Mio (photo) et 10 s de son (dictée, WAV 16 kHz
+  mono 16 bits exigé, rien d'autre n'atteint le reconnaisseur) ; délai de 10 s par
+  connexion, poignée de main TLS comprise.
+- **Ticket de transfert** http → https : 256 bits, usage unique, 2 minutes, accepté
+  sur l'origine https seulement ; il voyage dans le fragment de l'URL (jamais envoyé
+  au serveur par le navigateur) et la page l'efface de l'adresse avant tout.
+
+### Autorité locale (HTTPS)
+
+Créée au premier démarrage dans `~/.config/hub/telecommande-tls/` (dossier 0700) :
+
+| Fichier | |
+|---|---|
+| `racine.key` (0600) · `racine.crt` | ECDSA P-256, 10 ans, `CA:TRUE, pathlen:0` |
+| `hub.key` (0600) · `hub.crt` | 397 jours, `serverAuth`, SAN : IP du HUB, `hub.local`, `nom-machine.local` |
+| `hub.json` | adresse, noms, échéance, empreinte de la racine qui l'a signé |
+
+- **Contraintes de nom critiques** sur la racine : 10/8, 172.16/12, 192.168/16,
+  169.254/16, 127/8 et `.local`. Même volée, la clé ne signe rien qu'un téléphone
+  accepterait pour un site public (test : un certificat `banque.example` signé par la
+  racine est refusé, « permitted subtree violation »).
+- Le certificat du HUB est **réémis tout seul** si l'adresse DHCP ou le nom change,
+  ou 30 jours avant l'échéance (vérifié toutes les heures) ; la racine, seule chose
+  installée sur les téléphones, ne change pas. Adresse non privée, horloge avant
+  2026 ou openssl absent : pas de HTTPS, la télécommande http continue.
+- 397 jours : sous la limite d'Apple (825 j) et sous celle des autorités publiques
+  (398 j), si un navigateur l'étendait un jour aux racines installées à la main.
+- Réinitialiser : arrêter le service, supprimer le dossier, relancer — puis
+  réinstaller la nouvelle racine sur chaque téléphone (et retirer l'ancienne).
+- Le téléchargement de la racine passe en **http** : quelqu'un sur le wifi pourrait
+  la remplacer. D'où l'empreinte SHA-256 affichée sur la TV (fichier d'état), à
+  comparer avec celle que montre le téléphone avant d'activer la confiance.
 
 ## Révoquer un téléphone
 
@@ -133,6 +185,13 @@ que `hub-voix`). `Input.SendText` n'a d'effet que si un clavier est ouvert dans 
 | `GET /api/etat` | oui | `{"ok":true,"contexte":"menu"\|"kodi"\|"bureau"\|null}` |
 | `POST /api/oublier` `{}` | oui | révoque le jeton présenté |
 | `POST /photo-profil` (corps JPEG brut, `Content-Type: image/jpeg`) | oui | 200 `{"ok":true,"fichier":"telephone-AAAAMMJJ-HHMMSS.jpg"}` · 400 pas un JPEG · 413 > 2 Mio · 415 |
+| `GET /manifest.webmanifest`, `/icone-32.png`, `/icone-192.png`, `/icone-512.png`, `/apple-touch-icon.png` | non | manifeste, icônes |
+| `GET /hub-racine.crt` | non | la racine en DER (`application/x-x509-ca-cert`) · 404 si HTTPS désactivé |
+| `GET /api/certificat` | non | `{"disponible","securise","https":"https://nom:8791/","empreinte"}` |
+| `GET /sonde` (https) | non | 204 vide, lisible en `no-cors` : prouve que le téléphone fait confiance |
+| `POST /api/transfert` `{}` | oui | `{"url":"https://nom:8791/#transfert=…"}` |
+| `POST /api/appairer` `{"transfert":"…","nom":…}` (https) | non | comme avec le code · 403 ticket faux, usé, expiré ou reçu en http |
+| `POST /api/dictee` (WAV 16 kHz mono 16 bits, `Content-Type: audio/wav`) | oui | 200 `{"ok","cible","commande","texte","raison"?}` · 400 format ou < 0,25 s · 413 > 10 s · 415 · 503 `voix-indisponible` |
 
 ## Photo de profil
 
@@ -151,14 +210,19 @@ d'adresse, **supprimé** quand le service s'arrête ou n'a pas d'adresse :
 
 ```json
 {"url": "http://192.168.1.50:8790/", "code": "123456", "expire": 1789308639458,
- "telephones": 1, "appairageLe": 1789308300000}
+ "telephones": 1, "appairageLe": 1789308300000,
+ "https": "https://192.168.1.50:8791/",
+ "empreinteRacine": "3A:9F:…:C2"}
 ```
 
 `expire` et `appairageLe` en millisecondes epoch ; `telephones` = nombre de
 téléphones appairés ; `appairageLe` change quand un téléphone vient d'être relié
 (pour afficher « Téléphone relié » sur la TV). Le menu doit relire le fichier quand il
 change (Gio.FileMonitor, ou toutes les 2 s tant que l'écran est affiché) et masquer
-QR code et code si le fichier est absent.
+QR code et code si le fichier est absent. `https` et `empreinteRacine` valent `null`
+quand le HTTPS n'est pas disponible ; sinon **afficher l'empreinte** (en petit, sous
+le code, par exemple en 8 groupes de 4 paires) : le téléphone la compare avant de
+faire confiance au certificat.
 
 ### `qrcode.js`
 
@@ -183,6 +247,81 @@ conteneur.innerHTML = svg;   // chaîne "<svg …>…</svg>"
   un QR code inversé.
 - Le fichier définit aussi le global `qrcode` de la bibliothèque d'origine.
 
+## Comme une app : ce que les téléphones acceptent vraiment
+
+La page déclare un manifeste (`standalone`, portrait, couleurs du HUB), les icônes
+192/512 (aussi `maskable` : le carré tient dans le cercle sûr), `apple-touch-icon`
+180, `apple-mobile-web-app-capable` et `theme-color`. **Aucun service worker** : il
+n'existe qu'en contexte sécurisé, et la télécommande n'a rien à faire hors ligne.
+Un encart (masquable, rappelé dans ⋯) donne les gestes selon le téléphone.
+
+| | en http://ip:8790 | en https://ip:8791 (racine installée) |
+|---|---|---|
+| **Android, Chrome** | « Ajouter à l'écran d'accueil » crée un **raccourci** : l'installation d'app exige HTTPS, donc la page peut s'ouvrir avec la barre de Chrome | contexte sécurisé : critères d'installation remplis sans service worker depuis Chrome 108 (menu ⋮ → « Installer l'application »), **plein écran** ; l'invite automatique, elle, exige encore un service worker et ne viendra pas |
+| **iPhone, Safari** | « Partager → Sur l'écran d'accueil » : depuis iOS 26, « Ouvrir comme app web » est proposé et activé **pour tout site**, http compris → plein écran | idem |
+
+- **iPhone : l'app d'écran d'accueil ne partage pas le stockage de Safari** (WebKit,
+  bug 181849, comportement voulu). Le jeton de Safari n'y est pas : il faut retaper un
+  code de la TV à la première ouverture de l'icône. L'encart le dit.
+- Conseil donné : installer d'abord le certificat, puis ajouter la version **https**
+  à l'écran d'accueil (sinon l'icône ouvre la version http, sans dictée).
+- Sources consultées le 15 septembre 2026 : web.dev « install criteria »,
+  developer.chrome.com « Revisiting Chrome's installability criteria » (Chrome 108),
+  support Apple « Turn a website into an app » et MacRumors (iOS 26), WebKit bug
+  181849. **Rien de ce tableau n'a été essayé sur un vrai téléphone.**
+
+## Pavé tactile
+
+Par défaut ; « Boutons » (bascule au-dessus, ou ⋯) rend la croix directionnelle.
+
+| Geste | Commande |
+|---|---|
+| glisser (≥ 26 px, ~7 mm) | une flèche, **pendant** le mouvement, sans attendre le relâcher |
+| continuer le trait (tous les 80 px, ou 25 % du pavé) | une flèche de plus |
+| rester posé 380 ms après un glissement | la flèche se répète toutes les 130 ms |
+| toucher (< 10 px, < 480 ms) | OK |
+| appui long (480 ms, immobile) | Retour |
+| deux doigts | Accueil |
+
+Pointer events, `touch-action: none` sur le pavé (ni défilement, ni zoom, ni délai de
+300 ms), `pointercancel` n'envoie rien. **Main** (⋯ → Main : droitier/gaucher) : le
+volume et « Retour » passent du côté du pouce. **Haptique** : `navigator.vibrate` sur
+Android ; sur iPhone, qui n'a pas cette API, le « tic » que Safari (iOS 18+) donne
+quand un `<input type="checkbox" switch>` change d'état, déclenché par son label.
+
+## Dictée depuis le téléphone
+
+« Maintenir pour parler » : on dit une commande de la voix du salon (« télé »,
+« à droite », « thème sombre »… sans « HUB » devant), on relâche.
+
+**Le chemin.** getUserMedia → Web Audio (`ScriptProcessorNode`) → rééchantillonnage
+à 16 kHz dans la page → WAV PCM → `POST /api/dictee` en HTTPS → travailleur Vosk →
+`hub_voix_logique.analyser` → même routage qu'un appui. Menu ouvert, il reçoit
+`voix:entendu:<texte>`, la commande, `voix:repos` (ou `voix:incompris`).
+
+**Pourquoi pas la reconnaissance du navigateur (Web Speech API).** Elle aussi exige
+le contexte sécurisé, donc ne dispense pas du certificat ; elle envoie la voix chez
+Google (Chrome) ou Apple (Safari), contrairement au reste du HUB ; sur iPhone elle
+est capricieuse dans une app d'écran d'accueil ; et elle transcrit du français libre
+qu'il faudrait ensuite ramener aux commandes. Vosk sur le HUB : même comportement
+sur les deux téléphones, hors ligne, mêmes phrases et même analyse que le salon.
+
+**Pourquoi pas MediaRecorder.** Chrome enregistre en WebM/Opus, Safari en MP4/AAC :
+il faudrait ffmpeg sur le HUB et un décodeur de conteneurs exposé au réseau. La page
+rend directement le format du reconnaisseur.
+
+**Le travailleur.** `hub_telecommande.py --travailleur-dictee hub-voix.py`, lancé
+par le Python du venv de la voix à la première dictée (le service, lui, reste en
+Python système sans dépendance), importe la classe `Reconnaisseur` de `hub-voix.py`
+et lui passe le son par blocs de 0,2 s comme le fait `--fichier`. Arrêté après 5 min
+sans dictée (le modèle occupe ~150 Mo). Langue : celle du profil actif.
+
+**Sans le certificat (ou s'il échoue sur un iPhone).** Le bouton micro ouvre la marche
+à suivre au lieu d'échouer. Pour du **texte libre** (recherche Kodi), le micro du
+**clavier** du téléphone (Gboard, clavier iOS) dicte dans le champ texte et marche
+en http : aucune dépendance au certificat. Écarté : `<input type="file" capture>`
+(iOS n'enregistre pas de son seul, il faudrait une vidéo et ffmpeg).
+
 ## Ce qui est prouvé, et comment
 
 Le 13 septembre 2026, sur la machine de développement (Python 3.12.3, Node 18/24) :
@@ -200,6 +339,34 @@ Le 13 septembre 2026, sur la machine de développement (Python 3.12.3, Node 18/2
   d'options, photo recadrée et écrite, **aucune violation CSP**, jeton conservé au
   rechargement.
 
-**Pas prouvé :** un vrai téléphone sur le vrai réseau du HUB, Kodi réel (TCP 9090 et
-`Input.SendText`), `wpctl` sur la sortie audio du HUB, la vibration (Android ; iOS n'a
-pas l'API).
+Le 15 septembre 2026, même machine (Python 3.12.3, OpenSSL 3.0.13, Chrome stable,
+Node 22) :
+
+- `python3 -m unittest installer/telecommande/test_telecommande.py` : 67 tests.
+  Manifeste et icônes relus octet par octet ; autorité : modes 0600/0700, extensions,
+  durée, chaîne vérifiée par `openssl verify` et par le client TLS de Python (IP et
+  `hub.local`), contraintes de nom appliquées, réémission sur changement d'adresse ou
+  d'échéance sans changer la racine, clés absentes de toutes les réponses des deux
+  ports, poignée de main ratée sans effet sur le service, ticket à usage unique ;
+  dictée avec un faux reconnaisseur (formats refusés, langue, 503, « éteindre » hors
+  menu refusé). Avec `HUB_VOIX_PYTHON`, `HUB_VOIX_MODELES` et `HUB_TEST_DICTEE_WAV`
+  (« Télé. » synthétisé par Piper), le vrai Vosk de bout en bout (sinon sauté).
+- `node --test installer/telecommande/test_navigateur.mjs` (playwright-core de
+  `tests/menu`, Chrome du système, vues Pixel et iPhone émulées) : 11 tests.
+  Encart Android/iPhone ; **gestes du pavé en vrais touchers** (protocole DevTools :
+  toucher, 4 glissements, appui long, deux doigts, répétition, long trait, flèche
+  reçue par le menu doigt encore posé) ; gaucher/droitier et boutons ;
+  **HTTPS : racine installée dans un magasin NSS jetable, Chrome accepte
+  `https://hub.local` avec son propre vérificateur** (aucun contournement) et le
+  refuse sans elle ; passage http → https par ticket ; **dictée : micro de Chrome
+  remplacé par le fichier « Télé. », page en https vérifié, vrai Vosk → datagrammes
+  `voix:entendu:télé`, `tv`, `voix:repos` au menu** (sans Vosk, un faux reconnaisseur
+  vérifie la capture et la durée envoyée).
+
+**Pas prouvé :** un vrai téléphone sur le vrai réseau du HUB — ni l'installation de
+la racine sur Android ou iPhone (écrans de réglages décrits d'après la documentation),
+ni l'acceptation des contraintes de nom par iOS (prévues par la norme et appliquées
+par Chrome et OpenSSL ici), ni l'ouverture plein écran depuis l'écran d'accueil, ni
+le « tic » haptique de l'iPhone, ni Web Audio de Safari (le moteur WebKit n'a pas été
+lancé : seul Chrome l'a été, avec un agent iPhone). Kodi réel (TCP 9090 et
+`Input.SendText`), `wpctl` sur la sortie audio du HUB, la vibration Android réelle.
