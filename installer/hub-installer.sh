@@ -179,9 +179,11 @@ else
   printf '  %sSIMULATION — rien ne sera modifié. Ajoutez --pour-de-vrai (avec sudo) pour exécuter.%s\n' "$JAUNE" "$RAZ"
 fi
 
-# Le HUB s'installe pour la personne qui lance sudo. Lancé depuis un shell root sans
+# Le HUB s'installe pour la personne qui lance sudo. hub-mise-a-jour, qui relance ce
+# script depuis un service système (root, sans terminal, sans $USER), passe SUDO_USER
+# lui-même. Lancé depuis un shell root sans
 # sudo, il se serait installé pour root, que GDM ne connecte jamais.
-UTILISATEUR="${SUDO_USER:-$USER}"
+UTILISATEUR="${SUDO_USER:-${USER:-}}"
 if [ -z "$UTILISATEUR" ] || [ "$UTILISATEUR" = root ] || ! id "$UTILISATEUR" >/dev/null 2>&1; then
   refus "utilisateur du HUB introuvable : lancez « sudo $0 » depuis son compte"
   exit 1
@@ -565,9 +567,72 @@ etape_demarrage() {
   fi
 }
 
-# ── 8. Commande vocale (si elle est livrée) ──────────────────────────────────
+# ── 8. Mise à jour depuis le menu ─────────────────────────────────────────────
+etape_mise_a_jour() {
+  etape "8. Mise à jour depuis le menu"
+  local maj="$DEPOT/mise-a-jour"
+  if [ ! -f "$maj/hub-mise-a-jour" ] || [ ! -f "$maj/hub-mise-a-jour.service" ]; then
+    deja "aucune mise à jour dans le dépôt ($maj) — étape sautée"
+    return 0
+  fi
+  # git : une Ubuntu Desktop neuve ne l'a pas, et la mise à jour clone le dépôt.
+  installer_paquets -- git || return 1
+  poser "$maj/hub-mise-a-jour" /usr/local/bin/hub-mise-a-jour 0755 || return 1
+  poser "$maj/hub-mise-a-jour.service" /etc/systemd/system/hub-mise-a-jour.service 0644 || return 1
+  if [ -f "$maj/50-hub-mise-a-jour.rules" ]; then
+    poser "$maj/50-hub-mise-a-jour.rules" /etc/polkit-1/rules.d/50-hub-mise-a-jour.rules 0644 || return 1
+  fi
+  # Pas d'activation au démarrage : le service ne tourne que quand le menu le lance.
+  if [ "$POUR_DE_VRAI" != 1 ] ||
+     [ "$(systemctl show -p LoadState --value hub-mise-a-jour.service 2>/dev/null)" != loaded ] ||
+     [ "$(systemctl show -p NeedDaemonReload --value hub-mise-a-jour.service 2>/dev/null)" = yes ]; then
+    faire systemctl daemon-reload || return 1
+  fi
+
+  # Le groupe « hub » est ce que la règle polkit autorise. L'appartenance ne vaut qu'à
+  # la session suivante : d'où le redémarrage demandé en fin d'installation.
+  if getent group hub >/dev/null; then
+    deja "groupe hub"
+  else
+    faire groupadd hub || return 1
+    ok "groupe hub"
+  fi
+  if id -nG "$UTILISATEUR" 2>/dev/null | tr ' ' '\n' | grep -qx hub; then
+    deja "$UTILISATEUR dans le groupe hub"
+  else
+    faire usermod -aG hub "$UTILISATEUR" || return 1
+    ok "$UTILISATEUR dans le groupe hub (effectif à la prochaine session)"
+  fi
+
+  local d
+  for d in /etc/hub /var/lib/hub/versions; do
+    if [ -d "$d" ]; then deja "$d/"; else faire install -d -m 0755 "$d" || return 1; ok "$d/"; fi
+  done
+  local env_voulu="HUB_UTILISATEUR=$UTILISATEUR"
+  if [ "$(cat /etc/hub/mise-a-jour.env 2>/dev/null)" = "$env_voulu" ]; then
+    deja "/etc/hub/mise-a-jour.env"
+  elif [ "$POUR_DE_VRAI" = 1 ]; then
+    printf '%s\n' "$env_voulu" >/etc/hub/mise-a-jour.env && chmod 0644 /etc/hub/mise-a-jour.env ||
+      { echec "écriture de /etc/hub/mise-a-jour.env"; return 1; }
+    ok "/etc/hub/mise-a-jour.env ($env_voulu)"
+  else
+    faire "écrire $env_voulu dans /etc/hub/mise-a-jour.env"
+  fi
+  # La source est un choix de l'utilisateur (GitHub, le Mac…) : jamais écrasée.
+  if [ -f /etc/hub/mise-a-jour.json ]; then
+    deja "/etc/hub/mise-a-jour.json conservé tel quel"
+  elif [ "$POUR_DE_VRAI" = 1 ]; then
+    printf '%s\n' '{"source": "", "branche": "main"}' >/etc/hub/mise-a-jour.json &&
+      chmod 0644 /etc/hub/mise-a-jour.json || { echec "écriture de /etc/hub/mise-a-jour.json"; return 1; }
+    ok "/etc/hub/mise-a-jour.json (source vide : à renseigner)"
+  else
+    faire "créer /etc/hub/mise-a-jour.json avec une source vide"
+  fi
+}
+
+# ── 9. Commande vocale (si elle est livrée) ──────────────────────────────────
 etape_voix() {
-  etape "8. Commande vocale (si elle est livrée)"
+  etape "9. Commande vocale (si elle est livrée)"
   local voix="$DEPOT/voix" opt=/opt/hub-voix f
   if [ ! -f "$voix/hub-voix.py" ] || [ ! -f "$voix/hub-voix.service" ]; then
     deja "aucun service vocal complet dans le dépôt ($voix) — étape sautée"
@@ -608,6 +673,7 @@ etape_accueil
 etape_kodi
 etape_telecommande
 etape_demarrage
+etape_mise_a_jour
 # La voix vient après la bascule du démarrage : elle télécharge (pip, modèles) et un
 # réseau capricieux ne doit pas priver le salon de son HUB. Son échec reste compté.
 etape_voix
