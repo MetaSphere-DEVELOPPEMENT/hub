@@ -541,6 +541,10 @@ dialog h2 { font-size: 18px; margin: 4px 4px 14px; }
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M12 8v6M9 11h6"/></svg>
       Ajouter à l'écran d'accueil
     </button>
+    <button class="touche" data-action="allumer">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v9"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/><path d="M19 3.5l1.5-1.5M20.5 7H22"/></svg>
+      Allumer le HUB à distance
+    </button>
     <button class="touche danger" data-cmd="eteindre" data-ferme>
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v9"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg>
       Éteindre le HUB
@@ -568,6 +572,28 @@ dialog h2 { font-size: 18px; margin: 4px 4px 14px; }
     </label>
     <button class="principal" id="photo-envoyer" disabled>Envoyer au HUB</button>
     <button class="touche" data-action="fermer">Annuler</button>
+  </div>
+</dialog>
+
+<!-- Pas de bouton « Allumer » qui ferait semblant : cette page est servie par le HUB, elle
+     n'existe plus quand il est éteint, et un navigateur ne peut pas envoyer de paquet
+     magique (pas d'UDP). On explique les vraies options (installer/allumage/README.md). -->
+<dialog id="allumer" aria-label="Allumer le HUB à distance">
+  <div class="poignee"></div>
+  <h2>Allumer le HUB à distance</h2>
+  <p class="explication">Cette télécommande ne peut pas allumer le HUB : c'est le HUB lui-même qui l'affiche,
+    elle disparaît quand il est éteint. Un navigateur ne sait pas non plus envoyer le « paquet magique »
+    qui réveille une machine.</p>
+  <ol class="etapes">
+    <li><b>Une application Wake-on-LAN</b> sur ce téléphone, connecté au wifi de la maison : enregistrez-y
+      l'adresse MAC du HUB, affichée sur la TV dans Réglages → Allumage.</li>
+    <li><b>Votre box</b>, si son application ou son interface propose de réveiller un appareil du réseau.</li>
+    <li><b>Un autre appareil toujours allumé</b> (NAS, Raspberry Pi) : <code>wakeonlan</code> suivi de l'adresse MAC.</li>
+  </ol>
+  <p class="explication">Pour qu'il s'allume seul chaque matin : Réglages → Allumage, sur la TV.
+    Le réveil à distance ne marche qu'avec le câble Ethernet branché.</p>
+  <div class="liste">
+    <button class="touche" data-action="fermer">Fermer</button>
   </div>
 </dialog>
 
@@ -1020,6 +1046,7 @@ addEventListener("appinstalled", () => { $("encart").hidden = true; invitationIn
 // ── Options et photo ───────────────────────────────────────────────────────
 const actions = {
   options: () => $("options").showModal(),
+  allumer: () => { $("options").close(); $("allumer").showModal(); },
   disposition: bouton => { garderPreference(CLE_DISPOSITION, bouton.dataset.valeur); appliquerPreferences(); },
   "disposition-basculer": () => {
     garderPreference(CLE_DISPOSITION, lirePreference(CLE_DISPOSITION, "pave") === "pave" ? "boutons" : "pave");
