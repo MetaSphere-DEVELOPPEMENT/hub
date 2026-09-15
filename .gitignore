@@ -13,3 +13,4 @@ vm/noyau-installation
 vm/initrd-installation
 node_modules/
 __pycache__/
+vm/preuves-*/
