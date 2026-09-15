@@ -126,6 +126,15 @@ service lit la table de mots de `graph/Gr.fst` — ou s'il est **déjà une comm
 (« Télé », « Netflix »). « Nestor » mesuré : 93 % des commandes, 1 éveil intempestif
 sur 2 904 phrases de TV.
 
+**Ce que le menu doit proposer** (Réglages → Voix → « Mot d'éveil ») : une liste de
+quatre choix — « OK HUB » (conseillé), « Salut HUB », « Dis HUB », « HUB » seul
+(déconseillé, chiffres ci-dessous) — et « Un prénom… » avec un champ texte. Écrire
+dans `systeme.motEveil` la valeur `ok-hub`, `salut-hub`, `dis-hub`, `hub`, ou le
+prénom tel quel. Le menu peut relire `voix.json` une seconde plus tard pour afficher
+« ce prénom est inconnu du modèle, « OK HUB » a été gardé » (`refus` = `inconnu`),
+« ce mot est déjà une commande » (`commande`) ou « un ou deux mots, lettres
+seulement » (`forme`).
+
 **Ce que le menu peut lire.** `$XDG_RUNTIME_DIR/hub/voix.json`, réécrit à chaque
 changement : `{"motEveil", "demande", "refus": null|"forme"|"commande"|"inconnu",
 "phrases": ["okay hub", "ok hub"], "langue"}`.
@@ -351,5 +360,8 @@ dernières lignes, remesurées le 16.
   de fiction et de salon, dites par les mêmes quatre voix que les commandes.
 - La TV qui parle **pendant** qu'on dit le mot d'éveil n'est pas mesurée : ici, le
   bruit est un bruit rose, pas une autre voix.
+- **La synthèse Piper est aléatoire** (`noise_scale`) : refaire le corpus déplace un
+  cas ou deux sur 400 (constaté entre deux passages : 27/28 puis 28/28 sur les services
+  web de siwis). Les chiffres sont à ±1, pas au cas près.
 - `gilles-low` (voix de basse qualité, nasales absentes de son jeu de phonèmes) tire la
   moyenne vers le bas : c'est voulu, elle tient lieu de mauvaise condition.
