@@ -12,3 +12,4 @@ vm/vm-*.log
 vm/noyau-installation
 vm/initrd-installation
 node_modules/
+__pycache__/
