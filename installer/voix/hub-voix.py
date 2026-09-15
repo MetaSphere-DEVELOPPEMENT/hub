@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Commande vocale du HUB, 100 % hors ligne — /opt/hub-voix/hub-voix.py
 
-On dit « HUB » (ou « OK HUB »), puis la commande ; ou tout d'une traite : « HUB,
-lance la télé ». Rien ne quitte la machine.
+On dit « OK HUB » (ou le mot d'éveil choisi dans les réglages : « Salut HUB »,
+« Dis HUB », un prénom), puis la commande ; ou tout d'une traite : « OK HUB, lance la
+télé ». Rien ne quitte la machine.
 
 POURQUOI VOSK EN GRAMMAIRE RESTREINTE. Le petit modèle français (40 Mo) tourne sur
 un cœur de l'i3-8100T sans le saturer, et limité à la liste des phrases du HUB il ne
@@ -72,6 +73,11 @@ def chemin_pid_web():
     return Path(runtime) / "hub" / "web.pid"
 
 
+def chemin_etat():
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    return Path(runtime) / "hub" / "voix.json"
+
+
 def chemin_reglages():
     config = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
     return Path(config) / "hub" / "reglages.json"
@@ -90,22 +96,33 @@ class Reconnaisseur:
         self.vosk = vosk
         self.dossier = Path(dossier)
         self.modeles = {}
+        self.vocabulaires = {}
         self.langue = None
+        self.mot_eveil = None
         self.rec = None
 
     def disponible(self, langue):
         return (self.dossier / MODELES[langue] / "am" / "final.mdl").is_file()
 
-    def choisir(self, langue):
-        if langue == self.langue and self.rec:
+    def vocabulaire(self, langue):
+        """Mots du modèle, lus une fois (0,1 s) : pour refuser un prénom qu'il ne connaît pas."""
+        if langue not in self.vocabulaires:
+            self.vocabulaires[langue] = L.vocabulaire_vosk(self.dossier / MODELES[langue] / "graph" / "Gr.fst")
+        return self.vocabulaires[langue] or None
+
+    def choisir(self, langue, mot_eveil=L.MOT_EVEIL_PAR_DEFAUT):
+        if (langue, mot_eveil) == (self.langue, self.mot_eveil) and self.rec:
             return
         if langue not in self.modeles:
             debut = time.monotonic()
             self.modeles[langue] = self.vosk.Model(str(self.dossier / MODELES[langue]))
             journal.info("modèle %s chargé en %.1f s", MODELES[langue], time.monotonic() - debut)
-        phrases = json.dumps(L.grammaire(langue), ensure_ascii=False)
+        debut = time.monotonic()
+        phrases = json.dumps(L.grammaire(langue, mot_eveil), ensure_ascii=False)
         self.rec = self.vosk.KaldiRecognizer(self.modeles[langue], TAUX, phrases)
-        self.langue = langue
+        journal.info("grammaire %s « %s » prête en %.2f s", langue, " / ".join(L.eveils(mot_eveil, langue)),
+                     time.monotonic() - debut)
+        self.langue, self.mot_eveil = langue, mot_eveil
 
     def accepter(self, octets):
         """Texte d'une phrase terminée, ou None tant que la personne parle."""
@@ -210,6 +227,8 @@ class Service:
         self.reconnaisseur = None
         self.ecoute = L.Ecoute(L.LANGUE_PAR_DEFAUT)
         self.voix, self.langue = True, L.LANGUE_PAR_DEFAUT
+        self.mot_demande = self.mot_eveil = L.MOT_EVEIL_PAR_DEFAUT
+        self.refus = None
         self.empreinte_reglages = None
         self.capture = None
         self.micro = None
@@ -245,10 +264,41 @@ class Service:
             return
         self.empreinte_reglages = empreinte
         voix, langue = L.lire_reglages(self.reglages)
-        if (voix, langue) != (self.voix, self.langue):
-            journal.info("réglages : voix %s, langue %s", "active" if voix else "coupée", langue)
-        self.voix, self.langue = voix, langue
-        self.ecoute.langue = langue
+        mot = L.lire_mot_eveil(self.reglages)
+        if (voix, langue, mot) != (self.voix, self.langue, self.mot_demande):
+            journal.info("réglages : voix %s, langue %s, mot d'éveil %s",
+                         "active" if voix else "coupée", langue, mot)
+        self.voix, self.langue, self.mot_demande = voix, langue, mot
+        self.valider_mot_eveil()
+
+    def valider_mot_eveil(self):
+        """Le mot d'éveil demandé, s'il peut servir dans cette langue ; sinon le défaut.
+
+        Un prénom que le modèle ne connaît pas rendrait le HUB sourd sans un mot : on
+        garde le défaut, on le dit au journal et dans voix.json, que le menu peut lire.
+        """
+        vocabulaire = self.reconnaisseur.vocabulaire(self.langue) \
+            if self.reconnaisseur and self.reconnaisseur.disponible(self.langue) else None
+        refus = L.refus_mot_eveil(self.mot_demande, self.langue, vocabulaire)
+        effectif = L.MOT_EVEIL_PAR_DEFAUT if refus else self.mot_demande
+        if refus and refus != self.refus:
+            journal.warning("mot d'éveil « %s » refusé (%s) : « %s » gardé",
+                            self.mot_demande, refus, " / ".join(L.eveils(effectif, self.langue)))
+        self.refus, self.mot_eveil = refus, effectif
+        self.ecoute.langue, self.ecoute.mot_eveil = self.langue, effectif
+        self.ecrire_etat()
+
+    def ecrire_etat(self):
+        etat = {"motEveil": self.mot_eveil, "demande": self.mot_demande, "refus": self.refus,
+                "phrases": list(L.eveils(self.mot_eveil, self.langue)), "langue": self.langue}
+        try:
+            chemin = chemin_etat()
+            chemin.parent.mkdir(parents=True, exist_ok=True)
+            temporaire = chemin.with_suffix(".tmp")
+            temporaire.write_text(json.dumps(etat, ensure_ascii=False), encoding="utf-8")
+            temporaire.replace(chemin)
+        except OSError:
+            pass
 
     # --- capture -------------------------------------------------------------------
 
@@ -310,9 +360,12 @@ class Service:
                 self.fermer_capture()
                 time.sleep(PERIODE_REGLAGES)
                 continue
+            if modele_absent_signale:
+                # Le modèle vient d'arriver : le prénom choisi peut enfin être vérifié.
+                self.valider_mot_eveil()
             modele_absent_signale = None
-            if self.reconnaisseur.langue != self.langue:
-                self.reconnaisseur.choisir(self.langue)
+            if (self.reconnaisseur.langue, self.reconnaisseur.mot_eveil) != (self.langue, self.mot_eveil):
+                self.reconnaisseur.choisir(self.langue, self.mot_eveil)
 
             if maintenant >= prochain_micro:
                 presents = micros()
@@ -358,7 +411,7 @@ def lire_wav(chemin):
     return sortie.stdout
 
 
-def mode_fichier(fichiers, langue, dossier_modeles, actions):
+def mode_fichier(fichiers, langue, dossier_modeles, actions, mot_eveil=L.MOT_EVEIL_PAR_DEFAUT):
     """Fait passer des fichiers son par le même chemin que le micro, à la suite.
 
     Le temps est celui du son, pas de l'horloge : un fichier « hub.wav » suivi de
@@ -369,8 +422,12 @@ def mode_fichier(fichiers, langue, dossier_modeles, actions):
     if not reconnaisseur.disponible(langue):
         journal.error("modèle %s absent de %s", MODELES[langue], dossier_modeles)
         return SORTIE_CONFIGURATION
-    reconnaisseur.choisir(langue)
-    ecoute = L.Ecoute(langue)
+    refus = L.refus_mot_eveil(mot_eveil, langue, reconnaisseur.vocabulaire(langue))
+    if refus:
+        journal.error("mot d'éveil « %s » refusé (%s)", mot_eveil, refus)
+        return SORTIE_CONFIGURATION
+    reconnaisseur.choisir(langue, mot_eveil)
+    ecoute = L.Ecoute(langue, mot_eveil=mot_eveil)
     position = 0.0
     calcul = 0.0
 
@@ -411,6 +468,8 @@ def main():
                         help="reconnaître ces fichiers au lieu du micro (essai, mesure)")
     parser.add_argument("--langue", choices=L.LANGUES,
                         help="avec --fichier : langue (défaut : celle des réglages)")
+    parser.add_argument("--mot-eveil", help="avec --fichier : ok-hub, salut-hub, dis-hub, hub "
+                        "ou un prénom (défaut : celui des réglages)")
     parser.add_argument("--modeles", type=Path, default=DOSSIER_MODELES,
                         help=f"dossier des modèles Vosk (défaut {DOSSIER_MODELES})")
     parser.add_argument("--socket", type=Path, default=None, help="socket du menu")
@@ -435,7 +494,11 @@ def main():
         # Par sécurité, un essai sur fichier ne ferme pas la session de celui qui le lance.
         actions = Actions(socket_menu, simuler=not args.agir)
         langue = args.langue or L.lire_reglages(reglages)[1]
-        return mode_fichier(args.fichier, langue, args.modeles, actions)
+        mot = L.nettoyer_mot_eveil(args.mot_eveil) if args.mot_eveil else L.lire_mot_eveil(reglages)
+        if not mot:
+            journal.error("mot d'éveil illisible : %r", args.mot_eveil)
+            return SORTIE_CONFIGURATION
+        return mode_fichier(args.fichier, langue, args.modeles, actions, mot)
 
     service = Service(args.modeles, Actions(socket_menu), reglages)
 

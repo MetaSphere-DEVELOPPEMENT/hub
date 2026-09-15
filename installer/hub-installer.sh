@@ -730,6 +730,11 @@ etape_voix() {
   installer_paquets -- python3-venv pipewire-bin curl unzip || return 1
   poser "$voix/hub-voix.py"         "$opt/hub-voix.py"         0755 || return 1
   poser "$voix/hub_voix_logique.py" "$opt/hub_voix_logique.py" 0644 || return 1
+  # Les mots courants que la grammaire ajoute aux commandes : sans eux, la TV qui parle
+  # redevient capable de lancer des commandes (voix/README.md, « Mesures »).
+  for f in remplissage-fr.txt remplissage-en.txt; do
+    poser "$voix/$f" "$opt/$f" 0644 || return 1
+  done
   # Vosk n'est pas empaqueté par Ubuntu : un venv isolé, plutôt qu'un pip lancé en
   # root sur le Python du système, que la prochaine mise à jour d'apt casserait.
   # Version FIGÉE et roue vérifiée par son empreinte (voix/README.md) : un « pip

@@ -33,8 +33,10 @@ class Normalisation(unittest.TestCase):
 
 
 class AnalyseFrancais(unittest.TestCase):
+    """Le mot d'éveil « HUB » seul (réglage "hub"), celui des premières mesures."""
+
     def analyse(self, texte):
-        return L.analyser(texte, "fr")
+        return L.analyser(texte, "fr", "hub")
 
     def test_eveil_seul(self):
         self.assertEqual(self.analyse("hub"), (True, None))
@@ -113,7 +115,7 @@ class SortiesReellesDeVosk(unittest.TestCase):
     """
 
     def analyse(self, texte):
-        return L.analyser(texte, "fr")
+        return L.analyser(texte, "fr", "hub")
 
     def test_mots_parasites_autour_de_la_commande(self):
         self.assertEqual(self.analyse("hub éteindre le va hub"), (True, "eteindre"))
@@ -134,7 +136,7 @@ class SortiesReellesDeVosk(unittest.TestCase):
         # « Aide-moi à porter ces cartons » (voix siwis et tom, avec et sans bruit).
         self.assertEqual(self.analyse("aide mode bureau"), (False, None))
         self.assertEqual(self.analyse("aide [unk] bureau"), (False, None))
-        e = L.Ecoute("fr")
+        e = L.Ecoute("fr", mot_eveil="hub")
         self.assertEqual(e.entendre("aide [unk]", 0.0), [])
         self.assertEqual(e.entendre("quel temps", 1.0), [])
 
@@ -152,7 +154,7 @@ class SortiesReellesDeVosk(unittest.TestCase):
 
 class AnalyseAnglais(unittest.TestCase):
     def analyse(self, texte):
-        return L.analyser(texte, "en")
+        return L.analyser(texte, "en", "hub")
 
     def test_commandes(self):
         cas = [("hub", (True, None)), ("hey hub", (True, None)),
@@ -168,7 +170,7 @@ class AnalyseAnglais(unittest.TestCase):
             self.assertEqual(self.analyse(texte), attendu, texte)
 
     def test_langue_inconnue_retombe_sur_le_francais(self):
-        self.assertEqual(L.analyser("hub télé", "de"), (True, "tv"))
+        self.assertEqual(L.analyser("hub télé", "de", "hub"), (True, "tv"))
 
 
 class Protocole(unittest.TestCase):
@@ -200,18 +202,18 @@ class Web(unittest.TestCase):
                                 ("hub steam", "web:steam"), ("hub moonlight", "web:moonlight"),
                                 ("hub canal plus", "web:canalplus"), ("hub arte", "web:arte"),
                                 ("hub booster", "web:boosteroid")]:
-            self.assertEqual(L.analyser(texte, "fr"), (True, commande), texte)
+            self.assertEqual(L.analyser(texte, "fr", "hub"), (True, commande), texte)
 
     def test_france_tele_n_est_pas_la_tele(self):
         # « télé » seul est la commande tv : la phrase la plus longue doit l'emporter.
-        self.assertEqual(L.analyser("hub france télé", "fr"), (True, "web:francetv"))
-        self.assertEqual(L.analyser("hub télé", "fr"), (True, "tv"))
+        self.assertEqual(L.analyser("ok hub france télé", "fr"), (True, "web:francetv"))
+        self.assertEqual(L.analyser("ok hub télé", "fr"), (True, "tv"))
 
     def test_services_anglais(self):
         for texte, commande in [("hub launch netflix", "web:netflix"), ("hub open prime video", "web:primevideo"),
                                 ("hub france tv", "web:francetv"), ("hub xbox cloud", "web:xcloud"),
                                 ("hub tv", "tv")]:
-            self.assertEqual(L.analyser(texte, "en"), (True, commande), texte)
+            self.assertEqual(L.analyser(texte, "en", "hub"), (True, commande), texte)
 
     def test_hub_web_vivant(self):
         racine = Path(tempfile.mkdtemp())
@@ -243,33 +245,169 @@ class Processus(unittest.TestCase):
 
 class Grammaire(unittest.TestCase):
     def test_contient_eveils_commandes_et_inconnu(self):
-        g = L.grammaire("fr")
-        self.assertIn("hub", g)
+        g = L.grammaire("fr", mots_remplissage=[])
         self.assertIn("ok hub", g)
+        self.assertNotIn("hub", g)  # « HUB » seul n'est plus un mot d'éveil par défaut
         self.assertIn("[unk]", g)
         self.assertIn("télé", g)
-        self.assertIn("hub télé", g)
+        self.assertIn("ok hub télé", g)
         self.assertIn("ok hub lance la télé", g)
+        self.assertIn("hub télé", L.grammaire("fr", "hub", mots_remplissage=[]))
+        self.assertIn("salut hub netflix", L.grammaire("fr", "salut-hub", mots_remplissage=[]))
+        self.assertIn("hey hub netflix", L.grammaire("en", "salut-hub", mots_remplissage=[]))
+        self.assertIn("nestor télé", L.grammaire("fr", "Nestor", mots_remplissage=[]))
 
     def test_chaque_phrase_de_la_grammaire_s_analyse(self):
         # Une phrase que Vosk peut rendre mais que l'analyse ne reconnaîtrait pas serait
         # une commande entendue et pourtant ignorée : l'utilisateur ne comprendrait pas.
         for langue in L.LANGUES:
-            for phrase in L.grammaire(langue):
-                if phrase == "[unk]":
-                    continue
-                eveil, commande = L.analyser(phrase, langue)
-                self.assertTrue(eveil or commande, (langue, phrase))
+            for mot in list(L.MOTS_EVEIL) + ["nestor"]:
+                for phrase in L.grammaire(langue, mot, mots_remplissage=[]):
+                    if phrase == "[unk]":
+                        continue
+                    eveil, commande = L.analyser(phrase, langue, mot)
+                    self.assertTrue(eveil or commande, (langue, mot, phrase))
+                    if phrase.startswith(L.eveils(mot, langue)) and phrase not in L.eveils(mot, langue):
+                        self.assertTrue(eveil and commande, (langue, mot, phrase))
 
     def test_sans_doublon(self):
         for langue in L.LANGUES:
             g = L.grammaire(langue)
             self.assertEqual(len(g), len(set(g)), langue)
 
+    def test_remplissage_livre(self):
+        # Les fichiers sont dans le dépôt, à côté du module : sans eux, la TV redevient
+        # capable de lancer des commandes (voir grammaire()).
+        for langue in L.LANGUES:
+            mots = L.remplissage(langue)
+            self.assertEqual(len(mots), L.NOMBRE_REMPLISSAGE, langue)
+            g = L.grammaire(langue)
+            commandes = set(L.grammaire(langue, mots_remplissage=[]))
+            ajoutes = [p for p in g if p not in commandes]
+            self.assertGreater(len(ajoutes), 1800, langue)
+            # Aucun mot de nos phrases n'est ajouté seul.
+            reserves = {m for p in commandes for m in p.split()}
+            self.assertFalse(set(ajoutes) & reserves, langue)
+
+    def test_remplissage_absent(self):
+        self.assertEqual(L.remplissage("fr", dossier="/nexiste/pas"), [])
+
+
+class MotEveil(unittest.TestCase):
+    def test_nettoyer(self):
+        for preregle in L.MOTS_EVEIL:
+            self.assertEqual(L.nettoyer_mot_eveil(preregle), preregle)
+        self.assertEqual(L.nettoyer_mot_eveil("  Nestor "), "nestor")
+        self.assertEqual(L.nettoyer_mot_eveil("Dis  Hélène"), "dis hélène")
+        self.assertEqual(L.nettoyer_mot_eveil("Jean-Pierre"), "jean-pierre")
+        for mauvais in ("", "   ", "R2D2", "un deux trois", "x" * 30, None, 42, ["hub"], "hub!"):
+            self.assertIsNone(L.nettoyer_mot_eveil(mauvais), mauvais)
+
+    def test_par_langue(self):
+        self.assertEqual(L.eveils("ok-hub", "fr"), ("okay hub", "ok hub"))
+        self.assertEqual(L.eveils("salut-hub", "en"), ("hey hub",))
+        self.assertEqual(L.eveils("Nestor", "en"), ("nestor",))
+        self.assertEqual(L.eveils("R2D2", "fr"), L.eveils(L.MOT_EVEIL_PAR_DEFAUT, "fr"))
+
+    def test_refus(self):
+        self.assertIsNone(L.refus_mot_eveil("salut-hub", "fr"))
+        self.assertIsNone(L.refus_mot_eveil("Nestor", "fr", vocabulaire={"nestor"}))
+        self.assertEqual(L.refus_mot_eveil("Nestor", "fr", vocabulaire={"hector"}), "inconnu")
+        self.assertEqual(L.refus_mot_eveil("Télé", "fr"), "commande")
+        self.assertEqual(L.refus_mot_eveil("Netflix", "fr"), "commande")
+        self.assertEqual(L.refus_mot_eveil("R2D2", "fr"), "forme")
+
+    def test_ok_hub_par_defaut(self):
+        self.assertEqual(L.analyser("ok hub lance la télé", "fr"), (True, "tv"))
+        self.assertEqual(L.analyser("okay hub", "fr"), (True, None))
+        # « HUB » seul ne réveille plus : c'est ce qui sortait de la TV (« hub de la le steam »).
+        self.assertEqual(L.analyser("hub télé", "fr"), (False, "tv"))
+        self.assertEqual(L.Ecoute("fr").entendre("hub télé", 0.0), [])
+
+    def test_prenom(self):
+        self.assertEqual(L.analyser("nestor lance netflix", "fr", "nestor"), (True, "web:netflix"))
+        self.assertEqual(L.analyser("hub netflix", "fr", "nestor"), (False, None))
+
+
+class AncreDuMotEveil(unittest.TestCase):
+    """Sorties réelles de Vosk (grammaire avec remplissage, 15 septembre 2026)."""
+
+    def test_hub_mal_entendu_derriere_l_ancre(self):
+        for texte, mot, attendu in [
+            ("ok aide lance la télé", "ok-hub", (True, "tv")),
+            ("salut va hub les films", "salut-hub", (True, "tv")),
+            ("salut hommes jeux", "salut-hub", (True, "gaming")),
+            ("salut jouer", "salut-hub", (True, "gaming")),
+            ("dis la hub retour", "dis-hub", (True, "retour")),
+        ]:
+            self.assertEqual(L.analyser(texte, "fr", mot), attendu, texte)
+
+    def test_ancre_seule_ou_presque_ouvre_l_ecoute(self):
+        e = L.Ecoute("fr", mot_eveil="salut-hub")
+        self.assertEqual(e.entendre("salut hommes", 0.0), ["voix:entendu:salut hommes", "voix:eveil"])
+        self.assertEqual(e.entendre("télé", 2.0)[1], "tv")
+        # « salut aide » : « Salut HUB. » dit seul, pas la commande d'aide.
+        self.assertEqual(L.analyser("salut aide", "fr", "salut-hub"), (True, None))
+
+    def test_phrases_ordinaires_apres_l_ancre(self):
+        for texte in ("salut tu vas bien", "ok d'accord on fait ça demain", "salut les copains on se retrouve",
+                      "dis donc il est tard"):
+            self.assertEqual(L.analyser(texte, "fr", "salut-hub" if texte.startswith("salut") else
+                                        "dis-hub" if texte.startswith("dis") else "ok-hub")[1], None, texte)
+
+    def test_joker_saute_jusqu_a_deux_mots(self):
+        # Vosk a rendu « Salut HUB, mets les jeux » (voix gilles) ainsi : les deux mots
+        # sautés remplacent « hub », quels qu'ils soient. Trois, c'est une phrase.
+        self.assertEqual(L.analyser("salut en bas mets les jeux", "fr", "salut-hub"), (True, "gaming"))
+        self.assertEqual(L.analyser("salut tu es en bas mets les jeux", "fr", "salut-hub"), (False, None))
+
+    def test_la_tv_transcrite_en_mots_ordinaires(self):
+        for texte in ("lyon veut devenir un hub européen de la logistique",
+                      "ce soir sur arte un documentaire sur les océans",
+                      "la nouvelle saison arrive sur netflix vendredi"):
+            self.assertEqual(L.Ecoute("fr").entendre(texte, 0.0), [], texte)
+
+
+class Vocabulaire(unittest.TestCase):
+    @staticmethod
+    def faux_gr_fst(mots):
+        import struct
+
+        def chaine(b):
+            return struct.pack("<i", len(b)) + b
+        entete = struct.pack("<i", 0x7EB2FEB4 & 0) + chaine(b"ngram") + chaine(b"standard") + \
+            struct.pack("<iiqqqq", 2, 1, 0, 0, 0, 0)
+        table = struct.pack("<I", 0x7EB2FB74) + chaine(b"words.txt") + struct.pack("<qq", len(mots), len(mots))
+        for cle, mot in enumerate(mots):
+            table += chaine(mot.encode()) + struct.pack("<q", cle)
+        chemin = Path(tempfile.mkdtemp()) / "Gr.fst"
+        chemin.write_bytes(entete + table + b"\x00" * 64)
+        return chemin
+
+    def test_table_de_mots(self):
+        chemin = self.faux_gr_fst(["<eps>", "!SIL", "[unk]", "nestor", "télé"])
+        self.assertEqual(L.vocabulaire_vosk(chemin), {"<eps>", "!SIL", "[unk]", "nestor", "télé"})
+
+    def test_fichier_absent_ou_autre(self):
+        self.assertEqual(L.vocabulaire_vosk("/nexiste/pas"), set())
+        autre = Path(tempfile.mkdtemp()) / "Gr.fst"
+        autre.write_bytes(b"\x00" * 200)
+        self.assertEqual(L.vocabulaire_vosk(autre), set())
+
+    def test_modele_reel_si_present(self):
+        chemin = Path(os.environ.get("HUB_VOIX_MODELES", "/opt/hub-voix/modeles")) / \
+            "vosk-model-small-fr-0.22" / "graph" / "Gr.fst"
+        if not chemin.is_file():
+            self.skipTest("modèle français absent")
+        mots = L.vocabulaire_vosk(chemin)
+        self.assertGreater(len(mots), 100000)
+        for mot in ("ok", "hub", "salut", "netflix", "nestor"):
+            self.assertIn(mot, mots)
+
 
 class Ecoute(unittest.TestCase):
     def setUp(self):
-        self.e = L.Ecoute("fr", delai_eveil=6.0)
+        self.e = L.Ecoute("fr", delai_eveil=6.0, mot_eveil="hub")
 
     def test_eveil_puis_commande(self):
         self.assertEqual(self.e.entendre("hub", 0.0), ["voix:entendu:hub", "voix:eveil"])
@@ -288,8 +426,8 @@ class Ecoute(unittest.TestCase):
         self.assertEqual(self.e.entendre("aide", 2.0), ["voix:entendu:aide", "aide", "voix:repos"])
 
     def test_inconnu_seul_en_anglais_ne_reveille_pas(self):
-        self.assertEqual(L.Ecoute("en").entendre("[unk]", 0.0), [])
-        self.assertEqual(L.Ecoute("en").entendre("help", 0.0), [])
+        self.assertEqual(L.Ecoute("en", mot_eveil="hub").entendre("[unk]", 0.0), [])
+        self.assertEqual(L.Ecoute("en", mot_eveil="hub").entendre("help", 0.0), [])
 
     def test_commande_sans_eveil_ignoree(self):
         # C'est la protection contre le son de la TV : sans « HUB », rien ne se passe.
@@ -341,7 +479,7 @@ class Ecoute(unittest.TestCase):
         self.assertEqual(self.e.entendre("bureau", 9.0)[1], "bureau")
 
     def test_texte_entendu_borne(self):
-        evenements = L.Ecoute("fr").entendre("hub " + "[unk] " * 200, 0.0)
+        evenements = L.Ecoute("fr").entendre("ok hub " + "[unk] " * 200, 0.0)
         self.assertLessEqual(len(evenements[0].encode()), L.TAILLE_MAX_ENTENDU + 20)
 
     def test_changer_de_langue(self):
@@ -376,6 +514,19 @@ class Cible(unittest.TestCase):
 
     def test_retour_sans_rien_a_fermer(self):
         self.assertIsNone(L.cible("retour", menu_ouvert=False, kodi=False, bureau=False))
+
+
+class ReglagesMotEveil(unittest.TestCase):
+    def test_lire(self):
+        dossier = Path(tempfile.mkdtemp())
+        chemin = dossier / "reglages.json"
+        self.assertEqual(L.lire_mot_eveil(chemin), L.MOT_EVEIL_PAR_DEFAUT)
+        for valeur, attendu in [("salut-hub", "salut-hub"), ("  Nestor", "nestor"), ("R2D2", L.MOT_EVEIL_PAR_DEFAUT),
+                                (7, L.MOT_EVEIL_PAR_DEFAUT)]:
+            chemin.write_text(json.dumps({"systeme": {"motEveil": valeur}}))
+            self.assertEqual(L.lire_mot_eveil(chemin), attendu, valeur)
+        chemin.write_text("[]")
+        self.assertEqual(L.lire_mot_eveil(chemin), L.MOT_EVEIL_PAR_DEFAUT)
 
 
 class Reglages(unittest.TestCase):
