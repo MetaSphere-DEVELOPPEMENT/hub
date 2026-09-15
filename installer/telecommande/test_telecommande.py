@@ -273,6 +273,56 @@ class Page(AvecServeur):
         self.assertGreaterEqual(statut, 400)
 
 
+class CommeUneApp(AvecServeur):
+    """Manifeste et icônes : ce que Chrome et Safari lisent pour l'écran d'accueil."""
+
+    def test_manifeste_servi_et_complet(self):
+        statut, h, m = self.requete("GET", "/manifest.webmanifest")
+        self.assertEqual(statut, 200)
+        self.assertTrue(h["content-type"].startswith("application/manifest+json"))
+        self.assertIn("content-security-policy", h)
+        # Les critères d'installation de Chrome : nom, start_url, display, 192 et 512.
+        self.assertTrue(m["name"] and m["short_name"])
+        self.assertEqual((m["start_url"], m["scope"], m["display"]), ("/", "/", "standalone"))
+        tailles = {i["sizes"] for i in m["icons"]}
+        self.assertTrue({"192x192", "512x512"} <= tailles)
+        self.assertTrue(any("maskable" in i["purpose"] for i in m["icons"]))
+        self.assertFalse(m.get("prefer_related_applications"))
+        for icone in m["icons"]:
+            self.assertEqual(self.requete("GET", icone["src"])[0], 200, icone["src"])
+
+    def test_icones_png_valides_aux_bonnes_tailles(self):
+        import struct
+        import zlib
+        for chemin, taille in T.ICONES.items():
+            statut, h, png = self.requete("GET", chemin)
+            self.assertEqual((statut, h["content-type"]), (200, "image/png"), chemin)
+            self.assertEqual(png[:8], b"\x89PNG\r\n\x1a\n")
+            largeur, hauteur = struct.unpack(">II", png[16:24])
+            self.assertEqual((largeur, hauteur), (taille, taille))
+            # Relire l'image : centre turquoise, coin à l'encre (fond opaque exigé par iOS).
+            debut = png.index(b"IDAT") + 4
+            longueur = struct.unpack(">I", png[debut - 8:debut - 4])[0]
+            brut = zlib.decompress(png[debut:debut + longueur])
+            ligne = 1 + 3 * taille
+            self.assertEqual(len(brut), ligne * taille)
+            coin = tuple(brut[1:4])
+            milieu = brut[ligne * (taille // 2):ligne * (taille // 2 + 1)]
+            centre = tuple(milieu[1 + 3 * (taille // 2):4 + 3 * (taille // 2)])
+            self.assertEqual(coin, T.ENCRE)
+            self.assertGreater(centre[1], 200, chemin)
+
+    def test_la_page_annonce_manifeste_icone_et_plein_ecran(self):
+        _s, h, corps = self.requete("GET", "/")
+        html = corps.decode()
+        self.assertIn('<link rel="manifest" href="/manifest.webmanifest">', html)
+        self.assertIn('rel="apple-touch-icon"', html)
+        self.assertIn('name="apple-mobile-web-app-capable" content="yes"', html)
+        self.assertIn('name="theme-color" content="#06070c"', html)
+        self.assertIn("manifest-src 'self'", h["content-security-policy"])
+        self.assertEqual(T.MANIFESTE["theme_color"], "#06070c")
+
+
 class AppairageHTTP(AvecServeur):
     def test_bon_code_delivre_un_jeton_et_renouvelle_le_code(self):
         ancien = self.service.appairage.code

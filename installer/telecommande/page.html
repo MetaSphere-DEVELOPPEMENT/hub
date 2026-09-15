@@ -22,6 +22,10 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="HUB">
+<meta name="application-name" content="HUB">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="32x32" href="/icone-32.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
 <title>HUB · Télécommande</title>
 <style>
 :root {
@@ -227,6 +231,25 @@ form.texte button {
 .raccourcis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 .raccourcis .touche { flex-direction: column; gap: 5px; min-height: 70px; font-size: 13px; font-weight: 550; color: var(--texte-doux); }
 
+/* ── Encart « écran d'accueil » ──────────────────────────────────────────── */
+.encart {
+  position: relative;
+  padding: 14px 44px 14px 16px; border-radius: var(--rayon);
+  background: linear-gradient(160deg, rgb(var(--tv) / .12), rgb(var(--tv) / .03));
+  border: 1px solid rgb(var(--tv) / .25);
+  font-size: 14px; line-height: 1.45; color: var(--texte-doux);
+}
+.encart strong { color: var(--texte); display: block; margin-bottom: 4px; font-size: 15px; }
+.encart ol { margin: 6px 0 0; padding-left: 20px; }
+.encart li + li { margin-top: 3px; }
+.encart .note { margin: 8px 0 0; font-size: 13px; color: var(--texte-pale); }
+.encart .fermer {
+  position: absolute; top: 6px; right: 6px; width: 36px; height: 36px;
+  border: 0; border-radius: 50%; background: transparent; color: var(--texte-doux); font-size: 20px;
+}
+.encart .principal { min-height: 46px; margin-top: 10px; font-size: 16px; }
+.symbole { display: inline-block; padding: 0 6px; border-radius: 6px; background: var(--verre-fort); color: var(--texte); }
+
 /* ── Feuilles ────────────────────────────────────────────────────────────── */
 dialog {
   width: min(480px, 100vw); max-width: 100vw; max-height: 90dvh;
@@ -303,6 +326,29 @@ dialog h2 { font-size: 18px; margin: 4px 4px 14px; }
       <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
     </button>
   </header>
+
+  <aside class="encart" id="encart" hidden aria-label="Ajouter à l'écran d'accueil">
+    <button class="fermer" data-action="encart-fermer" aria-label="Masquer ce conseil">×</button>
+    <strong>Ouvrir la télécommande comme une app</strong>
+    <div id="encart-ios" hidden>
+      <ol>
+        <li>Dans Safari, touchez <span class="symbole">Partager</span> (sur iOS 26, d'abord <span class="symbole">⋯</span>).</li>
+        <li>Choisissez « Sur l'écran d'accueil », laissez « Ouvrir comme app web » activé, puis « Ajouter ».</li>
+      </ol>
+      <p class="note">L'icône ouvre une app séparée de Safari : la première fois, retapez un code de la TV.</p>
+    </div>
+    <div id="encart-android" hidden>
+      <ol>
+        <li>Dans Chrome, touchez <span class="symbole">⋮</span> en haut à droite.</li>
+        <li>« Ajouter à l'écran d'accueil » (ou « Installer l'application »), puis « Ajouter ».</li>
+      </ol>
+      <p class="note" id="encart-android-http">En http, Chrome crée un simple raccourci qui peut garder la barre d'adresse. Plein écran garanti une fois la connexion sécurisée activée (⋯ → Dictée et connexion sécurisée).</p>
+    </div>
+    <div id="encart-autre" hidden>
+      <p class="note">Menu du navigateur → « Ajouter à l'écran d'accueil ».</p>
+    </div>
+    <button class="principal" id="installer" data-action="installer" hidden>Installer l'app</button>
+  </aside>
 
   <nav class="modes" aria-label="Modes">
     <button class="mode" data-cmd="tv">
@@ -399,6 +445,10 @@ dialog h2 { font-size: 18px; margin: 4px 4px 14px; }
     <button class="touche" data-cmd="theme:sombre" data-ferme>
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
       Thème sombre
+    </button>
+    <button class="touche" data-action="encart-montrer">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M12 8v6M9 11h6"/></svg>
+      Ajouter à l'écran d'accueil
     </button>
     <button class="touche danger" data-cmd="eteindre" data-ferme>
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v9"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg>
@@ -503,6 +553,7 @@ function afficher(ecran) {
     setTimeout(() => $("code").focus(), 50);
   } else {
     lireEtat();
+    montrerEncart();
   }
 }
 
@@ -673,9 +724,58 @@ async function lireEtat() {
 setInterval(lireEtat, 6000);
 document.addEventListener("visibilitychange", lireEtat);
 
+// ── Comme une app ──────────────────────────────────────────────────────────
+// Lancée depuis l'icône, la page n'a plus rien à conseiller. navigator.standalone
+// est l'ancienne propriété de Safari, display-mode la norme.
+const CLE_ENCART = "hub-telecommande-encart-vu";
+const enApp = () => matchMedia("(display-mode: standalone), (display-mode: fullscreen)").matches
+  || navigator.standalone === true;
+const plateforme = () => {
+  const ua = navigator.userAgent;
+  // iPadOS se présente en Mac : l'écran tactile le trahit.
+  if (/iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return "ios";
+  if (/Android/.test(ua)) return "android";
+  return "autre";
+};
+let invitationInstallation = null;
+
+function montrerEncart(force = false) {
+  let vu = false;
+  try { vu = localStorage.getItem(CLE_ENCART) === "1"; } catch { /* sans stockage */ }
+  if (enApp() || (vu && !force)) { $("encart").hidden = true; return; }
+  const p = plateforme();
+  $("encart-ios").hidden = p !== "ios";
+  $("encart-android").hidden = p !== "android";
+  $("encart-autre").hidden = p !== "autre";
+  $("encart-android-http").hidden = isSecureContext;
+  $("installer").hidden = !invitationInstallation;
+  $("encart").hidden = false;
+}
+
+// Chrome ne l'émet qu'en contexte sécurisé et, sans service worker, rarement :
+// le bouton est un bonus, les gestes écrits restent la voie principale.
+addEventListener("beforeinstallprompt", e => {
+  e.preventDefault();
+  invitationInstallation = e;
+  if (!$("encart").hidden) $("installer").hidden = false;
+});
+addEventListener("appinstalled", () => { $("encart").hidden = true; invitationInstallation = null; });
+
 // ── Options et photo ───────────────────────────────────────────────────────
 const actions = {
   options: () => $("options").showModal(),
+  "encart-fermer": () => {
+    $("encart").hidden = true;
+    try { localStorage.setItem(CLE_ENCART, "1"); } catch { /* sans stockage */ }
+  },
+  "encart-montrer": () => { $("options").close(); montrerEncart(true); scrollTo({ top: 0, behavior: "smooth" }); },
+  installer: async () => {
+    if (!invitationInstallation) return;
+    invitationInstallation.prompt();
+    await invitationInstallation.userChoice.catch(() => null);
+    invitationInstallation = null;
+    $("installer").hidden = true;
+  },
   fermer: bouton => bouton.closest("dialog").close(),
   photo: () => {
     $("options").close();
