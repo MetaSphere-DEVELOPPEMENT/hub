@@ -138,21 +138,43 @@
 </div>
 
 <div class="calque voile" id="editeur-profil">
-  <div class="dialogue">
-    <div class="avatar editeur-apercu" id="editeur-apercu">S</div>
-    <h2 id="editeur-titre"></h2>
-    <div class="etiquette-champ" data-t="profils.nom"></div>
-    <button class="champ" data-nav data-action="editer-nom"><span id="editeur-nom"></span><span class="indice">OK ✎</span></button>
-    <div class="etiquette-champ" data-t="profils.couleur"></div>
-    <div class="nuancier" id="nuancier"></div>
-    <div class="etiquette-champ" data-t="profils.photo"></div>
-    <div class="galerie-avatars" id="galerie-avatars"></div>
-    <p class="aide-photo" id="aide-photo" data-t="profils.photo.aide"></p>
+  <div class="dialogue editeur">
+    <div class="editeur-colonnes">
+      <div class="editeur-identite">
+        <div class="avatar editeur-apercu" id="editeur-apercu">S</div>
+        <h2 id="editeur-titre"></h2>
+        <div class="etiquette-champ" data-t="profils.nom"></div>
+        <button class="champ" data-nav data-action="editer-nom"><span id="editeur-nom"></span><span class="indice">OK ✎</span></button>
+        <div class="etiquette-champ" data-t="profils.couleur"></div>
+        <div class="nuancier" id="nuancier"></div>
+        <div class="etiquette-champ" data-t="profils.photo"></div>
+        <div class="galerie-avatars" id="galerie-avatars"></div>
+        <p class="aide-photo" id="aide-photo" data-t="profils.photo.aide"></p>
+      </div>
+      <div class="editeur-securite">
+        <div class="etiquette-champ" data-t="profils.modes"></div>
+        <div class="options gauche" id="editeur-modes"></div>
+        <p class="aide-photo" id="editeur-restreint" data-t="profils.restreint" hidden></p>
+        <div class="etiquette-champ" data-t="profils.code"></div>
+        <div class="options gauche" id="editeur-code"></div>
+        <div id="editeur-protections"></div>
+      </div>
+    </div>
     <div class="choix">
       <button class="bouton danger" data-nav data-action="supprimer-profil" id="editeur-supprimer"><span data-t="supprimer"></span></button>
       <button class="bouton" data-nav data-action="fermer"><span data-t="annuler"></span></button>
       <button class="bouton" data-nav data-action="enregistrer-profil"><span data-t="enregistrer"></span></button>
     </div>
+  </div>
+</div>
+
+<div class="calque voile" id="code">
+  <div class="dialogue code-dialogue">
+    <div class="avatar editeur-apercu" id="code-avatar"></div>
+    <h2 id="code-titre"></h2>
+    <p id="code-detail"></p>
+    <div class="points" id="code-points"><i></i><i></i><i></i><i></i></div>
+    <div class="pave" id="code-pave"></div>
   </div>
 </div>
 
