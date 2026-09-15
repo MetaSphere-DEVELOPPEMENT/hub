@@ -240,6 +240,25 @@ class Suivi(unittest.TestCase):
         self.assertLessEqual(te.lire_etat(self.c["etat"])["profils"]["camille"][MARDI]["secondes"], 60)
 
 
+class Avertir(unittest.TestCase):
+    def test_chaque_mode_son_moyen(self):
+        appels = []
+        kodi = lambda methode, params=None: appels.append(("kodi", methode, params["title"]))
+        lancer = lambda commande, **_: appels.append(("lance", commande[0] if commande[0] == "notify-send" else commande[-3]))
+        self.assertEqual(te.avertir("bientot", 5, "tv", "fr", executer=lancer, kodi=kodi), "kodi")
+        self.assertEqual(appels[-1], ("kodi", "GUI.ShowNotification", "Plus que 5 min d'écran aujourd'hui"))
+        self.assertEqual(te.avertir("fin", 0, "bureau", "en", executer=lancer, kodi=kodi), "notify-send")
+        self.assertEqual(te.avertir("fin", 0, "web", "fr", executer=lancer, kodi=kodi), "fenetre")
+        self.assertEqual(appels[-1], ("lance", "fenetre"))
+
+    def test_kodi_injoignable_repli_sur_la_fenetre(self):
+        def kodi(*_):
+            raise ConnectionRefusedError()
+        lances = []
+        self.assertEqual(te.avertir("bientot", 3, "tv", "fr", executer=lambda c, **_: lances.append(c), kodi=kodi), "fenetre")
+        self.assertIn("Plus que 3 min d'écran aujourd'hui", lances[0])
+
+
 class Commande(unittest.TestCase):
     def test_arguments(self):
         self.assertEqual(te.analyser(["lancer", "tv", "--", "kodi", "--windowing=wayland"]),
