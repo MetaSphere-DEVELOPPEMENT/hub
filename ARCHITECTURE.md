@@ -153,13 +153,114 @@ une ; « revenir au HUB » est la fin normale d'une session.
 | Mode | Ce qui tourne | Retour au HUB |
 |---|---|---|
 | **HUB** | un menu plein écran, lancé automatiquement | — |
-| **TV** | session autonome de Kodi | Kodi quitte |
+| **TV** | Kodi, lancé dans la session HUB | Kodi quitte (Accueil ou F12) |
 | **Gaming** | client de streaming en plein écran | le client quitte |
 | **Desktop** | session GNOME normale | déconnexion |
 
 Aucun mode ne dépend des autres : si Kodi casse, le HUB et le reste vivent. Et le
 retour au HUB n'est pas un bricolage — c'est le comportement du gestionnaire de
 session, qu'on ne réécrit pas.
+
+## La session kiosque, éprouvée en machine virtuelle
+
+Ce qui suit a été vu, pas supposé : Ubuntu 26.04.1 installée automatiquement dans
+la VM d'essai (`vm/lancer-vm.sh`), puis `installer/hub-installer.sh --pour-de-vrai`.
+Le détail des preuves est plus bas.
+
+### Ce qui ne marche plus, et pourquoi on n'insiste pas
+
+**Ubuntu 26.04 est Wayland seul.** Plus de serveur Xorg : `/usr/share/xsessions` ne
+sert à rien, et un menu écrit en bash dans un terminal n'a nulle part où s'afficher.
+La première version de l'installateur visait exactement cela.
+
+### La forme retenue
+
+| Pièce | Où | Pourquoi |
+|---|---|---|
+| Session `gnome-kiosk-script-wayland` | paquet `gnome-kiosk-script-session` | fournie par GNOME : un compositeur plein écran qui exécute un script, rien d'autre — pas de couche maison |
+| `~/.local/bin/gnome-kiosk-script` | `installer/gnome-kiosk-script` | la boucle menu → mode → `exec "$0"`, motif de l'exemple de GNOME : revenir au menu, c'est la fin du mode |
+| Menu | `/usr/local/bin/hub-menu` + `/usr/local/share/hub/menu/` | page locale dans WebKitGTK (`python3-gi`, `gir1.2-gtk-4.0`, `gir1.2-webkit-6.0`) ; écrit le choix et se termine |
+| Réglages du menu | `~/.config/hub/reglages.json` | écrit par le menu ; l'installateur ne l'écrase jamais |
+| Kodi | `kodi --windowing=wayland` dans la session | client Wayland ordinaire, mis plein écran par le compositeur |
+| Retour depuis Kodi | `~/.kodi/userdata/keymaps/hub.xml` | Accueil et F12 → `Quit` ; noms de touches lus dans les sources de Kodi 21.3 |
+| Bureau | `hub-vers-bureau` | le bureau GNOME ne tourne pas dans un kiosque : on choisit la session `ubuntu` pour la connexion suivante (AccountsService `SetSession`) et on ferme la session HUB |
+| Retour du bureau | `hub-session-par-defaut` en autostart (`OnlyShowIn=ubuntu`) | remet le HUB par défaut dès l'ouverture du bureau, quelle que soit la façon d'en sortir ensuite |
+
+### Les pièges rencontrés
+
+- **GDM : connexion automatique ET temporisée.** `AutomaticLogin` ne vaut qu'une
+  fois par démarrage ; sans `TimedLoginEnable=true`, `TimedLogin`, `TimedLoginDelay=1`,
+  la déconnexion du bureau laisse l'écran de connexion.
+- **`X-GNOME-Autostart-Phase` fait ignorer l'entrée** par GNOME 50 : l'autostart du
+  bureau n'en porte pas.
+- **« Help Improve Ubuntu » recouvre le menu.** `gnome-initial-setup` s'ouvre à la
+  première connexion et après une montée de version, y compris dans le kiosque, et
+  attend une souris. Il faut `~/.config/gnome-initial-setup-done` **et**
+  `~/.config/gnome-initial-setup/upgrade-<VERSION_ID>-done` ; l'installateur dérive
+  le numéro de `/etc/os-release`.
+- **Kodi demandait « Disabled add-ons — enable Spectrum? »** au premier lancement.
+  Le paquet `kodi` recommande `kodi-visualization-spectrum` ; installé par apt, cet
+  add-on n'est pas dans le manifeste de Kodi (`/usr/share/kodi/system/addon-manifest.xml`),
+  qui l'inscrit désactivé et pose la question (`CApplication::ConfigureAndEnableAddons`,
+  sources 21.3). Le manifeste est unique et appartient au paquet : on n'y touche
+  pas. L'installateur installe Kodi **sans recommandations** ; une visualisation
+  musicale n'a rien à faire sur le HUB. Tout add-on binaire ajouté plus tard par apt
+  reposera la question une fois — c'est le comportement voulu par Kodi.
+
+### Ce que la VM ne prouve pas
+
+Le rendu réel (UHD 630, HDMI, fréquence), l'audio, le démarrage à froid du M720q, et
+le pilotage autrement qu'au clavier. La VM n'a ni GPU 3D ni sortie audio.
+
+## Audio
+
+### Le matériel
+
+- **Enceintes PC 2.1** : deux satellites et un caisson, entrée analogique (jack).
+  Modèle et entrées exactes : **non relevés**.
+- **TV Sony** annoncée « KD55XG670 », sans doute **KD-55XG7005** (voir plus haut,
+  à confirmer sur l'étiquette). Ses sorties audio — prise casque, optique, ARC — ne
+  sont **pas vérifiées** dans la fiche consultée.
+
+### Les deux branchements possibles
+
+| | Jack analogique du M720q → enceintes | HDMI → TV → sortie casque ou optique de la TV → enceintes |
+|---|---|---|
+| Latence | aucune ajoutée par la TV : le son part avant l'image | la TV retarde son propre son pour l'aligner sur l'image qu'elle traite |
+| Volume | celui du HUB ou des enceintes ; **la télécommande de la TV ne le règle pas** | un seul volume, celui de la TV — si sa sortie casque suit la télécommande |
+| Dépendances | la sortie jack du M720q (qualité, souffle : non mesurés) | les réglages de la TV (sortie casque « variable » ou « fixe », haut-parleurs coupés ou non) ; l'optique demande un convertisseur si les enceintes n'ont qu'un jack |
+| Sources autres que le HUB | n'ont pas de son sur les enceintes | tout ce qui passe par la TV sort sur les enceintes |
+
+**Rien n'est tranché.** Les deux se défendent, et la réponse dépend de mesures qui
+n'existent que devant la TV.
+
+### Lip-sync
+
+Si le son est en avance ou en retard, Kodi a un **décalage audio** réglable pendant
+la lecture (menu audio de la vidéo, « Décalage audio »), par pas de 25 ms. On le
+règle après mesure, pas avant : avec le jack analogique, c'est l'image qui risque
+d'être en retard (traitement de la TV) ; avec la sortie de la TV, elle compense en
+principe elle-même.
+
+### Contenus 5.1
+
+Les enceintes sont 2.1 : **aucune sortie séparée pour le caisson.** Le caisson reçoit
+son grave par le filtre des enceintes, à partir des deux canaux. Kodi doit donc
+**mixer en stéréo** : Réglages → Système → Audio → *Nombre de canaux* = **2.0**. Sans
+cela, un film 5.1 envoyé tel quel peut perdre les dialogues (canal central) sur une
+sortie qui n'en a pas. Le passthrough (Dolby, DTS) n'a pas de sens vers ces
+enceintes.
+
+### À mesurer, dans l'ordre
+
+- [ ] relever le modèle des enceintes et leurs entrées (jack, RCA, optique ?)
+- [ ] relever les sorties audio de la TV et si sa sortie casque suit la télécommande
+- [ ] jack du M720q : souffle à volume nul, niveau suffisant
+- [ ] sortie de la TV : même écoute, et comportement des haut-parleurs de la TV
+- [ ] décalage son/image mesuré sur chaque branchement (vidéo de synchronisation,
+      clap), et valeur du décalage audio Kodi retenue
+- [ ] film 5.1 en *Nombre de canaux* 2.0 : dialogues audibles, grave présent
+- [ ] **trancher le branchement**, et l'écrire ici avec la date et les mesures
 
 ## Ce qui reste à trancher avant le prototype
 
