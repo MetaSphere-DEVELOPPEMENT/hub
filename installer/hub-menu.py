@@ -494,6 +494,7 @@ def lancer():
             self.choix = None
             self.fichier = None
             self.etat_maj = None
+            self.suivi_maj = False
             self.vue = None
             self.ecoute = None
 
@@ -554,15 +555,27 @@ def lancer():
             self.vue = vue
             self.ecouter_voix()
             self.telecommande = initial["telecommande"]
+            self.suivre_si_en_cours()
             GLib.timeout_add_seconds(2, self.surveiller_telecommande)
             return vue
+
+        def suivre_si_en_cours(self):
+            # Une mise à jour lancée ailleurs (télécommande, SSH) se suit aussi depuis le menu.
+            etat = etat_mise_a_jour()
+            if etat and etat["etape"] not in ("terminee", "echec", "a-jour") and not self.suivi_maj:
+                self.suivi_maj = True
+                self.etat_maj = etat
+                GLib.timeout_add_seconds(2, self.suivre_mise_a_jour)
 
         def suivre_mise_a_jour(self):
             etat = etat_mise_a_jour()
             if etat != self.etat_maj:
                 self.etat_maj = etat
                 self.vers_page({"type": "maj", "etat": etat})
-            return not (etat and etat["etape"] in ("terminee", "echec", "a-jour"))
+            fini = bool(etat and etat["etape"] in ("terminee", "echec", "a-jour"))
+            if fini:
+                self.suivi_maj = False
+            return not fini
 
         def surveiller_telecommande(self):
             etat = etat_telecommande(c)
@@ -616,10 +629,15 @@ def lancer():
                 self.en_fond(lambda: {"type": "minuteur", "fin": programmer_minuteur(c, minutes)})
             elif genre == "maj-verifier":
                 self.en_fond(lambda: {"type": "maj", "verification": verifier_mise_a_jour(), "etat": etat_mise_a_jour()})
+            elif genre == "maj-etat":
+                self.vers_page({"type": "maj", "etat": etat_mise_a_jour()})
+                self.suivre_si_en_cours()
             elif genre == "maj-appliquer":
                 if lancer_mise_a_jour():
                     self.etat_maj = None
-                    GLib.timeout_add_seconds(2, self.suivre_mise_a_jour)
+                    if not self.suivi_maj:
+                        self.suivi_maj = True
+                        GLib.timeout_add_seconds(2, self.suivre_mise_a_jour)
                 else:
                     self.vers_page({"type": "maj", "etat": {"etape": "echec", "raison": "lancement"}})
             elif genre == "relancer":

@@ -368,6 +368,33 @@ test("mise à jour : échec des tests annoncé, rien d'installé", async () => {
   assert.deepEqual(await messages("relancer"), []);
 });
 
+test("clavier AZERTY : les touches 1 2 3 (sans Maj) ouvrent les modes et tapent le code", async () => {
+  await ouvrir({ retour: true });
+  await page.keyboard.down("Shift"); await page.keyboard.up("Shift");
+  await page.dispatchEvent("body", "keydown", {});
+  await page.evaluate(() => dispatchEvent(new KeyboardEvent("keydown", { key: '"', code: "Digit3", bubbles: true })));
+  await attendreChoix();
+  assert.deepEqual(await messages("choix"), [{ type: "choix", mode: "bureau" }]);
+});
+
+test("navigation : Haut depuis Fermer reste dans le contenu et atteint Rechercher", async () => {
+  await ouvrir({ retour: true });
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await touche("r");
+  await page.click('[data-section="apropos"]');
+  await page.evaluate(() => document.querySelector('[data-cle="fermer-reglages"]').dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
+  await touche("ArrowUp");
+  assert.equal(await focus(), "maj-verifier");
+  assert.equal((await messages("maj-etat")).length >= 1, true, "l'état d'une mise à jour en cours est demandé à l'ouverture");
+});
+
+test("mise à jour : un état « terminee » ancien ne relance pas le menu", async () => {
+  await ouvrir({ retour: true });
+  await page.evaluate(() => window.hub.recevoir({ type: "maj", etat: { etape: "terminee", version: "abc" } }));
+  await page.waitForTimeout(4600);
+  assert.deepEqual(await messages("relancer"), []);
+});
+
 test("météo reçue de hub-menu : puce, alerte pluie et panneau détaillé", async () => {
   await ouvrir();
   // Open-Meteo (timezone=auto) donne des heures locales sans fuseau : on fait pareil.
