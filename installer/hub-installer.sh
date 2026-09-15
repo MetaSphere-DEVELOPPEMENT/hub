@@ -606,12 +606,15 @@ etape_habillage() {
     faire update-alternatives --install /usr/share/plymouth/themes/default.plymouth default.plymouth \
       "$cible/hub.plymouth" 200 &&
     faire update-alternatives --set default.plymouth "$cible/hub.plymouth" || { rm -rf "$genere"; return 1; }
-    # Ubuntu 26.04 construit l'initramfs avec dracut ; le thème doit y être, sinon
-    # Plymouth affiche celui d'avant jusqu'au montage de la racine.
-    if command -v dracut >/dev/null; then
-      faire dracut --force --regenerate-all || { rm -rf "$genere"; return 1; }
-    else
+    # Le thème doit être dans l'initramfs, sinon Plymouth affiche celui d'avant jusqu'au
+    # montage de la racine. Ubuntu 26.04 le construit avec dracut, mais par
+    # update-initramfs, que dracut fournit : il ne régénère que les noyaux présents
+    # dans /boot. « dracut --regenerate-all » parcourt /usr/lib/modules et échoue sur
+    # le dossier qu'un ancien noyau désinstallé y laisse (vu en VM le 15/09/2026).
+    if command -v update-initramfs >/dev/null; then
       faire update-initramfs -u -k all || { rm -rf "$genere"; return 1; }
+    else
+      faire dracut --force || { rm -rf "$genere"; return 1; }
     fi
     ok "Plymouth : thème hub, initramfs reconstruit"
   fi
