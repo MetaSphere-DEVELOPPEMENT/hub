@@ -17,6 +17,8 @@
 const PONT = window.webkit?.messageHandlers?.hub || null;
 const INITIAL = window.HUB_INITIAL || {};
 const parametres = new URLSearchParams(location.search);
+// Aperçu depuis la clé USB : le menu tourne dans un navigateur, rien n'est installé.
+const APERCU = parametres.has("apercu");
 
 const COULEURS_MODE = {
   tv: [62, 224, 208],
@@ -734,6 +736,7 @@ function annoncer(texte) {
 
 function lancer(carte) {
   if (verrou) return;
+  if (APERCU) { son("ok"); return annoncer(t("apercu.mode", { mode: carte.querySelector(".nom").textContent })); }
   if (!modeAutorise(carte.dataset.mode)) { son("erreur"); return annoncer(t("mode.interdit")); }
   if (carte.dataset.indisponible) {
     son("erreur");
@@ -751,6 +754,7 @@ function lancer(carte) {
 }
 
 function eteindre() {
+  if (APERCU) { fermerTout(); return annoncer(t("apercu.eteindre")); }
   verrou = true;
   document.body.classList.add("depart");
   setTimeout(() => envoyer({ type: "choix", mode: "eteindre" }), 620);
@@ -1725,6 +1729,7 @@ function appliquerTout() {
 
 appliquerTout();
 rendreReprises();
+if (APERCU) document.body.append(el("div", { class: "bandeau-apercu" }, t("apercu.bandeau")));
 setInterval(() => { horloge(); majMinuteur(); }, 5000);
 
 // Intro à l'allumage seulement : revenir de Kodi doit être immédiat.

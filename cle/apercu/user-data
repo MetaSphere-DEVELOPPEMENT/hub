@@ -1,0 +1,15 @@
+#cloud-config
+# Aperçu du HUB depuis la clé : Ubuntu tourne en mémoire, rien n'est écrit sur le
+# disque interne. Le menu du HUB s'ouvre en plein écran dans le navigateur de la
+# session live ; ses réglages vivent le temps de la session.
+write_files:
+  - path: /etc/xdg/autostart/hub-apercu.desktop
+    content: |
+      [Desktop Entry]
+      Type=Application
+      Name=Aperçu du HUB
+      Exec=sh -c 'sleep 4; firefox --kiosk "file:///home/ubuntu/HUB/index.html?apercu"'
+      X-GNOME-Autostart-enabled=true
+runcmd:
+  # Firefox est un snap : il lit le dossier personnel, pas /cdrom. On y copie le menu.
+  - [sh, -c, "mkdir -p /home/ubuntu/HUB && cp -r /cdrom/hub/installer/menu/. /home/ubuntu/HUB/ && cp /cdrom/hub/installer/telecommande/qrcode.js /home/ubuntu/HUB/ && chown -R 999:999 /home/ubuntu/HUB 2>/dev/null; chown -R ubuntu: /home/ubuntu/HUB 2>/dev/null; true"]

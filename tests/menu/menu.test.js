@@ -395,6 +395,17 @@ test("mise à jour : un état « terminee » ancien ne relance pas le menu", asy
   assert.deepEqual(await messages("relancer"), []);
 });
 
+test("aperçu depuis la clé : bandeau, et aucun mode lancé", async () => {
+  page = await navigateur.newPage({ viewport: { width: 1920, height: 1080 } });
+  await page.route(/open-meteo\.com/, route => route.abort());
+  await page.goto(PAGE + "?apercu&sans-intro");
+  await page.waitForTimeout(300);
+  assert.match(await page.textContent(".bandeau-apercu"), /rien n'est installé/);
+  await page.keyboard.press("Enter");
+  assert.match(await page.textContent("#annonce"), /s'ouvrira ici/);
+  assert.ok(!(await page.evaluate(() => document.body.classList.contains("depart"))));
+});
+
 test("météo reçue de hub-menu : puce, alerte pluie et panneau détaillé", async () => {
   await ouvrir();
   // Open-Meteo (timezone=auto) donne des heures locales sans fuseau : on fait pareil.
