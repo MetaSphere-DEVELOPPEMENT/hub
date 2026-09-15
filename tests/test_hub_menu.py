@@ -152,6 +152,32 @@ class Telecommande(AvecDossier):
         self.assertEqual(hub_menu.message_voix("texte:Brest".encode()), {"type": "texte", "texte": "Brest"})
 
 
+class MiseAJour(unittest.TestCase):
+    def test_verifier_rend_la_reponse_de_l_outil(self):
+        faux = lambda *a, **k: SimpleNamespace(stdout='{"disponible": true, "distant": "abc", "installee": "def"}', returncode=0)
+        self.assertEqual(hub_menu.verifier_mise_a_jour(faux)["disponible"], True)
+
+    def test_outil_absent_ou_reponse_illisible(self):
+        def absent(*a, **k):
+            raise FileNotFoundError("hub-mise-a-jour")
+        self.assertEqual(hub_menu.verifier_mise_a_jour(absent)["erreur"], "indisponible")
+        illisible = lambda *a, **k: SimpleNamespace(stdout="pas du json", returncode=1)
+        self.assertEqual(hub_menu.verifier_mise_a_jour(illisible)["erreur"], "indisponible")
+
+    def test_lancement_par_systemd(self):
+        commandes = []
+        ok = hub_menu.lancer_mise_a_jour(lambda cmd, **k: commandes.append(cmd) or SimpleNamespace(returncode=0))
+        self.assertTrue(ok)
+        self.assertEqual(commandes, [["systemctl", "start", "--no-block", "hub-mise-a-jour.service"]])
+
+    def test_etat(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "etat.json"
+            self.assertIsNone(hub_menu.etat_mise_a_jour(f))
+            f.write_text('{"etape": "tests", "version": "abc"}')
+            self.assertEqual(hub_menu.etat_mise_a_jour(f)["etape"], "tests")
+
+
 class ReprisesKodi(unittest.TestCase):
     """Base de test aux colonnes de Kodi 21 (movie_view, episode_view, art, texture)."""
 

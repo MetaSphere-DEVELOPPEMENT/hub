@@ -859,3 +859,7 @@ body.verrouille .centre, body.verrouille .pied .aides { filter: blur(18px); opac
 .appairage .url { font-family: "Ubuntu Sans Mono", monospace; }
 
 .dialogue .aide-photo.conseil { text-align: left; color: rgb(var(--bureau)); margin-top: .7rem; }
+
+.barre-maj { display: block; margin-top: .7rem; height: .4rem; border-radius: 99rem; background: var(--verre-fort); overflow: hidden; }
+.barre-maj i { display: block; height: 100%; border-radius: inherit; background: rgb(var(--accent)); box-shadow: 0 0 1rem rgb(var(--accent)); transition: width .8s var(--souple); }
+.infos + .rangee { margin-top: 1rem; }

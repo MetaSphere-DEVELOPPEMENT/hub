@@ -341,6 +341,33 @@ test("télécommande : QR code et code d'appairage, annonce quand un téléphone
   assert.match(await page.textContent("#contenu-reglages"), /indisponible/);
 });
 
+test("mise à jour : rechercher, installer, suivre la progression puis relancer le menu", async () => {
+  await ouvrir({ retour: true });
+  await page.evaluate(() => window.hub.recevoir({ type: "commande", nom: "reglages" }));
+  await page.click('[data-section="apropos"]');
+  await page.click('[data-cle="maj-verifier"]');
+  assert.equal((await messages("maj-verifier")).length, 1);
+  await page.evaluate(() => window.hub.recevoir({ type: "maj", verification: { disponible: true, distant: "abc1234", installee: "0000000" }, etat: null }));
+  assert.match(await page.textContent("#contenu-reglages"), /Nouvelle version disponible \(abc1234\)/);
+  await page.click('[data-cle="maj-appliquer"]');
+  assert.equal((await messages("maj-appliquer")).length, 1);
+  await page.evaluate(() => window.hub.recevoir({ type: "maj", etat: { etape: "tests", version: "abc1234" } }));
+  assert.ok(await page.isVisible(".barre-maj"));
+  assert.ok(!(await page.isVisible('[data-cle="maj-verifier"]')), "pas de nouvelle recherche pendant l'installation");
+  await page.evaluate(() => window.hub.recevoir({ type: "maj", etat: { etape: "terminee", version: "abc1234" } }));
+  await page.waitForFunction(() => window.__messages.some(m => m.type === "relancer"), null, { timeout: 7000 });
+});
+
+test("mise à jour : échec des tests annoncé, rien d'installé", async () => {
+  await ouvrir({ retour: true });
+  await page.evaluate(() => window.hub.recevoir({ type: "commande", nom: "reglages" }));
+  await page.click('[data-section="apropos"]');
+  await page.evaluate(() => window.hub.recevoir({ type: "maj", etat: { etape: "echec", raison: "tests" } }));
+  assert.match(await page.textContent("#contenu-reglages"), /rien n'a été installé/);
+  await page.waitForTimeout(500);
+  assert.deepEqual(await messages("relancer"), []);
+});
+
 test("météo reçue de hub-menu : puce, alerte pluie et panneau détaillé", async () => {
   await ouvrir();
   // Open-Meteo (timezone=auto) donne des heures locales sans fuseau : on fait pareil.
