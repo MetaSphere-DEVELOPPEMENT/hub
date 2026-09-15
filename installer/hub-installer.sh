@@ -42,6 +42,9 @@ set -uo pipefail
 DEPOT="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"   # le dossier installer/
 VERSION_ATTENDUE="26.04"
 SESSION_HUB="gnome-kiosk-script-wayland"
+# Source par défaut de la mise à jour depuis le menu : le dépôt du projet. Écrite
+# seulement si /etc/hub/mise-a-jour.json n'existe pas.
+SOURCE_MISE_A_JOUR='{"source": "https://github.com/MetaSphere-DEVELOPPEMENT/hub.git", "branche": "master"}'
 JOURNAL="/var/log/hub-installer.log"
 POUR_DE_VRAI=0
 SANS_AUDIT=0
@@ -567,9 +570,71 @@ etape_demarrage() {
   fi
 }
 
-# ── 8. Mise à jour depuis le menu ─────────────────────────────────────────────
+# ── 8. Habillage : hub-theme et démarrage graphique ───────────────────────────
+etape_habillage() {
+  etape "8. Habillage aux couleurs du profil"
+  local theme="$DEPOT/theme/hub-theme"
+  if [ ! -f "$theme" ]; then
+    deja "aucun hub-theme dans le dépôt — étape sautée"
+    return 0
+  fi
+  # Les scripts de session l'appellent avant Kodi et le bureau ; absent, ils passent.
+  poser "$theme" /usr/local/bin/hub-theme 0755 || return 1
+
+  # Plymouth : l'écran de démarrage, aux couleurs du profil AU MOMENT de l'installation
+  # (il s'affiche avant toute session). Généré en tant que l'utilisateur, pour lire
+  # SON profil. On compare au thème en place pour ne reconstruire l'initramfs —
+  # une à deux minutes — que si quelque chose change.
+  local cible=/usr/share/plymouth/themes/hub genere
+  genere=$(mktemp -d) || { echec "mktemp impossible"; return 1; }
+  chmod 0755 "$genere"
+  [ "$(id -u)" -eq 0 ] && chown "$UTILISATEUR" "$genere"
+  local en_utilisateur=()
+  [ "$(id -u)" -eq 0 ] && en_utilisateur=(runuser -u "$UTILISATEUR" --)
+  if ! "${en_utilisateur[@]}" python3 "$theme" plymouth "$genere/hub" >/dev/null 2>&1; then
+    rm -rf "$genere"
+    alerte "hub-theme plymouth a échoué : l'écran de démarrage reste celui d'Ubuntu"
+    return 0
+  fi
+  local alternative
+  alternative=$(update-alternatives --query default.plymouth 2>/dev/null | awk '/^Value:/ {print $2}')
+  if diff -r -q "$genere/hub" "$cible" >/dev/null 2>&1 && [ "$alternative" = "$cible/hub.plymouth" ]; then
+    deja "Plymouth : thème hub en place"
+  else
+    faire install -d -m 0755 "$cible" &&
+    faire sh -c 'install -m 0644 "$1"/* "$2"/' copie "$genere/hub" "$cible" &&
+    faire update-alternatives --install /usr/share/plymouth/themes/default.plymouth default.plymouth \
+      "$cible/hub.plymouth" 200 &&
+    faire update-alternatives --set default.plymouth "$cible/hub.plymouth" || { rm -rf "$genere"; return 1; }
+    # Ubuntu 26.04 construit l'initramfs avec dracut ; le thème doit y être, sinon
+    # Plymouth affiche celui d'avant jusqu'au montage de la racine.
+    if command -v dracut >/dev/null; then
+      faire dracut --force --regenerate-all || { rm -rf "$genere"; return 1; }
+    else
+      faire update-initramfs -u -k all || { rm -rf "$genere"; return 1; }
+    fi
+    ok "Plymouth : thème hub, initramfs reconstruit"
+  fi
+  rm -rf "$genere"
+
+  # Sans « splash » sur la ligne du noyau, Plymouth reste en mode texte. Ubuntu Desktop
+  # le met par défaut ; une installation automatisée (la VM d'essai) ne l'avait pas.
+  if grep -qw splash /proc/cmdline; then
+    deja "noyau démarré avec splash"
+  elif grep -Eq '^GRUB_CMDLINE_LINUX_DEFAULT=.*\bsplash\b' /etc/default/grub 2>/dev/null; then
+    deja "splash dans /etc/default/grub (effectif au prochain démarrage)"
+  elif grep -q '^GRUB_CMDLINE_LINUX_DEFAULT=' /etc/default/grub 2>/dev/null; then
+    faire sed -i -E 's/^(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*)"/\1 splash"/' /etc/default/grub &&
+    faire update-grub || return 1
+    ok "splash ajouté à la ligne du noyau (GRUB)"
+  else
+    alerte "ligne du noyau sans splash et GRUB introuvable : Plymouth restera en mode texte"
+  fi
+}
+
+# ── 9. Mise à jour depuis le menu ─────────────────────────────────────────────
 etape_mise_a_jour() {
-  etape "8. Mise à jour depuis le menu"
+  etape "9. Mise à jour depuis le menu"
   local maj="$DEPOT/mise-a-jour"
   if [ ! -f "$maj/hub-mise-a-jour" ] || [ ! -f "$maj/hub-mise-a-jour.service" ]; then
     deja "aucune mise à jour dans le dépôt ($maj) — étape sautée"
@@ -622,17 +687,23 @@ etape_mise_a_jour() {
   if [ -f /etc/hub/mise-a-jour.json ]; then
     deja "/etc/hub/mise-a-jour.json conservé tel quel"
   elif [ "$POUR_DE_VRAI" = 1 ]; then
-    printf '%s\n' '{"source": "", "branche": "main"}' >/etc/hub/mise-a-jour.json &&
+    printf '%s\n' "$SOURCE_MISE_A_JOUR" >/etc/hub/mise-a-jour.json &&
       chmod 0644 /etc/hub/mise-a-jour.json || { echec "écriture de /etc/hub/mise-a-jour.json"; return 1; }
-    ok "/etc/hub/mise-a-jour.json (source vide : à renseigner)"
+    ok "/etc/hub/mise-a-jour.json (dépôt GitHub, branche master)"
   else
-    faire "créer /etc/hub/mise-a-jour.json avec une source vide"
+    faire "créer /etc/hub/mise-a-jour.json : $SOURCE_MISE_A_JOUR"
+  fi
+  # Le dépôt est privé : sans clé de déploiement, la vérification échouera, et le menu
+  # le dira. Ce n'est pas un échec de l'installation.
+  if grep -q 'github.com' /etc/hub/mise-a-jour.json 2>/dev/null &&
+     [ ! -e /root/.ssh/id_ed25519 ] && ! grep -q '"git@' /etc/hub/mise-a-jour.json 2>/dev/null; then
+    alerte "dépôt GitHub privé : poser une deploy key en lecture seule (mise-a-jour/README.md)"
   fi
 }
 
-# ── 9. Commande vocale (si elle est livrée) ──────────────────────────────────
+# ── 10. Commande vocale (si elle est livrée) ─────────────────────────────────
 etape_voix() {
-  etape "9. Commande vocale (si elle est livrée)"
+  etape "10. Commande vocale (si elle est livrée)"
   local voix="$DEPOT/voix" opt=/opt/hub-voix f
   if [ ! -f "$voix/hub-voix.py" ] || [ ! -f "$voix/hub-voix.service" ]; then
     deja "aucun service vocal complet dans le dépôt ($voix) — étape sautée"
@@ -642,17 +713,31 @@ etape_voix() {
   # venv à côté) : l'installateur s'y plie plutôt que de la réécrire, pour qu'un
   # seul endroit décide où vit le service.
   installer_paquets -- python3-venv pipewire-bin curl unzip || return 1
-  for f in hub-voix.py hub_voix_logique.py; do
-    poser "$voix/$f" "$opt/$f" 0755 || return 1
-  done
+  poser "$voix/hub-voix.py"         "$opt/hub-voix.py"         0755 || return 1
+  poser "$voix/hub_voix_logique.py" "$opt/hub_voix_logique.py" 0644 || return 1
   # Vosk n'est pas empaqueté par Ubuntu : un venv isolé, plutôt qu'un pip lancé en
   # root sur le Python du système, que la prochaine mise à jour d'apt casserait.
-  if [ -x "$opt/venv/bin/python" ] && "$opt/venv/bin/python" -c 'import vosk' 2>/dev/null; then
-    deja "$opt/venv (vosk)"
+  # Version FIGÉE et roue vérifiée par son empreinte (voix/README.md) : un « pip
+  # install vosk » installerait ce que PyPI sert le jour de la mise à jour.
+  local version_vosk=0.3.45
+  local empreinte_vosk=25e025093c4399d7278f543568ed8cc5460ac3a4bf48c23673ace1e25d26619f
+  if [ "$("$opt/venv/bin/python" -c 'import importlib.metadata as m, vosk; print(m.version("vosk"))' 2>/dev/null)" = "$version_vosk" ]; then
+    deja "$opt/venv (vosk $version_vosk)"
   else
-    faire python3 -m venv "$opt/venv" &&
-    faire "$opt/venv/bin/pip" install -q vosk || return 1
-    ok "$opt/venv (vosk)"
+    faire python3 -m venv "$opt/venv" || return 1
+    if [ "$POUR_DE_VRAI" = 1 ]; then
+      local roues; roues=$(mktemp -d) || { echec "mktemp impossible"; return 1; }
+      # --require-hashes vaut pour la roue de vosk ; ses dépendances (cffi, requests,
+      # srt, tqdm, websockets) viennent ensuite de PyPI, sans version figée.
+      printf 'vosk==%s --hash=sha256:%s\n' "$version_vosk" "$empreinte_vosk" >"$roues/exigences.txt"
+      faire "$opt/venv/bin/pip" install -q --no-deps --only-binary=:all: --require-hashes \
+        -r "$roues/exigences.txt" &&
+      faire "$opt/venv/bin/pip" install -q "vosk==$version_vosk"
+      local code=$?; rm -rf "$roues"; [ "$code" -eq 0 ] || return 1
+    else
+      faire "$opt/venv/bin/pip" install --require-hashes "vosk==$version_vosk (sha256 ${empreinte_vosk:0:12}…), puis ses dépendances"
+    fi
+    ok "$opt/venv (vosk $version_vosk, roue vérifiée)"
   fi
   if [ -f "$voix/telecharger-modele.sh" ]; then
     # Le script vérifie les empreintes et saute ce qui est déjà là : rejouable.
@@ -673,6 +758,7 @@ etape_accueil
 etape_kodi
 etape_telecommande
 etape_demarrage
+etape_habillage
 etape_mise_a_jour
 # La voix vient après la bascule du démarrage : elle télécharge (pip, modèles) et un
 # réseau capricieux ne doit pas priver le salon de son HUB. Son échec reste compté.
