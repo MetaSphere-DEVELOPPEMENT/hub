@@ -56,13 +56,13 @@ def main():
         return subprocess.CompletedProcess(commande, 0, stdout=sortie, stderr="")
 
     routeur = T.Routeur(chemins["socket"], executer=executer, processus=lambda _n: [], kodi_http=None)
-    service = T.Service(chemins, routeur=routeur, **({"https": True} if "--https" in options else {}))
-    ports = T.demarrer_ecoutes(service, "127.0.0.1", 0, 0 if "--https" in options else None) \
-        if hasattr(T, "demarrer_ecoutes") else None
-    if ports is None:
-        serveur = T.creer_serveur(service, "127.0.0.1", 0)
-        threading.Thread(target=serveur.serve_forever, args=(0.05,), daemon=True).start()
-        ports = {"http": serveur.server_address[1]}
+    tls = T.AutoriteLocale(chemins["tls"]) if "--https" in options else None
+    service = T.Service(chemins, routeur=routeur, tls=tls)
+    serveurs = T.demarrer_ecoutes(service, "127.0.0.1", 0, 0 if tls else None, sondage=0.05)
+    ports = {"http": serveurs[0].server_address[1]}
+    if len(serveurs) > 1:
+        ports["https"] = serveurs[1].server_address[1]
+        ports["racine"] = str(tls.racine_crt)
     print(json.dumps(ports), flush=True)
     sys.stdin.read()
 

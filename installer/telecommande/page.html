@@ -340,6 +340,29 @@ dialog h2 { font-size: 18px; margin: 4px 4px 14px; }
 .fichier { position: relative; }
 .fichier input { position: absolute; inset: 0; opacity: 0; width: 100%; cursor: pointer; }
 
+/* ── Connexion sécurisée ─────────────────────────────────────────────────── */
+.explication { margin: 0 4px 12px; color: var(--texte-doux); line-height: 1.5; font-size: 15px; }
+.statut-securite {
+  margin: 0 0 12px; padding: 10px 14px; border-radius: 14px;
+  background: var(--verre); border: 1px solid var(--lisere); font-size: 14px; color: var(--texte-doux);
+}
+.statut-securite.bon { color: rgb(var(--tv)); border-color: rgb(var(--tv) / .35); }
+.etapes { margin: 0 0 12px; padding-left: 22px; color: var(--texte-doux); line-height: 1.5; font-size: 14px; }
+.etapes li + li { margin-top: 8px; }
+.etapes a.touche { min-height: 52px; color: var(--texte); text-decoration: none; margin-top: 4px; }
+.empreinte {
+  display: block; margin-top: 6px; padding: 8px 10px; border-radius: 10px;
+  background: #07080e; color: var(--texte); font: 12px/1.5 ui-monospace, "Ubuntu Mono", monospace;
+  word-break: break-all; letter-spacing: .02em;
+}
+details.plateforme {
+  margin: 0 0 10px; padding: 10px 14px; border-radius: 14px;
+  background: var(--verre); border: 1px solid var(--lisere); font-size: 14px; color: var(--texte-doux); line-height: 1.5;
+}
+details.plateforme summary { color: var(--texte); font-weight: 600; cursor: pointer; }
+details.plateforme ol { margin: 8px 0 0; padding-left: 20px; }
+#securite { overflow-y: auto; }
+
 /* ── Message ─────────────────────────────────────────────────────────────── */
 #message {
   position: fixed; left: 50%; bottom: max(24px, env(safe-area-inset-bottom));
@@ -537,6 +560,10 @@ dialog h2 { font-size: 18px; margin: 4px 4px 14px; }
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 13V5.5a1.5 1.5 0 0 1 3 0V12M11 11.5v-2a1.5 1.5 0 0 1 3 0V12M14 10.5a1.5 1.5 0 0 1 3 0V12M17 11.5a1.5 1.5 0 0 1 3 0V15a6 6 0 0 1-6 6h-1.5a6 6 0 0 1-4.6-2.2L4.5 15.5a1.5 1.5 0 0 1 2.3-2L8 15"/></svg>
       <span id="libelle-main">Main : droitier</span>
     </button>
+    <button class="touche" data-action="securite">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2.5" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
+      Dictée et connexion sécurisée
+    </button>
     <button class="touche" data-action="encart-montrer">
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M12 8v6M9 11h6"/></svg>
       Ajouter à l'écran d'accueil
@@ -572,6 +599,43 @@ dialog h2 { font-size: 18px; margin: 4px 4px 14px; }
     </label>
     <button class="principal" id="photo-envoyer" disabled>Envoyer au HUB</button>
     <button class="touche" data-action="fermer">Annuler</button>
+  </div>
+</dialog>
+
+<dialog id="securite" aria-label="Dictée et connexion sécurisée">
+  <div class="poignee"></div>
+  <h2>Dictée et connexion sécurisée</h2>
+  <p class="explication">Le navigateur ne prête le micro qu'à une page en connexion sécurisée. Le HUB a sa propre
+    autorité de certification, limitée au réseau de la maison : installez-la une fois sur ce téléphone.</p>
+  <p class="statut-securite" id="securite-statut" role="status">Vérification…</p>
+  <div id="securite-etapes">
+    <ol class="etapes">
+      <li><a class="touche" id="lien-certificat" href="/hub-racine.crt">Télécharger le certificat du HUB</a></li>
+      <li>Avant d'y faire confiance, comparez son empreinte SHA-256 avec celle affichée sur la TV
+        (Réglages → Télécommande) : elles doivent être identiques.
+        <code class="empreinte" id="empreinte">…</code></li>
+    </ol>
+    <details class="plateforme" id="etapes-android">
+      <summary>Installer sur Android</summary>
+      <ol>
+        <li>Réglages → cherchez « certificat CA » (Sécurité → Plus de paramètres → Chiffrement et identifiants → Installer un certificat).</li>
+        <li>« Certificat CA » → « Installer quand même » → choisissez <b>HUB-autorite-locale.crt</b> dans Téléchargements. Un verrouillage d'écran est exigé.</li>
+        <li>Revenez ici et touchez « Ouvrir la version sécurisée ».</li>
+      </ol>
+    </details>
+    <details class="plateforme" id="etapes-ios">
+      <summary>Installer sur iPhone</summary>
+      <ol>
+        <li>Touchez « Autoriser » au téléchargement, puis ouvrez Réglages → « Profil téléchargé » → Installer.</li>
+        <li>L'empreinte se lit dans Réglages → Général → VPN et gestion de l'appareil → HUB → Plus de détails.</li>
+        <li>Obligatoire ensuite : Réglages → Général → Informations → Réglages des certificats (tout en bas) → activez « HUB autorité locale ».</li>
+        <li>Revenez dans Safari et touchez « Ouvrir la version sécurisée ».</li>
+      </ol>
+    </details>
+  </div>
+  <div class="liste">
+    <button class="principal" data-action="https" id="ouvrir-https">Ouvrir la version sécurisée</button>
+    <button class="touche" data-action="fermer">Fermer</button>
   </div>
 </dialog>
 
@@ -1043,10 +1107,94 @@ addEventListener("beforeinstallprompt", e => {
 });
 addEventListener("appinstalled", () => { $("encart").hidden = true; invitationInstallation = null; });
 
+// ── Connexion sécurisée ────────────────────────────────────────────────────
+let infoCertificat = null;
+async function lireCertificat() {
+  try {
+    const r = await fetch("/api/certificat", { cache: "no-store" });
+    infoCertificat = await r.json();
+  } catch { infoCertificat = null; }
+  return infoCertificat;
+}
+
+// Le téléphone fait-il confiance au certificat ? Une requête no-cors vers l'origine
+// https ne réussit que si la poignée de main TLS passe : la réponse est illisible,
+// mais son arrivée suffit.
+async function certificatReconnu(origine) {
+  const abandon = new AbortController();
+  const minuterie = setTimeout(() => abandon.abort(), 3000);
+  try {
+    await fetch(`${origine}sonde`, { mode: "no-cors", cache: "no-store", signal: abandon.signal });
+    return true;
+  } catch { return false; } finally { clearTimeout(minuterie); }
+}
+
+async function ouvrirSecurite() {
+  $("options").close();
+  const statut = $("securite-statut");
+  statut.className = "statut-securite";
+  statut.textContent = "Vérification…";
+  const p = plateforme();
+  $("etapes-android").open = p === "android";
+  $("etapes-ios").open = p === "ios";
+  $("securite").showModal();
+  const info = await lireCertificat();
+  const disponible = !!info?.disponible;
+  $("empreinte").textContent = info?.empreinte || "—";
+  $("securite-etapes").hidden = !disponible || isSecureContext && location.protocol === "https:";
+  $("ouvrir-https").hidden = true;
+  if (location.protocol === "https:" && isSecureContext) {
+    statut.className = "statut-securite bon";
+    statut.textContent = "Connexion sécurisée : la dictée est disponible (maintenez le bouton micro).";
+  } else if (!disponible) {
+    statut.textContent = "Le HTTPS est désactivé sur ce HUB : la dictée n'est pas disponible.";
+  } else if (await certificatReconnu(info.https)) {
+    statut.className = "statut-securite bon";
+    statut.textContent = "Certificat reconnu par ce téléphone.";
+    $("ouvrir-https").hidden = false;
+  } else {
+    statut.textContent = "Certificat pas encore installé sur ce téléphone.";
+    $("ouvrir-https").hidden = false;
+  }
+}
+
+async function passerEnHttps() {
+  try {
+    const { statut, donnees } = await api("/api/transfert", {});
+    if (statut === 200 && donnees?.url) { location.href = donnees.url; return; }
+    message("Connexion sécurisée indisponible sur le HUB");
+  } catch (e) {
+    if (!(e instanceof JetonRefuse)) message("HUB injoignable");
+  }
+}
+
+// Arrivée depuis la version http : le fragment porte un ticket à usage unique. Il
+// est retiré de l'adresse avant tout (historique, favori, écran d'accueil), puis
+// échangé contre un jeton propre à cette origine.
+async function arriverParTransfert() {
+  const trouve = /^#transfert=([A-Za-z0-9_-]{20,200})$/.exec(location.hash);
+  if (!trouve) return false;
+  history.replaceState(null, "", location.pathname);
+  if (lireJeton()) return false;
+  try {
+    const { statut, donnees } = await api("/api/appairer", { transfert: trouve[1], nom: nomDuTelephone() });
+    if (statut === 200 && donnees?.jeton) {
+      garderJeton(donnees.jeton);
+      afficher("telecommande");
+      message("Connexion sécurisée : dictée disponible");
+      return true;
+    }
+  } catch { /* on retombe sur le code */ }
+  message("Lien expiré : tapez le code affiché sur la TV");
+  return false;
+}
+
 // ── Options et photo ───────────────────────────────────────────────────────
 const actions = {
   options: () => $("options").showModal(),
+  securite: () => ouvrirSecurite(),
   allumer: () => { $("options").close(); $("allumer").showModal(); },
+  https: () => passerEnHttps(),
   disposition: bouton => { garderPreference(CLE_DISPOSITION, bouton.dataset.valeur); appliquerPreferences(); },
   "disposition-basculer": () => {
     garderPreference(CLE_DISPOSITION, lirePreference(CLE_DISPOSITION, "pave") === "pave" ? "boutons" : "pave");
@@ -1170,6 +1318,7 @@ $("photo-envoyer").addEventListener("click", async () => {
 });
 
 afficher(lireJeton() ? "telecommande" : "appairage");
+arriverParTransfert();
 </script>
 </body>
 </html>

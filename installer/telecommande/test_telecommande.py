@@ -20,11 +20,13 @@ import os
 import re
 import shutil
 import socket
+import ssl
 import stat
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -52,6 +54,8 @@ class AvecDossier(unittest.TestCase):
             "socket": self.dossier / "run" / "hub" / "menu.sock",
             "jetons": self.dossier / "config" / "hub" / "telecommande-jetons.json",
             "photos": self.dossier / "Images" / "HUB" / "profils",
+            "tls": self.dossier / "config" / "hub" / "telecommande-tls",
+            "reglages": self.dossier / "config" / "hub" / "reglages.json",
         }
         self.horloge = Horloge()
 
@@ -518,6 +522,225 @@ class PhotoProfil(AvecServeur):
         statut, _h, rep = self.envoyer(JPEG, jeton)
         self.assertEqual(statut, 200)
         self.assertEqual(self.photos(), [rep["fichier"]])
+
+
+# ── HTTPS local ─────────────────────────────────────────────────────────────
+@unittest.skipUnless(shutil.which("openssl"), "openssl absent")
+class AutoriteLocaleTLS(AvecDossier):
+    def autorite(self, **kw):
+        return T.AutoriteLocale(self.chemins["tls"], nom_machine="salon", **kw)
+
+    def test_racine_et_certificat_crees_cles_privees(self):
+        a = self.autorite()
+        self.assertTrue(a.preparer("192.168.1.40"))
+        self.assertEqual(stat.S_IMODE(os.stat(self.chemins["tls"]).st_mode), 0o700)
+        for cle in (a.racine_cle, a.cle):
+            self.assertEqual(stat.S_IMODE(os.stat(cle).st_mode), 0o600, cle.name)
+        self.assertEqual([p.name for p in self.chemins["tls"].iterdir() if p.name.startswith(".")], [],
+                         "aucun fichier provisoire laissé")
+        texte = subprocess.run(["openssl", "x509", "-in", str(a.crt), "-noout", "-text"],
+                               capture_output=True, text=True, check=True).stdout
+        self.assertIn("IP Address:192.168.1.40", texte)
+        self.assertIn("DNS:hub.local", texte)
+        self.assertIn("DNS:salon.local", texte)
+        self.assertIn("TLS Web Server Authentication", texte)
+        racine = subprocess.run(["openssl", "x509", "-in", str(a.racine_crt), "-noout", "-text"],
+                                capture_output=True, text=True, check=True).stdout
+        self.assertRegex(racine, r"Name Constraints: critical")
+        self.assertIn("CA:TRUE, pathlen:0", racine)
+        self.assertRegex(a.empreinte(), r"^([0-9A-F]{2}:){31}[0-9A-F]{2}$")
+
+    def test_duree_du_certificat_sous_les_limites_d_apple(self):
+        a = self.autorite()
+        a.preparer("192.168.1.40")
+        fiche = json.loads(a.fiche.read_text())
+        jours = (fiche["expire"] - time.time()) / 86400
+        self.assertTrue(390 < jours <= 398, jours)
+
+    def test_chaine_valide_et_contraintes_de_nom_appliquees(self):
+        a = self.autorite()
+        a.preparer("192.168.1.40")
+        verifie = subprocess.run(["openssl", "verify", "-CAfile", str(a.racine_crt), "-purpose", "sslserver",
+                                  str(a.crt)], capture_output=True, text=True)
+        self.assertEqual(verifie.returncode, 0, verifie.stderr)
+        # La racine signe un certificat pour un site public : il doit être refusé.
+        d = self.dossier
+        (d / "faux.cnf").write_text("[req]\ndistinguished_name=dn\nprompt=no\n[dn]\nCN=banque.example\n"
+                                    "[v3]\nsubjectAltName=DNS:banque.example,IP:8.8.8.8\n")
+        subprocess.run(["openssl", "req", "-new", "-key", str(a.cle), "-config", str(d / "faux.cnf"),
+                        "-out", str(d / "faux.csr")], check=True, capture_output=True)
+        subprocess.run(["openssl", "x509", "-req", "-in", str(d / "faux.csr"), "-CA", str(a.racine_crt),
+                        "-CAkey", str(a.racine_cle), "-set_serial", "7", "-days", "2",
+                        "-extfile", str(d / "faux.cnf"), "-extensions", "v3", "-out", str(d / "faux.crt")],
+                       check=True, capture_output=True)
+        refuse = subprocess.run(["openssl", "verify", "-CAfile", str(a.racine_crt), str(d / "faux.crt")],
+                                capture_output=True, text=True)
+        self.assertNotEqual(refuse.returncode, 0)
+        self.assertIn("permitted subtree violation", refuse.stdout + refuse.stderr)
+
+    def test_reemission_seulement_si_necessaire_racine_conservee(self):
+        horloge = Horloge(time.time())
+        a = self.autorite(horloge=horloge)
+        a.preparer("192.168.1.40")
+        racine, serie = a.empreinte(), a.crt.read_bytes()
+        self.assertFalse(a.preparer("192.168.1.40"))
+        self.assertEqual(a.crt.read_bytes(), serie)
+        self.assertTrue(a.preparer("192.168.1.41"), "nouvelle adresse DHCP : nouveau certificat")
+        self.assertEqual(a.empreinte(), racine, "la racine installée sur les téléphones ne change pas")
+        horloge.t += 370 * 86400
+        self.assertTrue(a.a_renouveler())
+        self.assertTrue(a.preparer("192.168.1.41"))
+        self.assertEqual(a.empreinte(), racine)
+
+    def test_refus_adresse_publique_horloge_fausse_openssl_absent(self):
+        with self.assertRaises(T.ErreurTLS):
+            self.autorite().preparer("8.8.8.8")
+        with self.assertRaises(T.ErreurTLS):
+            self.autorite(horloge=lambda: 1_000_000_000).preparer("192.168.1.40")
+        with self.assertRaises(T.ErreurTLS):
+            self.autorite(openssl="").preparer("192.168.1.40")
+        self.assertFalse(self.chemins["tls"].exists() and any(self.chemins["tls"].glob("*.key")))
+
+
+@unittest.skipUnless(shutil.which("openssl"), "openssl absent")
+class ServiceHTTPS(AvecDossier):
+    def setUp(self):
+        super().setUp()
+        routeur = T.Routeur(self.chemins["socket"], executer=lambda c, **k: subprocess.CompletedProcess(c, 0, "", ""),
+                            processus=lambda noms: [], kodi_http=None)
+        self.tls = T.AutoriteLocale(self.chemins["tls"])
+        self.service = T.Service(self.chemins, routeur=routeur, tls=self.tls)
+        self.serveurs = T.demarrer_ecoutes(self.service, "127.0.0.1", 0, 0, sondage=0.05)
+        self.http, self.https = (s.server_address[1] for s in self.serveurs)
+
+    def tearDown(self):
+        for s in self.serveurs:
+            s.shutdown()
+            s.server_close()
+        super().tearDown()
+
+    def contexte_client(self):
+        return ssl.create_default_context(cafile=str(self.tls.racine_crt))
+
+    def requete(self, methode, chemin, corps=None, jeton=None, entetes=None, securise=False,
+                nom_serveur="127.0.0.1"):
+        if securise:
+            c = http.client.HTTPSConnection("127.0.0.1", self.https, timeout=5, context=self.contexte_client())
+            if nom_serveur != "127.0.0.1":
+                # Joindre 127.0.0.1 en vérifiant le nom hub.local, comme un téléphone
+                # qui a résolu hub.local par mDNS.
+                brut = socket.create_connection(("127.0.0.1", self.https), timeout=5)
+                c.sock = self.contexte_client().wrap_socket(brut, server_hostname=nom_serveur)
+        else:
+            c = http.client.HTTPConnection("127.0.0.1", self.http, timeout=5)
+        h = {"Host": f"127.0.0.1:{self.https if securise else self.http}", **(entetes or {})}
+        donnees = None
+        if corps is not None:
+            donnees = json.dumps(corps).encode()
+            h["Content-Type"] = "application/json"
+        if jeton:
+            h["Authorization"] = f"Bearer {jeton}"
+        c.request(methode, chemin, body=donnees, headers=h)
+        r = c.getresponse()
+        brut = r.read()
+        c.close()
+        try:
+            valeur = json.loads(brut)
+        except ValueError:
+            valeur = brut
+        return r.status, {k.lower(): v for k, v in r.getheaders()}, valeur
+
+    def test_page_servie_en_https_chaine_verifiee_par_python(self):
+        statut, h, corps = self.requete("GET", "/", securise=True)
+        self.assertEqual(statut, 200)
+        self.assertIn(b"<html", corps)
+        self.assertIn("default-src 'none'", h["content-security-policy"])
+        # Le nom mDNS du certificat est accepté aussi par un client qui vérifie.
+        statut, _h, _ = self.requete("GET", "/", securise=True, nom_serveur="hub.local",
+                                     entetes={"Host": f"hub.local:{self.https}"})
+        self.assertEqual(statut, 200)
+
+    def test_client_sans_la_racine_refuse(self):
+        c = http.client.HTTPSConnection("127.0.0.1", self.https, timeout=5, context=ssl.create_default_context())
+        with self.assertRaises(ssl.SSLCertVerificationError):
+            c.request("GET", "/")
+        c.close()
+        # Le service survit à la poignée de main ratée.
+        self.assertEqual(self.requete("GET", "/", securise=True)[0], 200)
+
+    def test_http_sur_le_port_https_ne_fait_pas_tomber_le_service(self):
+        with socket.create_connection(("127.0.0.1", self.https), timeout=5) as s:
+            s.sendall(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+            s.recv(100)
+        self.assertEqual(self.requete("GET", "/", securise=True)[0], 200)
+
+    def test_cle_privee_jamais_servie(self):
+        secrets_pem = [p.read_bytes() for p in self.chemins["tls"].glob("*.key")]
+        self.assertEqual(len(secrets_pem), 2)
+        noyaux = [b"".join(k.split(b"\n")[1:-2])[:40] for k in secrets_pem]
+        chemins = ["/hub.key", "/racine.key", "/hub-racine.key", "/telecommande-tls/racine.key",
+                   "/../telecommande-tls/hub.key", "/%2e%2e/racine.key", "/hub.crt", "/racine.crt",
+                   "/hub-racine.crt", "/api/certificat", "/", "/manifest.webmanifest", "/hub.json"]
+        for securise in (False, True):
+            for chemin in chemins:
+                statut, _h, corps = self.requete("GET", chemin, securise=securise)
+                brut = corps if isinstance(corps, bytes) else json.dumps(corps).encode()
+                self.assertNotIn(b"PRIVATE KEY", brut, chemin)
+                for noyau in noyaux:
+                    self.assertNotIn(noyau, brut, chemin)
+                if chemin not in ("/hub-racine.crt", "/api/certificat", "/", "/manifest.webmanifest"):
+                    self.assertEqual(statut, 404, chemin)
+
+    def test_certificat_racine_servi_en_http_avec_empreinte(self):
+        statut, h, der = self.requete("GET", "/hub-racine.crt")
+        self.assertEqual((statut, h["content-type"]), (200, "application/x-x509-ca-cert"))
+        self.assertEqual(der, ssl.PEM_cert_to_DER_cert(self.tls.racine_crt.read_text()))
+        empreinte = ":".join(f"{o:02X}" for o in __import__("hashlib").sha256(der).digest())
+        _s, _h, info = self.requete("GET", "/api/certificat")
+        self.assertEqual(info, {"disponible": True, "securise": False,
+                                "https": f"https://127.0.0.1:{self.https}/", "empreinte": empreinte})
+        etat = json.loads(self.chemins["etat"].read_text())
+        self.assertEqual((etat["https"], etat["empreinteRacine"]), (f"https://127.0.0.1:{self.https}/", empreinte))
+
+    def test_csp_http_autorise_la_seule_origine_https_et_sonde(self):
+        _s, h, _ = self.requete("GET", "/")
+        self.assertIn(f"connect-src 'self' https://127.0.0.1:{self.https};", h["content-security-policy"])
+        _s, h, _ = self.requete("GET", "/", securise=True)
+        self.assertIn("connect-src 'self';", h["content-security-policy"])
+        statut, h, _ = self.requete("GET", "/sonde", securise=True, entetes={"Sec-Fetch-Site": "cross-site"})
+        self.assertEqual((statut, h["cross-origin-resource-policy"]), (204, "cross-origin"))
+        # Rien de tel en http, ni ailleurs en https pour une requête intersite.
+        self.assertEqual(self.requete("GET", "/sonde")[0], 404)
+        self.assertEqual(self.requete("GET", "/", securise=True, entetes={"Sec-Fetch-Site": "cross-site"})[0], 403)
+        # Mais la navigation depuis la page http (autre schéma, donc « cross-site ») passe.
+        navigation = {"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document"}
+        self.assertEqual(self.requete("GET", "/", securise=True, entetes=navigation)[0], 200)
+        for chemin in ("/api/etat", "/hub-racine.crt", "/api/certificat"):
+            self.assertEqual(self.requete("GET", chemin, securise=True, entetes=navigation)[0], 403, chemin)
+        self.assertEqual(self.requete("POST", "/api/appairer", {"transfert": "x" * 43}, securise=True,
+                                      entetes=navigation)[0], 403)
+        self.assertEqual(self.requete("GET", "/sonde", securise=True, entetes={"Host": "evil.example:1"})[0], 421)
+
+    def test_transfert_http_vers_https_usage_unique(self):
+        _s, _h, rep = self.requete("POST", "/api/appairer", {"code": self.service.appairage.code})
+        jeton_http = rep["jeton"]
+        self.assertEqual(self.requete("POST", "/api/transfert", {})[0], 401)
+        statut, _h, rep = self.requete("POST", "/api/transfert", {}, jeton=jeton_http)
+        self.assertEqual(statut, 200)
+        self.assertTrue(rep["url"].startswith(f"https://127.0.0.1:{self.https}/#transfert="))
+        ticket = rep["url"].split("=", 1)[1]
+        # Le ticket ne vaut rien en http, ni comme jeton.
+        self.assertEqual(self.requete("POST", "/api/appairer", {"transfert": ticket})[0], 403)
+        self.assertEqual(self.requete("GET", "/api/etat", jeton=ticket, securise=True)[0], 401)
+        statut, _h, rep = self.requete("POST", "/api/appairer", {"transfert": ticket, "nom": "Pixel"}, securise=True)
+        self.assertEqual(statut, 200, "le ticket a été consommé par la tentative http ?")
+        self.assertEqual(self.requete("GET", "/api/etat", jeton=rep["jeton"], securise=True)[0], 200)
+        self.assertEqual(self.requete("POST", "/api/appairer", {"transfert": ticket}, securise=True)[0], 403)
+
+    def test_ticket_expire(self):
+        ticket = self.service.creer_ticket()
+        self.service.horloge = lambda: time.time() + T.DUREE_TICKET_S + 1
+        self.assertFalse(self.service.consommer_ticket(ticket))
 
 
 class Protocole(unittest.TestCase):

@@ -38,11 +38,14 @@ import math
 import os
 import re
 import secrets
+import shutil
 import signal
 import socket
+import ssl
 import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.request
@@ -57,6 +60,10 @@ ICI = Path(__file__).resolve().parent
 # qu'on trouverait sur une machine de salon). Fixe, parce que l'URL finit dans les
 # favoris des téléphones — et le jeton est lié à l'origine http://ip:port.
 PORT = 8790
+# Le HTTPS sur le port suivant. Un second port plutôt qu'une bascule du premier : le
+# QR code et les favoris existants (http://ip:8790) doivent continuer de marcher sur
+# un téléphone qui n'a pas installé le certificat — c'est le cas le plus courant.
+PORT_HTTPS = 8791
 
 DUREE_CODE_S = 5 * 60
 ESSAIS_PAR_MINUTE = 5
@@ -155,6 +162,10 @@ def chemins_par_defaut():
         "etat": execution / "telecommande.json",
         "socket": execution / "menu.sock",
         "jetons": config / "telecommande-jetons.json",
+        # Autorité locale et certificat du HUB. Dans ~/.config et non /etc : le service
+        # est une unité utilisateur, et la clé ne doit appartenir qu'à cet utilisateur.
+        "tls": config / "telecommande-tls",
+        "reglages": config / "reglages.json",
         # Là où le menu cherche déjà ses images (hub-menu.py, photos()).
         "photos": maison / "Images" / "HUB" / "profils",
     }
@@ -549,6 +560,238 @@ def charger_page(chemin=None):
     return html.encode("utf-8"), csp
 
 
+# ── HTTPS local ─────────────────────────────────────────────────────────────
+# POURQUOI. Micro (getUserMedia) et reconnaissance vocale du navigateur n'existent
+# qu'en « contexte sécurisé » : HTTPS, ou localhost. Un téléphone qui joint
+# http://192.168.1.40 n'y a pas droit. Aucune autorité publique ne signe une adresse
+# privée : le HUB devient sa propre petite autorité, que le téléphone installe une
+# fois (page « Dictée et connexion sécurisée »).
+#
+# POURQUOI LA LIGNE DE COMMANDE openssl. La bibliothèque standard sait servir du TLS
+# mais pas fabriquer une clé ni un certificat. openssl est « important » dans Ubuntu
+# (présent partout, même en installation minimale) ; python3-cryptography ne l'est pas.
+#
+# CE QUI LIMITE LES DÉGÂTS SI LA CLÉ FUIT. La racine porte des contraintes de nom
+# (RFC 5280, critiques) : elle ne peut signer que des adresses privées et des noms en
+# .local. Même volée, elle ne permet pas d'usurper une banque sur le téléphone qui
+# l'a installée. Chrome, Safari et OpenSSL appliquent ces contraintes.
+DUREE_RACINE_J = 3650
+# 397 jours : sous la limite d'Apple (825 j pour un certificat serveur) et de celle,
+# plus stricte, des autorités publiques (398 j), au cas où un navigateur finirait
+# par l'appliquer aussi aux racines installées à la main. Renouvelé tout seul, sans
+# rien à refaire sur le téléphone : seule la racine y est installée.
+DUREE_CERTIFICAT_J = 397
+RENOUVELER_AVANT_S = 30 * 86400
+RESEAUX_PERMIS = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16",
+                  "127.0.0.0/8")
+# Avant l'heure réseau, une machine peut se croire en 1970 ou en 2019 : un certificat
+# émis alors serait « pas encore valide » ou déjà expiré pour le téléphone.
+HORLOGE_PLAUSIBLE = 1_767_225_600  # 1er janvier 2026
+
+
+class ErreurTLS(Exception):
+    pass
+
+
+def _nom_dns(nom):
+    nom = (nom or "").strip().lower()
+    return nom if re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", nom) else None
+
+
+def noms_du_hub(nom_machine=None):
+    """Les noms mDNS couverts par le certificat : hub.local, et nom-machine.local."""
+    noms = ["hub.local"]
+    propre = _nom_dns(nom_machine if nom_machine is not None else socket.gethostname().split(".")[0])
+    if propre and f"{propre}.local" not in noms:
+        noms.append(f"{propre}.local")
+    return noms
+
+
+class AutoriteLocale:
+    """La racine du HUB (10 ans) et le certificat du service (397 jours).
+
+    racine.key et hub.key : 0600, dans un dossier 0700. Aucune route HTTP ne lit ce
+    dossier ; seul le certificat racine (public) est servi, depuis sa forme DER.
+    """
+
+    def __init__(self, dossier, openssl=None, horloge=time.time, nom_machine=None):
+        self.dossier = Path(dossier)
+        self.openssl = openssl if openssl is not None else shutil.which("openssl")
+        self.horloge = horloge
+        self.nom_machine = nom_machine
+        self._verrou = threading.Lock()
+        self.racine_cle = self.dossier / "racine.key"
+        self.racine_crt = self.dossier / "racine.crt"
+        self.cle = self.dossier / "hub.key"
+        self.crt = self.dossier / "hub.crt"
+        self.fiche = self.dossier / "hub.json"
+
+    # -- outils --------------------------------------------------------------------
+    def _commande(self, *args):
+        try:
+            return subprocess.run([self.openssl, *map(str, args)], check=True, capture_output=True,
+                                  text=True, timeout=60).stdout
+        except subprocess.CalledProcessError as erreur:
+            raise ErreurTLS(f"openssl {args[0]} : {(erreur.stderr or '').strip()[:300]}") from None
+        except (OSError, subprocess.SubprocessError) as erreur:
+            raise ErreurTLS(f"openssl {args[0]} : {erreur}") from None
+
+    def _nouvelle_cle(self, chemin):
+        # Le fichier existe en 0600 AVANT qu'openssl y écrive : il garde ce mode, et la
+        # clé n'est jamais lisible par un autre, même le temps d'un instant.
+        provisoire = chemin.with_name(f".{chemin.name}.{secrets.token_hex(4)}")
+        os.close(os.open(provisoire, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+        try:
+            self._commande("genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:P-256",
+                           "-out", provisoire)
+            os.chmod(provisoire, 0o600)
+        except BaseException:
+            provisoire.unlink(missing_ok=True)
+            raise
+        return provisoire
+
+    @staticmethod
+    def _serie():
+        # Série aléatoire de 128 bits, positive : deux certificats du même HUB (ou de
+        # deux HUB) ne se confondent jamais dans le magasin du téléphone.
+        return "0x" + secrets.token_hex(16).lstrip("0").rjust(1, "1")
+
+    # -- racine ----------------------------------------------------------------------
+    def _creer_racine(self, temp):
+        nom = _nom_dns(self.nom_machine if self.nom_machine is not None
+                       else socket.gethostname().split(".")[0]) or "hub"
+        date = time.strftime("%Y-%m-%d", time.gmtime(self.horloge()))
+        contraintes = []
+        for i, reseau in enumerate(RESEAUX_PERMIS):
+            r = ipaddress.ip_network(reseau)
+            contraintes.append(f"permitted;IP.{i} = {r.network_address}/{r.netmask}")
+        contraintes.append("permitted;DNS.0 = local")
+        config = Path(temp) / "racine.cnf"
+        config.write_text("\n".join([
+            "[req]", "distinguished_name = dn", "prompt = no", "utf8 = yes", "string_mask = utf8only",
+            "[dn]", "O = HUB",
+            # Nom et date dans le sujet : le téléphone qui a connu deux HUB (ou une
+            # réinstallation) affiche deux entrées qu'on distingue pour révoquer l'ancienne.
+            f"CN = HUB autorité locale ({nom}, {date})",
+            "[v3]", "basicConstraints = critical,CA:TRUE,pathlen:0",
+            "keyUsage = critical,keyCertSign,cRLSign", "subjectKeyIdentifier = hash",
+            "nameConstraints = critical,@contraintes", "[contraintes]", *contraintes, ""]),
+            encoding="utf-8")
+        cle = self._nouvelle_cle(self.racine_cle)
+        crt = Path(temp) / "racine.crt"
+        try:
+            self._commande("req", "-x509", "-new", "-key", cle, "-config", config, "-extensions", "v3",
+                           "-days", DUREE_RACINE_J, "-sha256", "-set_serial", self._serie(), "-out", crt)
+        except BaseException:
+            cle.unlink(missing_ok=True)
+            raise
+        os.replace(cle, self.racine_cle)
+        shutil.copyfile(crt, self.racine_crt)
+        os.chmod(self.racine_crt, 0o644)
+        # Une nouvelle racine rend l'ancien certificat du HUB orphelin.
+        self.fiche.unlink(missing_ok=True)
+        journal.info("autorité locale créée, empreinte SHA-256 %s", self.empreinte())
+
+    # -- certificat du HUB -------------------------------------------------------------
+    def _emettre(self, temp, adresse, noms):
+        config = Path(temp) / "hub.cnf"
+        alternatifs = [f"IP.0 = {adresse}"] + [f"DNS.{i} = {n}" for i, n in enumerate(noms)]
+        config.write_text("\n".join([
+            "[req]", "distinguished_name = dn", "prompt = no",
+            "[dn]", "O = HUB", f"CN = {noms[0]}",
+            "[v3]", "basicConstraints = critical,CA:FALSE", "keyUsage = critical,digitalSignature",
+            "extendedKeyUsage = serverAuth", "subjectKeyIdentifier = hash",
+            "authorityKeyIdentifier = keyid", "subjectAltName = @noms", "[noms]", *alternatifs, ""]),
+            encoding="utf-8")
+        cle = self._nouvelle_cle(self.cle)
+        demande, crt = Path(temp) / "hub.csr", Path(temp) / "hub.crt"
+        try:
+            self._commande("req", "-new", "-key", cle, "-config", config, "-out", demande)
+            self._commande("x509", "-req", "-in", demande, "-CA", self.racine_crt, "-CAkey", self.racine_cle,
+                           "-set_serial", self._serie(), "-days", DUREE_CERTIFICAT_J, "-sha256",
+                           "-extfile", config, "-extensions", "v3", "-out", crt)
+            # Contre-épreuve avant de servir quoi que ce soit : la chaîne doit être
+            # valide pour OpenSSL, contraintes de nom comprises.
+            self._commande("verify", "-CAfile", self.racine_crt, "-purpose", "sslserver", crt)
+        except BaseException:
+            cle.unlink(missing_ok=True)
+            raise
+        os.replace(cle, self.cle)
+        shutil.copyfile(crt, self.crt)
+        fin = self._commande("x509", "-in", self.crt, "-noout", "-enddate").strip()
+        expire = ssl.cert_time_to_seconds(fin.split("=", 1)[1])
+        ecrire_prive(self.fiche, json.dumps({"adresse": adresse, "noms": noms, "expire": expire,
+                                             "racine": self.empreinte()}))
+        journal.info("certificat du HUB émis pour %s, %s (jusqu'au %s)", adresse, ", ".join(noms),
+                     time.strftime("%Y-%m-%d", time.localtime(expire)))
+
+    def _fiche(self):
+        try:
+            return json.loads(self.fiche.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+
+    def a_jour(self, adresse):
+        fiche = self._fiche()
+        return bool(fiche) and self.crt.is_file() and self.cle.is_file() and self.racine_crt.is_file() \
+            and fiche.get("adresse") == adresse and fiche.get("noms") == noms_du_hub(self.nom_machine) \
+            and fiche.get("racine") == self.empreinte() \
+            and float(fiche.get("expire") or 0) - self.horloge() > RENOUVELER_AVANT_S
+
+    def preparer(self, adresse):
+        """Crée la racine si besoin, et (ré)émet le certificat du HUB s'il ne couvre pas
+        `adresse`, change de nom ou expire dans moins de 30 jours. Vrai si émis."""
+        if not self.openssl:
+            raise ErreurTLS("openssl introuvable")
+        if self.horloge() < HORLOGE_PLAUSIBLE:
+            raise ErreurTLS("horloge pas encore à l'heure")
+        ip = ipaddress.ip_address(adresse)
+        if not any(ip in ipaddress.ip_network(r) for r in RESEAUX_PERMIS):
+            # La racine refuserait de couvrir cette adresse : mieux vaut le dire que
+            # servir une chaîne que tous les téléphones rejetteront.
+            raise ErreurTLS(f"{adresse} n'est pas une adresse privée : HTTPS local impossible")
+        with self._verrou:
+            self.dossier.mkdir(mode=0o700, parents=True, exist_ok=True)
+            os.chmod(self.dossier, 0o700)
+            with tempfile.TemporaryDirectory(dir=self.dossier) as temp:
+                if not (self.racine_cle.is_file() and self.racine_crt.is_file()):
+                    self._creer_racine(temp)
+                if self.a_jour(adresse):
+                    return False
+                self._emettre(temp, adresse, noms_du_hub(self.nom_machine))
+                return True
+
+    def a_renouveler(self):
+        fiche = self._fiche()
+        return not fiche or float(fiche.get("expire") or 0) - self.horloge() <= RENOUVELER_AVANT_S
+
+    def contexte(self):
+        contexte = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        contexte.minimum_version = ssl.TLSVersion.TLSv1_2
+        contexte.load_cert_chain(self.crt, self.cle)
+        return contexte
+
+    def racine_der(self):
+        try:
+            return ssl.PEM_cert_to_DER_cert(self.racine_crt.read_text(encoding="ascii"))
+        except (OSError, ValueError):
+            return None
+
+    def empreinte(self):
+        """SHA-256 du certificat racine, en paires hexadécimales : la forme qu'affichent
+        les réglages d'iOS (« Plus de détails ») et d'Android, à comparer avec la TV."""
+        der = self.racine_der()
+        if der is None:
+            return None
+        return ":".join(f"{o:02X}" for o in hashlib.sha256(der).digest())
+
+
+# Un ticket de transfert fait passer un téléphone déjà relié en http vers l'origine
+# https sans retaper de code. Usage unique, deux minutes, 256 bits : il peut transiter
+# dans l'URL (fragment, jamais envoyé au serveur par le navigateur) sans valoir un jeton.
+DUREE_TICKET_S = 120
+
+
 # ── « Comme une app » : manifeste et icônes ─────────────────────────────────
 # Couleurs du HUB (page.html : --encre, --tv). Le manifeste et les méta de la page
 # doivent dire la même chose, sinon la barre d'état change de teinte au lancement.
@@ -677,9 +920,16 @@ def nom_du_telephone(nom, agent):
 
 # ── Le service ──────────────────────────────────────────────────────────────
 class Service:
-    def __init__(self, chemins, routeur=None, horloge=time.time, page=None):
+    def __init__(self, chemins, routeur=None, horloge=time.time, page=None, tls=None):
         self.chemins = chemins
         self.horloge = horloge
+        # None : HTTPS désactivé. Sinon une AutoriteLocale, prête ou non (tls_pret).
+        self.tls = tls
+        self.tls_pret = False
+        self.url_https = None
+        self.port_https = None
+        self._tickets = {}
+        self._verrou_tickets = threading.Lock()
         self.jetons = Jetons(chemins["jetons"], horloge=horloge)
         self.routeur = routeur or Routeur(chemins["socket"])
         self.page, self.csp = charger_page(page)
@@ -690,18 +940,45 @@ class Service:
         self._verrou_etat = threading.Lock()
         self.appairage = Appairage(horloge=horloge, au_changement=self.ecrire_etat)
 
-    def publier(self, adresse, port):
+    def publier(self, adresse, port, port_https=None):
         self.url = f"http://{adresse}:{port}/"
+        self.port_https = port_https if self.tls_pret else None
+        self.url_https = f"https://{adresse}:{port_https}/" if self.port_https else None
         nom = socket.gethostname().lower()
-        self.hotes_admis = frozenset({f"{adresse}:{port}", f"{nom}:{port}", f"{nom}.local:{port}"})
+        hotes = {f"{adresse}:{port}", f"{nom}:{port}", f"{nom}.local:{port}", f"hub.local:{port}"}
+        if self.port_https:
+            # Les noms du certificat, et eux seuls, sur le port HTTPS.
+            hotes |= {f"{adresse}:{port_https}"} | {f"{n}:{port_https}" for n in noms_du_hub()}
+        self.hotes_admis = frozenset(hotes)
         self.ecrire_etat()
+
+    def creer_ticket(self):
+        ticket = secrets.token_urlsafe(32)
+        maintenant = self.horloge()
+        with self._verrou_tickets:
+            self._tickets = {k: v for k, v in self._tickets.items() if v > maintenant}
+            if len(self._tickets) >= 20:
+                return None
+            self._tickets[_empreinte(ticket)] = maintenant + DUREE_TICKET_S
+        return ticket
+
+    def consommer_ticket(self, ticket):
+        if not isinstance(ticket, str) or not 20 <= len(ticket) <= 200:
+            return False
+        with self._verrou_tickets:
+            expire = self._tickets.pop(_empreinte(ticket), None)
+        return expire is not None and expire > self.horloge()
 
     def ecrire_etat(self):
         """Ce que la TV affiche : URL (pour le QR code), code, expiration."""
         if not self.url:
             return
         etat = {"url": self.url, "code": self.appairage.code, "expire": self.appairage.expire_ms,
-                "telephones": len(self.jetons.lister()), "appairageLe": self.appairage_le}
+                "telephones": len(self.jetons.lister()), "appairageLe": self.appairage_le,
+                # À afficher sur la TV à côté du code : c'est ce que le téléphone compare
+                # avant de faire confiance au certificat téléchargé en http.
+                "https": self.url_https,
+                "empreinteRacine": self.tls.empreinte() if self.tls and self.tls_pret else None}
         with self._verrou_etat:
             try:
                 ecrire_prive(self.chemins["etat"], json.dumps(etat))
@@ -747,20 +1024,55 @@ def _gestionnaire(service):
         # Un client qui ouvre une connexion et n'envoie rien ne doit pas garder un fil.
         timeout = 10
 
+        def setup(self):
+            # La poignée de main TLS a lieu ici, dans le fil de la connexion et sous son
+            # délai : un client lent ou qui parle http au port https ne bloque pas accept().
+            if isinstance(self.request, ssl.SSLSocket):
+                self.request.settimeout(self.timeout)
+                self.request.do_handshake()
+            super().setup()
+
+        @property
+        def securise(self):
+            return isinstance(self.request, ssl.SSLSocket)
+
         def log_message(self, fmt, *args):
             journal.debug("%s %s", self.client_address[0], fmt % args)
 
         def end_headers(self):
             # Sur TOUTES les réponses, y compris les erreurs produites par http.server.
-            self.send_header("Content-Security-Policy", service.csp)
+            self.send_header("Content-Security-Policy", self._csp())
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("X-Frame-Options", "DENY")
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("Cross-Origin-Opener-Policy", "same-origin")
-            self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+            self.send_header("Cross-Origin-Resource-Policy", getattr(self, "corp", "same-origin"))
             self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
             self.send_header("Cache-Control", "no-store")
             super().end_headers()
+
+        def _hote(self):
+            entetes = getattr(self, "headers", None)
+            hote = (entetes.get("Host") or "").strip().lower() if entetes else ""
+            return hote if hote in service.hotes_admis else None
+
+        def _origine_https(self):
+            """https://même-nom:port-https, pour la page servie en http."""
+            hote = self._hote()
+            if not hote or not service.port_https:
+                return None
+            nom = hote.rsplit(":", 1)[0]
+            if f"{nom}:{service.port_https}" not in service.hotes_admis:
+                nom = service.url_https.split("//", 1)[1].rsplit(":", 1)[0]
+            return f"https://{nom}:{service.port_https}"
+
+        def _csp(self):
+            # La page http peut sonder l'origine https (le certificat est-il installé ?) :
+            # cette origine-là, et aucune autre, s'ajoute à connect-src.
+            origine = None if self.securise else self._origine_https()
+            if not origine:
+                return service.csp
+            return service.csp.replace("connect-src 'self'", f"connect-src 'self' {origine}", 1)
 
         def _repondre(self, statut, corps, type_contenu, entetes=None):
             self.send_response(statut)
@@ -784,7 +1096,14 @@ def _gestionnaire(service):
             if hote not in service.hotes_admis:
                 self._json(421, {"erreur": "hote"})
                 return False
-            if self.headers.get("Sec-Fetch-Site") == "cross-site":
+            # Une navigation de premier niveau vers la page reste permise : c'est ainsi
+            # qu'arrive le passage http → https (schéma différent = autre « site »), ou
+            # un lien. Elle ne porte ni jeton ni corps, et la page ne se laisse pas
+            # encadrer (frame-ancestors). Tout le reste venu d'ailleurs : 403.
+            navigation = (self.command in ("GET", "HEAD") and self._chemin() == "/"
+                          and self.headers.get("Sec-Fetch-Mode") == "navigate"
+                          and self.headers.get("Sec-Fetch-Dest") == "document")
+            if self.headers.get("Sec-Fetch-Site") == "cross-site" and not navigation:
                 self._json(403, {"erreur": "origine"})
                 return False
             return True
@@ -799,11 +1118,33 @@ def _gestionnaire(service):
             return service.jetons.valide(entete[7:].strip())
 
         def do_GET(self):
+            if self._chemin() == "/sonde" and self.securise and self._hote():
+                # Sondée depuis la page http (autre « site » : Sec-Fetch-Site
+                # cross-site) pour savoir si le téléphone fait confiance au certificat.
+                # Une réponse vide, lisible par personne (no-cors) : elle ne prouve que
+                # la poignée de main TLS réussie.
+                self.corp = "cross-origin"
+                return self._repondre(204, b"", "text/plain")
             if not self._admis():
                 return
             chemin = self._chemin()
             if chemin == "/":
                 return self._repondre(200, service.page, "text/html; charset=utf-8")
+            if chemin == "/hub-racine.crt":
+                der = service.tls.racine_der() if service.tls and service.tls_pret else None
+                if der is None:
+                    return self._json(404, {"erreur": "https-desactive"})
+                # Ce type déclenche l'installation de profil sur iPhone et le
+                # téléchargement du certificat sur Android. Public par nature : c'est
+                # la clé privée, jamais servie, qui compte.
+                return self._repondre(200, der, "application/x-x509-ca-cert", {
+                    "Content-Disposition": 'attachment; filename="HUB-autorite-locale.crt"'})
+            if chemin == "/api/certificat":
+                pret = bool(service.tls and service.tls_pret)
+                origine = (f"https://{self._hote()}" if self.securise else self._origine_https()) if pret else None
+                return self._json(200, {"disponible": pret, "securise": self.securise,
+                                        "https": origine + "/" if origine else None,
+                                        "empreinte": service.tls.empreinte() if pret else None})
             if chemin == "/manifest.webmanifest":
                 return self._repondre(200, service.ressources.manifeste,
                                       "application/manifest+json; charset=utf-8")
@@ -881,6 +1222,8 @@ def _gestionnaire(service):
                 return self._photo()
             if chemin == "/api/oublier":
                 return self._oublier()
+            if chemin == "/api/transfert":
+                return self._transfert()
             self._json(404, {"erreur": "introuvable"})
 
         def _appairer(self):
@@ -888,6 +1231,12 @@ def _gestionnaire(service):
             if corps is None:
                 return
             ip = self.client_address[0]
+            if "transfert" in corps:
+                # Seulement sur l'origine https : c'est tout l'objet du transfert.
+                if not self.securise or not service.consommer_ticket(corps.get("transfert")):
+                    journal.info("transfert refusé depuis %s", ip)
+                    return self._json(403, {"erreur": "transfert"})
+                return self._delivrer(corps, ip)
             resultat = service.appairage.essayer(ip, corps.get("code"))
             if resultat == TROP:
                 attente = service.appairage.attente_s(ip)
@@ -897,12 +1246,28 @@ def _gestionnaire(service):
             if resultat != OK:
                 journal.info("appairage : code faux depuis %s", ip)
                 return self._json(403, {"erreur": "code"})
+            return self._delivrer(corps, ip)
+
+        def _delivrer(self, corps, ip):
             nom = nom_du_telephone(corps.get("nom"), self.headers.get("User-Agent"))
             ident, jeton = service.jetons.creer(nom)
             service.appairage_le = int(service.horloge() * 1000)
             service.ecrire_etat()
             journal.info("appairage : %s (%s) depuis %s", nom, ident, ip)
             self._json(200, {"jeton": jeton, "id": ident, "nom": nom})
+
+        def _transfert(self):
+            if not self._jeton():
+                return self._json(401, {"erreur": "jeton"})
+            if self._corps() is None:
+                return
+            origine = self._origine_https()
+            if not origine:
+                return self._json(404, {"erreur": "https-desactive"})
+            ticket = service.creer_ticket()
+            if ticket is None:
+                return self._json(429, {"erreur": "trop"}, {"Retry-After": str(DUREE_TICKET_S)})
+            self._json(200, {"url": f"{origine}/#transfert={ticket}"})
 
         def _oublier(self):
             # « Oublier ce téléphone » révoque vraiment son jeton : effacer seulement le
@@ -972,11 +1337,52 @@ class Serveur(ThreadingHTTPServer):
     # plutôt que se partager les requêtes avec le premier.
     allow_reuse_address = True
 
+    def handle_error(self, request, client_address):
+        # Poignée de main TLS ratée (certificat pas encore installé, http sur le port
+        # https), client parti : le quotidien d'un service réseau, pas une trace de pile.
+        erreur = sys.exc_info()[1]
+        journal.debug("%s : connexion abandonnée (%s)", client_address[0], erreur)
+
+
+class ServeurTLS(Serveur):
+    def __init__(self, adresse, gestionnaire, contexte):
+        self.contexte = contexte
+        super().__init__(adresse, gestionnaire)
+
+    def get_request(self):
+        connexion, adresse = self.socket.accept()
+        return self.contexte.wrap_socket(connexion, server_side=True,
+                                         do_handshake_on_connect=False), adresse
+
 
 def creer_serveur(service, adresse, port):
     serveur = Serveur((adresse, port), _gestionnaire(service))
     service.publier(adresse, serveur.server_address[1])
     return serveur
+
+
+def demarrer_ecoutes(service, adresse, port, port_https=None, sondage=0.5):
+    """Ouvre http (obligatoire) et https (si possible), publie l'état, lance les fils.
+
+    Rend la liste des serveurs ouverts. Un échec du HTTPS (openssl absent, horloge,
+    port pris) est journalisé et n'empêche pas la télécommande http de servir.
+    """
+    serveurs = [Serveur((adresse, port), _gestionnaire(service))]
+    port_http = serveurs[0].server_address[1]
+    service.tls_pret = False
+    if service.tls is not None and port_https is not None:
+        try:
+            service.tls.preparer(adresse)
+            serveur_tls = ServeurTLS((adresse, port_https), _gestionnaire(service), service.tls.contexte())
+            serveurs.append(serveur_tls)
+            port_https = serveur_tls.server_address[1]
+            service.tls_pret = True
+        except (ErreurTLS, OSError, ssl.SSLError) as erreur:
+            journal.error("HTTPS indisponible (%s) : télécommande en http seul, sans dictée", erreur)
+    service.publier(adresse, port_http, port_https if service.tls_pret else None)
+    for serveur in serveurs:
+        threading.Thread(target=serveur.serve_forever, args=(sondage,), daemon=True).start()
+    return serveurs
 
 
 # ── Ligne de commande ───────────────────────────────────────────────────────
@@ -988,6 +1394,12 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Télécommande téléphone du HUB.")
     parser.add_argument("--port", type=int, default=PORT, help=f"port d'écoute (défaut {PORT})")
     parser.add_argument("--adresse", help="adresse d'écoute forcée (défaut : celle du réseau local)")
+    parser.add_argument("--port-https", type=int, default=PORT_HTTPS,
+                        help=f"port HTTPS (défaut {PORT_HTTPS})")
+    parser.add_argument("--sans-https", action="store_true",
+                        help="ne pas ouvrir le HTTPS local (ni autorité locale, ni dictée)")
+    parser.add_argument("--empreinte", action="store_true",
+                        help="empreinte SHA-256 du certificat racine à comparer sur le téléphone")
     parser.add_argument("--lister", action="store_true", help="téléphones appairés")
     parser.add_argument("--revoquer", metavar="ID", help="retirer un téléphone")
     parser.add_argument("--revoquer-tout", action="store_true", help="retirer tous les téléphones")
@@ -996,6 +1408,11 @@ def main(argv=None):
     logging.basicConfig(level=logging.DEBUG if args.verbeux else logging.INFO,
                         format="%(levelname)s %(message)s", stream=sys.stderr)
     chemins = chemins_par_defaut()
+
+    if args.empreinte:
+        empreinte = AutoriteLocale(chemins["tls"]).empreinte()
+        print(empreinte or "pas encore d'autorité locale (créée au premier démarrage du service)")
+        return 0 if empreinte else 1
 
     if args.lister or args.revoquer or args.revoquer_tout:
         jetons = Jetons(chemins["jetons"])
@@ -1017,7 +1434,7 @@ def main(argv=None):
     if not VOIX:
         journal.warning("hub_voix_logique introuvable : seul le menu est pilotable "
                         "(ni Kodi ni le bureau quand le menu est fermé)")
-    service = Service(chemins)
+    service = Service(chemins, tls=None if args.sans_https else AutoriteLocale(chemins["tls"]))
     arret = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: arret.set())
     signal.signal(signal.SIGINT, lambda *_: arret.set())
@@ -1035,24 +1452,33 @@ def main(argv=None):
             continue
         signale_sans_reseau = False
         try:
-            serveur = creer_serveur(service, adresse, args.port)
+            serveurs = demarrer_ecoutes(service, adresse, args.port,
+                                        None if args.sans_https else args.port_https)
         except OSError as erreur:
             journal.error("écoute impossible sur %s:%s (%s)", adresse, args.port, erreur)
             service.effacer_etat()
             arret.wait(5)
             continue
-        fil = threading.Thread(target=serveur.serve_forever, daemon=True)
-        fil.start()
-        journal.info("télécommande sur %s", service.url)
+        journal.info("télécommande sur %s%s", service.url,
+                     f" et {service.url_https}" if service.url_https else "")
+        prochain_certificat = time.monotonic() + 3600
         while not arret.wait(5):
             service.appairage.verifier_expiration()
+            # Un HUB peut tourner des mois sans redémarrer : le certificat se renouvelle
+            # 30 jours avant son terme, en rouvrant l'écoute avec le nouveau.
+            if service.tls_pret and time.monotonic() > prochain_certificat:
+                prochain_certificat = time.monotonic() + 3600
+                if service.tls.a_renouveler():
+                    journal.info("certificat du HUB bientôt expiré : renouvellement")
+                    break
             # Bail DHCP renouvelé sur une autre adresse : on rouvre l'écoute dessus,
             # sinon le QR code montrerait une adresse morte jusqu'au prochain démarrage.
             if not args.adresse and adresse_locale() != adresse:
                 journal.info("l'adresse a changé : réouverture de l'écoute")
                 break
-        serveur.shutdown()
-        serveur.server_close()
+        for serveur in serveurs:
+            serveur.shutdown()
+            serveur.server_close()
     service.effacer_etat()
     return 0
 
