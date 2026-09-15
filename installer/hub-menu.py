@@ -34,11 +34,18 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-MODES = ("tv", "gaming", "bureau", "eteindre")
+MODES = ("tv", "gaming", "bureau", "eteindre", "web")
+# « web:<service> » : « HUB, lance Netflix ». Le nom seul voyage, jamais une adresse ;
+# hub-web a la liste blanche qui le traduit (tests/test_hub_web.py vérifie l'accord).
+# Écrit en littéral : installer/telecommande en recopie la liste et la compare.
 COMMANDES = {
     "tv", "gaming", "bureau", "eteindre", "reglages", "aide", "meteo", "profils",
     "retour", "gauche", "droite", "haut", "bas", "ok", "theme:clair", "theme:sombre",
+    "web:youtube", "web:netflix", "web:primevideo", "web:disneyplus", "web:canalplus",
+    "web:twitch", "web:arte", "web:francetv", "web:geforcenow", "web:xcloud",
+    "web:boosteroid", "web:steam", "web:moonlight",
 }
+SERVICES_WEB = frozenset(c[4:] for c in COMMANDES if c.startswith("web:"))
 ETATS_VOIX = {"eveil", "repos", "incompris", "micro-absent", "micro-present"}
 
 URL_METEO = (
@@ -120,7 +127,8 @@ def dernier_choix(c):
 
 
 def retenir(c, choix):
-    if choix in MODES and choix != "eteindre":
+    # « web » n'a pas de carte à resélectionner au retour : le menu reprend la dernière.
+    if choix in MODES and choix not in ("eteindre", "web"):
         try:
             ecrire_atomique(c["dernier"], choix + "\n")
         except OSError:
@@ -238,6 +246,31 @@ def reprises_kodi(dossier_kodi, limite=6):
         image = miniatures.get(e.pop("art"))
         e["image"] = image.as_uri() if image and image.is_file() else None
     return elements
+
+
+# ── Services web ──────────────────────────────────────────────────────────
+def services_disponibles(chemin=None):
+    """Ce que hub-web saura lancer (navigateur présent, Steam ou Moonlight installés).
+
+    hub-web est importé plutôt qu'exécuté : un processus Python de plus à chaque retour
+    au menu se sentirait. Absent ou cassé, le menu montre les tuiles quand même et
+    hub-web dira son erreur ; un lanceur manquant ne doit pas faire tomber le menu."""
+    import importlib.machinery
+    import importlib.util
+    chemin = Path(chemin or Path(__file__).resolve().parent / "hub-web")
+    try:
+        chargeur = importlib.machinery.SourceFileLoader("hub_web", str(chemin))
+        module = importlib.util.module_from_spec(importlib.util.spec_from_loader("hub_web", chargeur))
+        chargeur.exec_module(module)
+        return module.disponibles()
+    except Exception as erreur:  # noqa: BLE001 — n'importe quelle panne du lanceur
+        print(f"hub-menu : services web inconnus ({erreur})", file=sys.stderr)
+        return None
+
+
+def service_choisi(message):
+    service = message.get("service")
+    return service if isinstance(service, str) and service in SERVICES_WEB else None
 
 
 # ── Météo ─────────────────────────────────────────────────────────────────
@@ -526,6 +559,7 @@ def lancer():
                 "telecommande": etat_telecommande(c),
                 "minuteurFin": minuteur_en_cours(c),
                 "reprises": reprises_kodi(Path.home() / ".kodi"),
+                "services": services_disponibles(),
                 # Le choix du profil se fait à l'allumage, pas à chaque retour de Kodi.
                 "retour": deja_ouvert,
             }
@@ -603,7 +637,12 @@ def lancer():
             if not message:
                 return
             genre = message["type"]
-            if genre == "choix" and message.get("mode") in MODES:
+            if genre == "choix" and message.get("mode") == "web":
+                # La seconde ligne porte le service ; inconnu, on ne ferme pas le menu.
+                if service_choisi(message):
+                    self.choix, self.fichier = "web", service_choisi(message)
+                    self.quit()
+            elif genre == "choix" and message.get("mode") in MODES:
                 self.choix = message["mode"]
                 if self.choix == "tv" and isinstance(message.get("fichier"), str) and "\n" not in message["fichier"]:
                     self.fichier = message["fichier"]
@@ -700,7 +739,8 @@ def lancer():
     menu.run(None)
     if menu.choix:
         # Première ligne : le mode. Seconde, facultative : le fichier à reprendre
-        # (lu par gnome-kiosk-script, qui le passe à hub-kodi-lire).
+        # (lu par gnome-kiosk-script, qui le passe à hub-kodi-lire), ou le service
+        # pour « web » (passé à hub-web, qui le refuse s'il n'est pas dans sa liste).
         print(menu.choix)
         if menu.fichier:
             print(menu.fichier)
