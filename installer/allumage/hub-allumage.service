@@ -1,0 +1,10 @@
+# Armer le réveil et l'extinction programmés d'après les réglages du menu.
+# Service système : rtcwake écrit dans l'horloge matérielle, réservée à root. Le menu
+# le démarre après chaque changement ; 50-hub-allumage.rules l'y autorise, et rien d'autre.
+[Unit]
+Description=HUB : armer l'allumage et l'extinction programmés
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/hub/allumage.env
+ExecStart=/usr/local/bin/hub-allumage appliquer
