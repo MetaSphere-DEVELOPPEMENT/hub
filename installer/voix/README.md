@@ -1,8 +1,10 @@
 # Commande vocale
 
-On dit **« HUB »** (prononcé « heub ») ou **« OK HUB »**, puis la commande ; ou d'une
-traite : « HUB, lance la télé ». Français ou anglais selon la langue du profil actif.
-**Rien ne quitte la machine** : reconnaissance Vosk hors ligne, aucun appel réseau.
+On dit **« OK HUB »**, puis la commande ; ou d'une traite : « OK HUB, lance la télé ».
+Le mot d'éveil se choisit dans les réglages (`systeme.motEveil` : « OK HUB », « Salut
+HUB », « Dis HUB », « HUB » seul, ou un prénom). Français ou anglais selon la langue du
+profil actif. **Rien ne quitte la machine** : reconnaissance Vosk hors ligne, aucun
+appel réseau.
 
 ## Fichiers
 
@@ -13,23 +15,51 @@ traite : « HUB, lance la télé ». Français ou anglais selon la langue du pro
 | `test_hub_voix.py` | tests sans micro, sans modèle, sans Vosk : `python3 -m unittest installer/voix/test_hub_voix.py` (depuis `installer/voix`) ou `pytest installer/voix` |
 | `hub-voix.service` | unité systemd **utilisateur** |
 | `telecharger-modele.sh` | télécharge les deux modèles et vérifie leur empreinte sha256 |
+| `remplissage-fr.txt` `remplissage-en.txt` | les 2 000 mots courants ajoutés à la grammaire (voir plus bas) |
+| `generer-remplissage.py` | refabrique ces listes depuis une liste de fréquences et le modèle |
+| `mesure/banc.py` `mesure/phrases.py` | le banc qui produit les chiffres de « Mesures » (Piper + Vosk, hors ligne) |
 
 ## Pourquoi Vosk, et en grammaire restreinte
 
 - **Vosk** (Kaldi) : modèles « small » de 40 Mo, flux continu, résultat à la fin de
   chaque phrase. Sur l'i3-8100T, **6 % d'un cœur** en écoute (mesures plus bas).
 - **Grammaire restreinte** : le reconnaisseur ne reçoit que la liste des phrases du
-  HUB (1 388 en français, 920 en anglais, `grammaire()`) et `[unk]`. Il ne transcrit
-  plus du français libre, il choisit parmi nos mots.
+  HUB (`grammaire()`) et `[unk]`. Il ne transcrit plus du français libre, il choisit
+  parmi nos mots.
   **Constat mesuré** : Vosk en tire un *vocabulaire pondéré*, pas un ordre imposé ;
   il rend des suites comme « hub éteindre le va hub ». L'analyse le tolère (une seule
   commande dans la phrase, le reste en mots outils). Donner la simple liste des mots
   au lieu des phrases a été essayé : moins bon (siwis 21/30 contre 25/30, upmc
   11/30 contre 15/30, même analyse, 15 septembre 2026).
-- Écartés : **Whisper** (même *tiny*) transcrit mieux mais par blocs, avec plusieurs
-  secondes de latence et un cœur plein par phrase, et il lui faudrait un détecteur
-  d'éveil devant. **openWakeWord / Porcupine** : il faut entraîner « HUB » ou
-  accepter une licence. Vosk fait l'éveil et la commande avec un seul modèle.
+- **Et 2 000 mots courants à côté** (`remplissage-<langue>.txt` ; la grammaire
+  française compte 2 049 phrases de commande et 4 009 entrées au total). Restreint à nos seules phrases, le décodeur **force** toute
+  parole dans nos mots : « Lyon veut devenir un hub européen de la logistique »
+  devenait « hub de la le steam », et **60 phrases de TV sur 2 904 lançaient une
+  commande** (2 %). `[unk]` n'absorbe pas une vraie phrase. Avec les mots courants,
+  la TV est transcrite en mots ordinaires, que l'analyse refuse (un mot hors commande
+  et hors mots outils annule la phrase) : **0 sur 2 904**. Coût mesuré : facteur temps
+  réel 0,030 → 0,034, mémoire 162 → 177 Mo.
+  Les mots viennent des listes de fréquences **OpenSubtitles 2018**
+  (hermitdave/FrequencyWords) — de la langue parlée, des dialogues de films —,
+  filtrés par le vocabulaire du modèle (`generer-remplissage.py`). Aucun mot ne vient
+  du corpus de mesure.
+- Écartés, et pourquoi :
+  - **Whisper** (même *tiny*) transcrit mieux mais par blocs, avec plusieurs secondes
+    de latence et un cœur plein par phrase, et il lui faudrait un détecteur d'éveil.
+  - **Seuil de confiance Vosk** sur le mot d'éveil (`SetWords(True)`) : **mesuré, sans
+    valeur**. Sur 938 « hub » reconnus, la confiance médiane est 1,00 pour les vraies
+    commandes et 0,88 pour les phrases de TV ; un seuil à 0,9 garderait 252 vraies sur
+    304 et laisserait encore passer 298 fausses sur 634. Les mots de remplissage font
+    ce travail bien mieux.
+  - **Écoute raccourcie après que la TV a parlé** : rien à gagner, la TV ne produit
+    plus une seule commande (flux de 348 phrases enchaînées, 0), et cela gênerait
+    quelqu'un qui parle par-dessus la TV.
+  - **Double validation des commandes risquées** : `eteindre` passe déjà par l'écran de
+    confirmation du menu, et hors menu seul `retour` agit — rien à ajouter.
+  - **openWakeWord / Porcupine** : Porcupine demande une licence ; openWakeWord
+    demanderait un second modèle (onnxruntime), un entraînement local et surtout des
+    dizaines de gigaoctets d'exemples négatifs pour apprendre « HUB ». **Non mesuré** :
+    Vosk atteint l'objectif (94 %, 0 faux positif) avec le modèle déjà chargé.
 
 ## Commandes
 
@@ -64,16 +94,45 @@ modèles (`graph/Gr.fst`, 15 septembre 2026). « boosteroid » n'y est pas : on 
 
 `avatars` n'est jamais produit : ce datagramme est réservé à la télécommande.
 
-**Fenêtre d'écoute.** « HUB » seul ouvre 6 s d'écoute (`voix:eveil`) ; la commande
+**Fenêtre d'écoute.** Le mot d'éveil seul ouvre 6 s d'écoute (`voix:eveil`) ; la commande
 qui suit la consomme (`voix:repos`). Sans éveil, une commande est **ignorée** : c'est
 la protection contre le son de la TV. Un bruit pendant la fenêtre donne
 `voix:incompris` sans la prolonger.
 
-**Particularité française, mesurée.** Le petit modèle confond « heub » avec « aide ».
-D'où deux règles, étroites parce que « Aide-moi à porter ces cartons » existe :
-« aide » *immédiatement suivi d'une commande nue* (« aide bureau », sans mot outil ni
-`[unk]`) vaut « HUB bureau » ; et « aide » *seul*, au repos, ouvre l'écoute (redire
-« aide » ouvre alors l'aide).
+## Le mot d'éveil (`systeme.motEveil`)
+
+| réglage | français | anglais |
+|---|---|---|
+| `ok-hub` (**défaut**) | « OK HUB », « Okay HUB » | « OK / Okay hub » |
+| `salut-hub` | « Salut HUB » | « Hey hub » |
+| `dis-hub` | « Dis HUB » | « Hey hub » |
+| `hub` | « HUB », « OK HUB » | « hub », « hey / ok hub » |
+| un prénom (« Nestor », « Dis Hélène ») | tel quel | tel quel |
+
+**Pourquoi un mot d'éveil à deux mots, mesuré.** Le petit modèle ne connaît pas
+« heub » : selon la voix il le rend « aide », « eux », « hum », « hommes », ou le perd.
+Avec « HUB » seul, 75 % des commandes françaises passent ; précédé d'un mot que le
+modèle connaît bien, l'ancre tient même quand « hub » est massacré — 94 % avec
+« OK HUB », 95 % avec « Salut HUB » (tableau des mesures). D'où la règle : après
+l'ancre (« ok », « salut », « dis »), **jusqu'à deux mots quelconques sont sautés**
+avant la commande ; l'ancre seule, au repos, ouvre l'écoute ; pendant l'écoute, « ok »
+redevient la commande qui valide. Une seule commande doit rester dans la phrase, le
+reste en mots outils : c'est ce qui empêche une phrase de TV commençant par « Salut »
+de lancer quoi que ce soit.
+
+**Un prénom choisi.** Un ou deux mots, lettres seulement. Refusé (et le défaut gardé,
+avec la raison dans `voix.json` et le journal) s'il est **inconnu du modèle** — le
+service lit la table de mots de `graph/Gr.fst` — ou s'il est **déjà une commande**
+(« Télé », « Netflix »). « Nestor » mesuré : 93 % des commandes, 1 éveil intempestif
+sur 2 904 phrases de TV.
+
+**Ce que le menu peut lire.** `$XDG_RUNTIME_DIR/hub/voix.json`, réécrit à chaque
+changement : `{"motEveil", "demande", "refus": null|"forme"|"commande"|"inconnu",
+"phrases": ["okay hub", "ok hub"], "langue"}`.
+
+**Reste de l'ancienne règle française.** Avec `hub` seul, « aide » suivi d'une commande
+nue vaut « HUB <commande> », et « aide » seul au repos ouvre l'écoute : le modèle rend
+« heub » par « aide ». Avec les autres mots d'éveil, cette règle ne sert plus.
 
 ## Protocole avec le menu
 
@@ -112,9 +171,10 @@ Un socket présent mais muet (menu tombé sans nettoyer) est traité comme ferm�
 ## Réglages
 
 `~/.config/hub/reglages.json`, relu toutes les 2 s (date et taille du fichier) :
-`systeme.voix` à `false` **relâche le micro** (pw-record arrêté) ; la `langue` du
-profil `profilActif` choisit le modèle (`fr` ou `en`, chargé à la demande puis gardé).
-Fichier absent ou abîmé : voix active, français.
+`systeme.voix` à `false` **relâche le micro** (pw-record arrêté) ; `systeme.motEveil`
+choisit le mot d'éveil (grammaire refabriquée en 0,01 s, sans recharger le modèle) ; la
+`langue` du profil `profilActif` choisit le modèle (`fr` ou `en`, chargé à la demande
+puis gardé). Fichier absent ou abîmé : voix active, français, « OK HUB ».
 
 ## Le micro
 
@@ -194,69 +254,102 @@ celui qui le lance.
 ## Mesures
 
 Sur le M720q (i3-8100T), Ubuntu 24.04 de travail, Python 3.12, vosk 0.3.45,
-**13–15 septembre 2026**. Aucun humain : voix de synthèse **Piper** (4 voix
-françaises, 3 anglaises), faute de micro et de locuteur. Scripts de mesure hors dépôt
-(`corpus.py`, `live.py` du bloc-notes de la session).
+**15 et 16 septembre 2026**. Aucun humain : voix de synthèse **Piper**, faute de micro
+et de locuteur. Le banc est dans `mesure/` (son en-tête dit comment l'installer) :
 
-### Service réel, faux micro PipeWire
+```sh
+HUB_BANC_DOSSIER=/mnt/ssd/hub-banc venv/bin/python mesure/banc.py \
+    /mnt/ssd/projets/hub/installer/voix fr ok-hub --flux --detail
+```
+
+### Le corpus (`mesure/phrases.py`)
+
+- **400 commandes** par voix et par condition : 36 commandes du menu (dont 6 en deux
+  temps, « OK HUB. » … « Télé. ») et 14 services web, avec le mot d'éveil mesuré.
+- **348 phrases de TV et de conversation** qui ne doivent **rien** déclencher, écrites
+  exprès pleines de nos mots (télé, films, jeux, bureau, gauche, retour, aide, éteins,
+  netflix, arte…), des ancres (« Salut, tu vas bien ? », « Ok, d'accord », « Dis, tu as
+  pensé au pain ? ») et de « hub » au sens courant (« le premier hub d'Air France »).
+- Deux conditions : **propre**, et **bruit rose 20 dB sous la parole**.
+- `--flux` : les 348 phrases enchaînées (0,4 s entre elles) dans un seul reconnaisseur,
+  sans jamais de silence long — la TV qui parle sans arrêt.
+
+### Français, 4 voix Piper (siwis, tom, upmc, gilles-low)
+
+288 commandes du menu + 112 services web, 2 904 phrases de TV (348 × 4 voix × 2 conditions).
+
+| mot d'éveil | commandes | services web | faux positifs | éveils sur la TV | flux TV |
+|---|---|---|---|---|---|
+| **avant** (grammaire sans remplissage, « HUB ») | 236/288 (**82 %**) | 92/112 | **60/2 904** | 171 | **43 commandes** |
+| `hub` | 216/288 (75 %) | 86/112 | 0/2 904 | 34 | 0 |
+| `dis-hub` | 250/288 (87 %) | 104/112 | 0/2 904 | 9 | 0 |
+| prénom « Nestor » | 268/288 (93 %) | 106/112 | 0/2 904 | 1 | 0 |
+| **`ok-hub` (retenu)** | **272/288 (94,4 %)** | **107/112 (96 %)** | **0/2 904** | **2** | **0** |
+| `salut-hub` | 274/288 (95,1 %) | 105/112 | 0/2 904 | 18 | 0 |
+
+Par voix avec `ok-hub` (commandes + web) : siwis 99/100, tom 98/100, upmc 93/100,
+gilles-low 89/100. **Objectif atteint** : 379/400 (**94,8 %**) et **zéro faux positif**,
+contre 328/400 (82 %) et 60 faux positifs avant.
+
+`salut-hub` fait jeu égal sur les commandes ; `ok-hub` réveille neuf fois moins souvent
+sur la TV (2 contre 18 éveils sans suite), d'où le défaut.
+
+### Voix jamais utilisées pour régler quoi que ce soit
+
+upmc (2ᵉ locuteur), siwis-low, tom ralenti (×1,25), siwis accéléré (×0,8) :
+
+| | commandes + web | faux positifs |
+|---|---|---|
+| avant (grammaire sans remplissage, « HUB ») | 353/400 (88 %) | 60/2 904, flux : 54 commandes |
+| **`ok-hub`** | **383/400 (96 %)** | **0/2 904**, flux : 0 |
+| `salut-hub` | 382/400 (96 %) | 0/2 904, flux : 0 |
+
+Une cinquième voix, `fr_FR-mls_1840-low`, a été **écartée** : Vosk ne la comprend pas
+même en dictée libre (« OK hub, bureau » y devient « un fils ont besoin »). Avec elle,
+`ok-hub` tombe à 277/360 commandes et 3 faux positifs sur 3 630 — c'est la limite de
+l'exercice, pas celle du HUB.
+
+### Anglais, 3 voix Piper (lessac, ryan, alan) — non dégradé
+
+180 commandes + 54 services web, 324 phrases de TV.
+
+| mot d'éveil | commandes | web | faux positifs |
+|---|---|---|---|
+| avant | 176/180 (98 %) | 46/54 | **12/324**, flux : 8 commandes |
+| `hub` | 170/180 (94 %) | 46/54 | 0/324 |
+| **`ok-hub`** | **180/180 (100 %)** | 46/54 | **0/324**, flux : 0 |
+| `salut-hub` (« hey hub ») | 180/180 (100 %) | 48/54 | 0/324 |
+
+Les échecs anglais restants sont des noms de services que le modèle épelle autrement :
+« Xbox cloud » sort « eggs xbox cloud », « GeForce » sort « chief force ».
+
+### Service réel, faux micro PipeWire (13–15 septembre 2026)
 
 `pw-loopback` crée une source `Audio/Source` ; `pw-play` y joue les phrases ; un faux
-menu écoute le socket.
+menu écoute le socket. Ces chiffres datent d'avant le remplissage, sauf les deux
+dernières lignes, remesurées le 16.
 
 | mesure | valeur |
 |---|---|
 | CPU sans micro (attente, `pw-dump` / 3 s) | 0,3 % d'un cœur |
 | CPU micro présent, silence | 6,1 % d'un cœur (+ pw-record) |
-| mémoire (RSS), modèle français chargé | 160 Mo |
-| chargement d'un modèle | 0,6 à 1,2 s |
 | micro apparu → `voix:micro-present` | 2,8 s |
 | micro retiré → `voix:micro-absent` | 2,3 s |
 | **fin de la parole → commande reçue par le menu** | **0,44 à 0,70 s** |
-| phrases jouées (fr 5, en 3) | 8/8 reçues, 1 phrase hors commande : rien d'envoyé |
 | langue changée dans reglages.json | modèle anglais chargé, commandes anglaises reçues |
 | `systeme.voix` à false puis true | pw-record arrêté, puis relancé |
-
-### Corpus de synthèse (`--fichier`)
-
-Par voix : 30 commandes en français (28 en anglais), dont 5 en deux temps (« HUB. » …
-« Télé. ») ; 15 phrases de TV ou de conversation **sans** « HUB » mais pleines de nos
-mots (« Ce soir à la télé, un grand film »). « HUB » est fait prononcer `[[ˈœb]]`.
-Bruit : bruit rose ajouté, ≈ 20 dB sous la parole.
-
-Résultat attendu : **la commande exacte, une seule fois** ; pour les phrases sans
-« HUB », **aucune commande**. Mesuré le 15 septembre 2026, analyse dans son état
-commité.
-
-| voix Piper | commandes, propre | commandes, bruit | sans « HUB » : rien envoyé (propre / bruit) |
-|---|---|---|---|
-| fr_FR-siwis-medium | 29/30 | 29/30 | 15/15 · 15/15 |
-| fr_FR-tom-medium | 28/30 | 27/30 | **14/15** · 15/15 |
-| fr_FR-upmc-medium | 15/30 | 16/30 | 15/15 · 15/15 |
-| fr_FR-gilles-low | 15/30 | 15/30 | 15/15 · 15/15 |
-| **français** | **87/120 (72 %)** | **87/120 (72 %)** | **59/60 · 60/60** |
-| en_US-lessac-medium | 28/28 | 28/28 | 15/15 · 15/15 |
-| en_US-ryan-medium | 23/28 | 23/28 | 15/15 · 15/15 |
-| en_GB-alan-medium | 28/28 | 28/28 | 15/15 · 15/15 |
-| **anglais** | **79/84 (94 %)** | **79/84 (94 %)** | **45/45 · 45/45** |
-
-- Calcul : **facteur temps réel 0,034 à 0,041** (1 s de son coûte 35 à 40 ms d'un cœur).
-- Le seul faux positif : tom, « On regarde un film ce soir ? » rendu « ok hub à film
-  sur » → `tv`. Des « HUB » isolés entendus dans les phrases de TV : 0 à 2 par série
-  de 15, sans suite puisqu'aucune commande ne venait dans les 6 s.
-- Les échecs français sont presque tous **« HUB » non reconnu** : upmc le rend
-  « thème », « sur », « à » ; gilles (voix basse qualité) mélange tout. Les échecs
-  anglais : ryan, « Hub. » dit seul, entendu « help ».
-- Avant la tolérance aux mots parasites et la règle « aide » : siwis 20/30, tom 23/30,
-  upmc 13/30, gilles 13/30 (13 septembre).
+| mémoire (RSS), modèle français chargé | **177 Mo** (162 Mo sans le remplissage) |
+| facteur temps réel (1 s de son) | **0,034** (0,030 sans le remplissage) |
+| grammaire refabriquée (changement de mot d'éveil) | 0,01 s, sans recharger le modèle |
 
 ### Ce que ces chiffres ne disent pas
 
 - **Pas de voix humaine, pas de vrai micro, pas de pièce.** Une télécommande à micro
   collée à la bouche sera plus propre que la synthèse bruitée ; un micro USB à 3 m
   d'une TV allumée, bien pire. À remesurer avec le vrai micro, les vraies voix.
-- **« HUB » est le point faible en français** : le modèle ne connaît pas ce mot anglais
-  prononcé à la française, et le rend selon la voix par « aide », « thème », « sur »…
-  Si l'essai réel le confirme, un mot d'éveil plus français (« Salut HUB », ou
-  entraîner openWakeWord) serait la suite.
-- **La TV qui parle** n'est testée qu'avec des phrases isolées. Une émission qui dit
-  « hub » puis « films » dans les 6 s enverrait `tv` au menu ; hors menu, rien.
+- Le corpus de TV est **écrit**, pas enregistré : des phrases de journal, de publicité,
+  de fiction et de salon, dites par les mêmes quatre voix que les commandes.
+- La TV qui parle **pendant** qu'on dit le mot d'éveil n'est pas mesurée : ici, le
+  bruit est un bruit rose, pas une autre voix.
+- `gilles-low` (voix de basse qualité, nasales absentes de son jeu de phonèmes) tire la
+  moyenne vers le bas : c'est voulu, elle tient lieu de mauvaise condition.
