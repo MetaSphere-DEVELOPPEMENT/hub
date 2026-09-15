@@ -3,13 +3,15 @@
 //
 // Le menu parle à hub-menu (Python) par window.webkit.messageHandlers.hub, en JSON :
 //   → { type: "choix", mode }            un mode est lancé, le menu va se fermer
+//   → { type: "choix", mode: "web", service }  un service (« netflix ») : hub-web l'ouvre
 //   → { type: "reglages", donnees }      enregistrer ~/.config/hub/reglages.json
 //   → { type: "meteo", lat, lon }        demander un relevé (Python le met en cache)
 //   → { type: "geocodage", nom, langue } chercher une ville
 //   → { type: "minuteur", minutes }      programmer (ou annuler avec 0) l'extinction
 //   → { type: "infos" }                  machine, adresse IP, disque…
 // Python répond en appelant window.hub.recevoir({ type, ... }), et y relaie aussi les
-// commandes vocales de hub-voix ({ type: "commande", nom } / { type: "voix", ... }).
+// état de l'enceinte réseau ({ type: "lecture", etat: {source, etat, titre, artiste, pochette, ecran…} | null })
+// et les commandes vocales de hub-voix ({ type: "commande", nom } / { type: "voix", ... }).
 //
 // Sans pont (navigateur ordinaire, mise au point), les réglages vont dans
 // localStorage et la météo est demandée directement à Open-Meteo.
@@ -53,6 +55,8 @@ const DEFAUTS_PROFIL = {
   meteo: null,
   pin: null,
   modes: { tv: true, gaming: true, bureau: true },
+  // { netflix: false } : service masqué pour ce profil. Absent : affiché.
+  services: {},
   reglagesProteges: false,
   verrouVeille: false,
 };
@@ -67,6 +71,8 @@ const DEFAUTS = {
     demanderProfil: false,
     echelle: 1,
     marge: 5,
+    // Enceinte réseau (installer/enceinte) : lu par hub-enceinte, qui relance le récepteur concerné.
+    enceinte: { spotify: true, airplay: true, ecran: true, nom: "HUB" },
     meteo: { active: true, ville: "Landivisiau", lat: 48.5091, lon: -4.0691 },
   },
 };
@@ -153,6 +159,36 @@ function estRestreint(p = profil()) {
   return ["tv", "gaming", "bureau"].some(m => !modeAutorise(m, p)) || extensions.restrictions.some(f => f(p));
 }
 function lancementRefuse(mode) { return extensions.avantLancer.some(f => f(mode) === false); }
+
+// ── Services : streaming et jeu en nuage ──────────────────────────────────
+// La liste blanche vit dans hub-web (adresse, agent utilisateur) ; ici, seulement ce
+// qui se voit. Des tuiles typographiques aux couleurs du service, pas de logos : les
+// marques déposées n'ont rien à faire dans le dépôt. tests/test_hub_web.py vérifie
+// que les identifiants sont les mêmes des deux côtés.
+const SERVICES = [
+  { id: "youtube", categorie: "streaming", nom: "YouTube", fond: "linear-gradient(135deg, #ff3b30, #b3001b)", encre: "#fff", style: "font-weight:800;letter-spacing:-.035em" },
+  { id: "netflix", categorie: "streaming", nom: "NETFLIX", fond: "radial-gradient(120% 140% at 50% 120%, #4a0508, #0b0b0b 65%)", encre: "#e50914", style: "font-weight:900;letter-spacing:.06em;transform:scaleY(1.15)" },
+  { id: "primevideo", categorie: "streaming", nom: "prime video", fond: "linear-gradient(135deg, #1f9bff, #0f171e 72%)", encre: "#fff", style: "font-weight:700;letter-spacing:-.02em;text-transform:lowercase" },
+  { id: "disneyplus", categorie: "streaming", nom: "Disney+", fond: "linear-gradient(140deg, #2a55d9, #0b1650 58%, #040a2c)", encre: "#fff", style: "font-weight:600;font-style:italic;letter-spacing:-.02em" },
+  { id: "canalplus", categorie: "streaming", nom: "CANAL+", fond: "linear-gradient(160deg, #2b2b2b, #000 60%)", encre: "#fff", style: "font-weight:900;letter-spacing:.02em" },
+  { id: "twitch", categorie: "streaming", nom: "twitch", fond: "linear-gradient(135deg, #a970ff, #6a2bd9)", encre: "#fff", style: "font-weight:800;letter-spacing:-.02em" },
+  { id: "arte", categorie: "streaming", nom: "arte", fond: "linear-gradient(135deg, #ff6a2b, #d8350c)", encre: "#fff", style: "font-weight:800;letter-spacing:-.04em" },
+  { id: "francetv", categorie: "streaming", nom: "france.tv", fond: "linear-gradient(135deg, #3b4bff, #0b1b8f)", encre: "#fff", style: "font-weight:700;letter-spacing:-.02em" },
+  { id: "geforcenow", categorie: "jeux", nom: "GeForce NOW", fond: "linear-gradient(150deg, #1c1c1c, #070707 70%)", encre: "#76b900", style: "font-weight:800;letter-spacing:-.01em" },
+  { id: "xcloud", categorie: "jeux", nom: "Xbox Cloud", fond: "linear-gradient(135deg, #17a317, #0b4d0b)", encre: "#fff", style: "font-weight:700;letter-spacing:-.01em" },
+  { id: "boosteroid", categorie: "jeux", nom: "Boosteroid", fond: "linear-gradient(135deg, #6a2cff, #ff3d8b)", encre: "#fff", style: "font-weight:800;letter-spacing:-.02em" },
+  { id: "steam", categorie: "jeux", nom: "STEAM", appli: true, fond: "linear-gradient(135deg, #2a475e, #171a21)", encre: "#c7d5e0", style: "font-weight:700;letter-spacing:.22em" },
+  { id: "moonlight", categorie: "jeux", nom: "Moonlight", appli: true, fond: "linear-gradient(135deg, #3a3f4b, #16181d)", encre: "#e8ecf5", style: "font-weight:600;letter-spacing:-.01em" },
+];
+function modeDuService(s) { return s.categorie === "jeux" ? "gaming" : "tv"; }
+function etatService(s) { return INITIAL.services?.services?.[s.id] || null; }
+// Steam et Moonlight n'existent que s'ils sont installés : sans relevé de hub-web (aperçu,
+// mise au point), on ne les invente pas. Les pages web, elles, sont toujours montrées.
+function serviceInstallable(s) { return !s.appli || !!etatService(s)?.disponible; }
+function serviceDisponible(s) { return etatService(s) ? etatService(s).disponible : !s.appli; }
+function serviceVisible(s, p = profil()) {
+  return p.services?.[s.id] !== false && modeAutorise(modeDuService(s), p) && serviceInstallable(s);
+}
 
 let minuterieSauvegarde;
 function sauver() {
@@ -666,7 +702,7 @@ function defiler(cible) {
 // La navigation reste d'abord dans la zone où l'on est (contenu d'un réglage, sommaire,
 // pied…) : sans ça, « haut » depuis un bouton du contenu sautait dans le sommaire voisin
 // au lieu du bouton juste au-dessus.
-const ZONES = ".contenu, .sommaire, .entete, .pied, .modes, .reprises, .editeur-identite, .editeur-securite, .choix, .pave";
+const ZONES = ".contenu, .sommaire, .entete, .pied, .modes, .reprises, .applis, .grille-jeux, .editeur-identite, .editeur-securite, .choix, .pave";
 function voisin(depart, direction) {
   const zone = depart.closest(ZONES);
   const dansZone = zone && voisinParmi(depart, direction, candidats().filter(e => zone.contains(e)));
@@ -744,9 +780,11 @@ function annoncer(texte) {
 
 function lancer(carte) {
   if (verrou) return;
-  if (APERCU) { son("ok"); return annoncer(t("apercu.mode", { mode: carte.querySelector(".nom").textContent })); }
   if (!modeAutorise(carte.dataset.mode)) { son("erreur"); return annoncer(t("mode.interdit")); }
   if (lancementRefuse(carte.dataset.mode)) return;
+  // Jeux n'est pas un programme mais un choix de services : un sous-écran, pas un départ.
+  if (carte.dataset.mode === "gaming") return ACTIONS.jeux();
+  if (APERCU) { son("ok"); return annoncer(t("apercu.mode", { mode: carte.querySelector(".nom").textContent })); }
   if (carte.dataset.indisponible) {
     son("erreur");
     annoncer(t(carte.dataset.indisponible));
@@ -810,6 +848,69 @@ function lancerReprise(tuile, reprise) {
   setTimeout(() => envoyer({ type: "choix", mode: "tv", fichier: reprise.fichier }), profil().animations === "reduites" ? 0 : 620);
 }
 
+// ── Streaming sur l'accueil, jeux en sous-écran ───────────────────────────
+// Le streaming est une rangée de l'accueil, à une touche Bas des cartes : on y va plus
+// souvent qu'à Kodi pour certains, et un sous-écran « TV & streaming » aurait ajouté un
+// OK de plus devant Kodi à tous les autres. Les jeux, eux, sont derrière la carte Jeux :
+// on s'y installe pour un moment, et il y a de la place pour dire comment revenir.
+function tuileService(s, grande = false) {
+  const indisponible = !serviceDisponible(s);
+  const tuile = el("button", {
+    class: `tuile-service${grande ? " grande" : ""}${indisponible ? " indisponible" : ""}`,
+    "data-nav": true, "data-cle": `service-${s.id}`, "data-accent": s.categorie === "jeux" ? "jeux" : "tv",
+    style: `--fond:${s.fond};--encre:${s.encre}`,
+    onclick: () => lancerService(tuile, s),
+  },
+  el("span", { class: "marque", style: s.style }, s.nom),
+  grande && el("span", { class: "sous" }, t(`service.detail.${s.id}`)),
+  indisponible ? el("span", { class: "etat-service" }, t("service.absent"))
+    : grande && etatService(s)?.via === "appli" && el("span", { class: "etat-service" }, t("service.appli")));
+  return tuile;
+}
+
+function rendreApplis() {
+  const liste = SERVICES.filter(s => s.categorie === "streaming" && serviceVisible(s));
+  const zone = $("applis-liste");
+  const cle = pile.at(-1) === "accueil" ? courant?.dataset.cle : null;
+  zone.innerHTML = "";
+  for (const s of liste) zone.append(tuileService(s));
+  $("applis").hidden = !liste.length;
+  document.body.classList.toggle("avec-applis", liste.length > 0);
+  const retrouve = cle && zone.querySelector(`[data-cle="${cle}"]`);
+  if (retrouve) definirFocus(retrouve, true);
+}
+
+function rendreJeux() {
+  const zone = $("contenu-jeux");
+  zone.innerHTML = "";
+  zone.style.transform = "";
+  const liste = SERVICES.filter(s => s.categorie === "jeux" && serviceVisible(s));
+  zone.append(el("div", { class: "jeux-tete" },
+    el("h3", {}, t("jeux.titre")),
+    el("button", { class: "option", "data-nav": true, "data-cle": "fermer-jeux", "data-action": "fermer" }, t("fermer"))));
+  if (!liste.length) zone.append(el("div", { class: "aide" }, t("jeux.aucun")));
+  const grille = el("div", { class: "grille-jeux" });
+  for (const s of liste) grille.append(tuileService(s, true));
+  zone.append(grille, el("div", { class: "retour-jeux" }, t("jeux.retour")));
+}
+
+function lancerService(tuile, s) {
+  if (verrou || lancementRefuse("web")) return;
+  if (!serviceVisible(s)) { son("erreur"); return annoncer(t(modeAutorise(modeDuService(s)) ? "service.masque" : "mode.interdit")); }
+  if (APERCU) { son("ok"); return annoncer(t("apercu.mode", { mode: s.nom })); }
+  if (!serviceDisponible(s)) {
+    son("erreur");
+    tuile?.animate([{ translate: "0" }, { translate: "-.5rem" }, { translate: ".5rem" }, { translate: "0" }], { duration: 380, easing: "ease-out" });
+    return annoncer(t("service.absent.detail", { nom: s.nom }));
+  }
+  verrou = true;
+  son("ok");
+  if (PONT) envoyer({ type: "reglages", donnees: reglages });
+  tuile?.classList.add("lance");
+  document.body.classList.add("depart");
+  setTimeout(() => envoyer({ type: "choix", mode: "web", service: s.id }), profil().animations === "reduites" ? 0 : 620);
+}
+
 // ── Actions nommées ───────────────────────────────────────────────────────
 const ACTIONS = {
   profils: () => { rendreProfils(); ouvrirCalque("profils"); },
@@ -824,6 +925,13 @@ const ACTIONS = {
   },
   meteo: () => { rendreMeteo(); ouvrirCalque("meteo"); chargerMeteo(); },
   aide: () => { rendreAide(); ouvrirCalque("aide"); },
+  jeux: () => {
+    rendreJeux();
+    // Les tuiles sont recréées à chaque ouverture : on revient sur le même service par sa clé.
+    const cle = focusParCalque.jeux?.dataset.cle;
+    focusParCalque.jeux = (cle && $("contenu-jeux").querySelector(`[data-cle="${cle}"]`)) || $("contenu-jeux").querySelector(".tuile-service");
+    ouvrirCalque("jeux");
+  },
   arret: () => ouvrirCalque("arret"),
   eteindre,
   fermer: fermerCalque,
@@ -1203,7 +1311,9 @@ const SECTIONS = [
   ["profils", '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18 14.2a6.5 6.5 0 0 1 3.5 5.8"/>'],
   ["langue", '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>'],
   ["voix", '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/>'],
+  ["enceinte", '<rect x="6" y="2.5" width="12" height="19" rx="2.5"/><circle cx="12" cy="14.5" r="3.2"/><circle cx="12" cy="7" r="1.2"/>'],
   ["telecommande", '<rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/>'],
+  ["services", '<rect x="3" y="4" width="18" height="13" rx="2.5"/><path d="m10.5 8 4 2.5-4 2.5zM8 21h8"/>'],
   ["meteo", '<path d="M7 18h10a4 4 0 0 0 .5-8A5.5 5.5 0 0 0 7 11a3.5 3.5 0 0 0 0 7z"/>'],
   ["veille", '<path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5z"/>'],
   ["raccourcis", '<rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6.5 10h1M10.5 10h1M14.5 10h1M8 14h8"/>'],
@@ -1251,7 +1361,7 @@ function rendreSection(garderFocus = true) {
   const p = profil(), s = reglages.systeme;
   zone.append(el("h3", {}, t(`section.${sectionCourante}`)));
   // Dire à qui s'applique ce qu'on règle : chaque profil garde ses propres choix.
-  if (["apparence", "fond", "langue", "voix", "meteo", "veille"].includes(sectionCourante)) {
+  if (["apparence", "fond", "langue", "voix", "services", "meteo", "veille"].includes(sectionCourante)) {
     zone.append(el("div", { class: "portee" }, avatar(p), t("portee.profil", { nom: p.nom })));
   }
 
@@ -1321,6 +1431,30 @@ function rendreSection(garderFocus = true) {
         rangee(t("sons"), null, options("sons", [[true, t("oui")], [false, t("non")]], sonsActifs(), v => { p.sons = v === true || v === "true"; })));
       break;
 
+    case "services": {
+      // Un profil restreint ne rallume pas lui-même ce qu'on lui a masqué ; les modes
+      // interdits emportent leurs services (pas de Netflix sans le mode TV).
+      const restreint = estRestreint();
+      if (restreint) zone.append(el("div", { class: "aide" }, t("services.restreint")));
+      for (const categorie of ["streaming", "jeux"]) {
+        zone.append(el("div", { class: "sous-titre" }, t(`services.${categorie}`)));
+        for (const sv of SERVICES.filter(x => x.categorie === categorie)) {
+          const autorise = modeAutorise(modeDuService(sv));
+          const actif = p.services?.[sv.id] !== false;
+          const aide = [t(`service.qualite.${sv.id}`), !autorise && t("services.mode.interdit"),
+            sv.appli && !serviceInstallable(sv) && t("services.non.installe")].filter(Boolean).join(" — ");
+          zone.append(rangee(
+            el("span", { class: "titre-service" }, el("span", { class: "mini-service", style: `--fond:${sv.fond};--encre:${sv.encre}` }, el("span", { style: sv.style }, sv.nom))),
+            aide,
+            restreint || !autorise ? el("div", { class: "options" }, el("span", { class: "etat-fige" }, t(actif && autorise ? "oui" : "non")))
+              : options(`service-${sv.id}`, [[true, t("services.afficher")], [false, t("services.masquer")]], actif,
+                v => { p.services = { ...p.services, [sv.id]: v === true || v === "true" }; })));
+        }
+      }
+      zone.append(el("div", { class: "aide" }, t("services.qualite.detail")));
+      break;
+    }
+
     case "meteo":
       zone.append(
         rangee(t("meteo.afficher"), null, options("meteo", [[true, t("oui")], [false, t("non")]], meteoProfil().active, v => { p.meteo = { ...meteoProfil(), active: v === true || v === "true" }; chargerMeteo(); })),
@@ -1341,6 +1475,10 @@ function rendreSection(garderFocus = true) {
             }, libelle))), false, true));
       break;
     }
+
+    case "enceinte":
+      zone.append(...contenuEnceinte());
+      break;
 
     case "telecommande":
       zone.append(contenuTelecommande());
@@ -1493,9 +1631,10 @@ function contenuRaccourcis() {
       ligne(["A"], "rc.ambiant"),
       ligne(["?"], "rc.aide"),
       ligne(["E"], "rc.eteindre"),
-      ligne(["F12"], "rc.kodi")),
+      ligne(["F12"], "rc.kodi"),
+      ligne(["F12", t("touche.guide")], "rc.service")),
     el("div", { class: "sous-titre" }, t("raccourcis.voix")),
-    el("div", { class: "raccourcis" }, ["vc.tv", "vc.jeux", "vc.bureau", "vc.retour", "vc.reglages", "vc.theme"].map(k => el("div", { class: "phrase" }, t(k)))));
+    el("div", { class: "raccourcis" }, ["vc.tv", "vc.service", "vc.jeux", "vc.bureau", "vc.retour", "vc.reglages", "vc.theme"].map(k => el("div", { class: "phrase" }, t(k)))));
 }
 
 function rendreAide() {
@@ -1562,6 +1701,14 @@ function commande(nom) {
   if (verrouAccueil) return exigerDeverrouillage();
   const modes = { tv: 0, gaming: 1, bureau: 2 };
   if (nom in modes && !modeAutorise(nom)) { son("erreur"); return annoncer(t("mode.interdit")); }
+  if (nom.startsWith("web:")) {
+    const s = SERVICES.find(x => x.id === nom.slice(4));
+    if (!s) return;
+    fermerTout();
+    const tuile = document.querySelector(`[data-cle="service-${s.id}"]`);
+    if (tuile && pile.at(-1) === "accueil") definirFocus(tuile, true);
+    return lancerService(tuile, s);
+  }
   if (nom in modes) {
     fermerTout();
     definirFocus(cartes[modes[nom]], true);
@@ -1704,6 +1851,85 @@ function manettes() {
   requestAnimationFrame(manettes);
 }
 
+// ── Enceinte réseau : en cours de lecture ─────────────────────────────────
+// hub-enceinte publie ce que jouent Spotify, AirPlay ou une recopie d'écran ; hub-menu le
+// relaie. Le bandeau n'est qu'une information : on ne pilote pas la musique d'un
+// téléphone depuis la TV, et un bouton de plus dans l'en-tête gênerait la navigation.
+let lecture = null;
+const SOURCES_LECTURE = { spotify: "Spotify", airplay: "AirPlay", ecran: "AirPlay" };
+
+function texteLecture(e) {
+  if (e.ecran && e.source === "ecran") {
+    return { titre: t("lecture.recopie"), detail: e.appareil ? t("lecture.depuis", { appareil: e.appareil }) : SOURCES_LECTURE.ecran };
+  }
+  const titre = e.titre || t("lecture.sans.titre");
+  const detail = [e.artiste, SOURCES_LECTURE[e.source] + (e.appareil ? ` · ${e.appareil}` : "")].filter(Boolean).join(" — ");
+  return { titre, detail: e.etat === "pause" ? `${t("lecture.pause")} · ${detail}` : detail };
+}
+
+function habillerLecture(prefixe, e) {
+  const bloc = $(prefixe);
+  bloc.hidden = !e;
+  if (!e) return;
+  const { titre, detail } = texteLecture(e);
+  $(`${prefixe}-titre`).textContent = titre;
+  $(`${prefixe}-detail`).textContent = detail;
+  const pochette = $(`${prefixe}-pochette`);
+  const image = e.pochette ? `url("${encodeURI(decodeURI(e.pochette))}")` : "";
+  if (pochette.dataset.image !== image) {
+    pochette.dataset.image = image;
+    pochette.style.backgroundImage = image;
+  }
+  pochette.classList.toggle("sans-image", !e.pochette);
+  pochette.dataset.source = e.source;
+  bloc.classList.toggle("en-pause", e.etat === "pause");
+  bloc.dataset.source = e.source;
+}
+
+function rendreLecture() {
+  habillerLecture("lecture", lecture);
+  habillerLecture("ambiant-lecture", lecture);
+}
+
+function recevoirLecture(etat) {
+  const avant = lecture;
+  lecture = etat && typeof etat === "object" && etat.source ? etat : null;
+  // Le mode ambiant est fait pour la musique : un morceau qui démarre ne le réveille pas.
+  if (lecture && (!avant || avant.titre !== lecture.titre || avant.source !== lecture.source) && lecture.etat === "lecture" &&
+      !document.body.classList.contains("ambiant") && pile.at(-1) === "accueil") {
+    annoncer(texteLecture(lecture).titre);
+  }
+  rendreLecture();
+}
+
+// Réglages → Enceinte réseau. Commun au HUB : c'est la même enceinte pour toute la maison.
+function contenuEnceinte() {
+  const e = reglages.systeme.enceinte;
+  const bascule = (cle, titre, aide) => rangee(t(titre), t(aide),
+    options(`enceinte-${cle}`, [[true, t("oui")], [false, t("non")]], e[cle] !== false, v => { e[cle] = v === true || v === "true"; }), false, true);
+  return [
+    bascule("spotify", "enceinte.spotify", "enceinte.spotify.detail"),
+    bascule("airplay", "enceinte.airplay", "enceinte.airplay.detail"),
+    bascule("ecran", "enceinte.ecran", "enceinte.ecran.detail"),
+    rangee(t("enceinte.nom"), t("enceinte.nom.detail", { nom: e.nom || "HUB" }), el("div", { class: "options" },
+      el("button", {
+        class: "option", "data-nav": true, "data-cle": "enceinte-nom",
+        onclick: () => ouvrirClavier(t("enceinte.nom"), e.nom || "HUB", nom => {
+          // Les caractères que l'annonce réseau n'aime pas sont retirés aussi par hub-enceinte.
+          const propre = [...nom].filter(ch => ch >= " ").join("").trim().slice(0, 40);
+          if (propre) { e.nom = propre; sauver(); }
+          rendreSection();
+        }),
+      }, `${e.nom || "HUB"} ✎`)), false, true),
+    el("div", { class: "aide" }, t("enceinte.limites")),
+  ];
+}
+
+setInterval(rendreLecture, 5000);
+// Au retour de Kodi, la musique jouait peut-être déjà : on l'affiche sans l'annoncer.
+lecture = INITIAL.lecture?.source ? INITIAL.lecture : null;
+rendreLecture();
+
 // ── Réception depuis hub-menu ─────────────────────────────────────────────
 window.hub = {
   recevoir(message) {
@@ -1715,6 +1941,7 @@ window.hub = {
       case "geocodage": return rappelGeocodage?.(message.resultats || []);
       case "minuteur": return recevoirMinuteur(message.fin);
       case "telecommande": return recevoirTelecommande(message.etat);
+      case "lecture": return recevoirLecture(message.etat);
       case "maj": return recevoirMiseAJour(message);
       case "texte":
         // Texte tapé sur le téléphone : il remplit la saisie en cours, s'il y en a une.
@@ -1739,6 +1966,7 @@ function appliquerTout() {
   appliquerApparence();
   for (const carte of cartes) carte.hidden = !modeAutorise(carte.dataset.mode);
   rendreReprises();
+  rendreApplis();
   appliquerTextes();
   horloge();
   afficherMeteo();
