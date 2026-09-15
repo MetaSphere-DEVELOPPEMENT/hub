@@ -378,6 +378,33 @@ def etat_telecommande(c):
     return {k: donnees.get(k) for k in garder}
 
 
+# ── Habillage d'Ubuntu et de Kodi ─────────────────────────────────────────
+def marqueur_habillage():
+    return dossier("XDG_CONFIG_HOME", Path.home() / ".config") / "hub" / "habillage-desactive"
+
+
+def appliquer_habillage(donnees, executer=subprocess.Popen, marqueur=None):
+    """Suit le réglage « Ubuntu et Kodi aux couleurs du HUB ».
+
+    Activé : on régénère en arrière-plan les fonds du profil (hub-theme apercu), pour
+    que le bureau et Kodi s'ouvrent déjà habillés. Désactivé : on remet l'apparence
+    d'origine une fois, et le marqueur dit aux scripts de session de ne plus habiller."""
+    marqueur = Path(marqueur or marqueur_habillage())
+    actif = (donnees.get("systeme") or {}).get("habillage", True) is not False
+    etait_actif = not marqueur.exists()
+    try:
+        if actif:
+            marqueur.unlink(missing_ok=True)
+            executer(["hub-theme", "apercu"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        else:
+            if etait_actif:
+                ecrire_atomique(marqueur, "1\n")
+                executer(["hub-theme", "restaurer"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError:
+        return False
+    return True
+
+
 # ── Mise à jour ───────────────────────────────────────────────────────────
 ETAT_MISE_A_JOUR = Path("/run/hub-mise-a-jour/etat.json")
 
@@ -571,7 +598,8 @@ def lancer():
                 self.quit()
             elif genre == "reglages":
                 try:
-                    enregistrer_reglages(c, message.get("donnees"))
+                    if enregistrer_reglages(c, message.get("donnees")):
+                        appliquer_habillage(message["donnees"])
                 except OSError as erreur:
                     print(f"hub-menu : réglages non enregistrés ({erreur})", file=sys.stderr)
             elif genre == "meteo":

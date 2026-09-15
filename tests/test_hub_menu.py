@@ -152,6 +152,28 @@ class Telecommande(AvecDossier):
         self.assertEqual(hub_menu.message_voix("texte:Brest".encode()), {"type": "texte", "texte": "Brest"})
 
 
+class Habillage(unittest.TestCase):
+    def test_active_regenere_les_fonds_desactive_restaure_une_fois(self):
+        with tempfile.TemporaryDirectory() as d:
+            marqueur = Path(d) / "habillage-desactive"
+            lances = []
+            executer = lambda cmd, **k: lances.append(cmd)
+            hub_menu.appliquer_habillage({"systeme": {}}, executer, marqueur)
+            self.assertEqual(lances[-1], ["hub-theme", "apercu"])
+            hub_menu.appliquer_habillage({"systeme": {"habillage": False}}, executer, marqueur)
+            hub_menu.appliquer_habillage({"systeme": {"habillage": False}}, executer, marqueur)
+            self.assertEqual(lances.count(["hub-theme", "restaurer"]), 1)
+            self.assertTrue(marqueur.exists())
+            hub_menu.appliquer_habillage({"systeme": {"habillage": True}}, executer, marqueur)
+            self.assertFalse(marqueur.exists())
+
+    def test_hub_theme_absent_ne_casse_rien(self):
+        def absent(*a, **k):
+            raise FileNotFoundError
+        with tempfile.TemporaryDirectory() as d:
+            self.assertFalse(hub_menu.appliquer_habillage({"systeme": {}}, absent, Path(d) / "m"))
+
+
 class MiseAJour(unittest.TestCase):
     def test_verifier_rend_la_reponse_de_l_outil(self):
         faux = lambda *a, **k: SimpleNamespace(stdout='{"disponible": true, "distant": "abc", "installee": "def"}', returncode=0)
