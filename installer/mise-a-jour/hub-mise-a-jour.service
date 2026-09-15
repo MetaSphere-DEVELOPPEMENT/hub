@@ -1,0 +1,14 @@
+# Mise à jour du HUB, lancée par le menu (Réglages → À propos → Installer).
+# Service système : l'installateur a besoin de root. L'utilisateur du HUB peut le
+# démarrer sans mot de passe grâce à 50-hub-mise-a-jour.rules — et rien d'autre.
+[Unit]
+Description=HUB : mise à jour depuis le dépôt git
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/hub/mise-a-jour.env
+ExecStart=/usr/local/bin/hub-mise-a-jour appliquer
+TimeoutStartSec=90min
+Nice=5

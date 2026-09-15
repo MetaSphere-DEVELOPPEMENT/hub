@@ -1,0 +1,10 @@
+// Autorise l'utilisateur du HUB (groupe « hub ») à démarrer la mise à jour, et
+// seulement elle : pas d'arrêt d'autres services, pas d'autre unité.
+polkit.addRule(function (action, subject) {
+  if (action.id === "org.freedesktop.systemd1.manage-units" &&
+      action.lookup("unit") === "hub-mise-a-jour.service" &&
+      action.lookup("verb") === "start" &&
+      subject.isInGroup("hub")) {
+    return polkit.Result.YES;
+  }
+});

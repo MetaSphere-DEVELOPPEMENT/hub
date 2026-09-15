@@ -1,0 +1,194 @@
+#!/usr/bin/env python3
+"""Mettre le HUB à jour depuis son dépôt git, et revenir en arrière si ça échoue.
+
+POURQUOI. Le HUB évolue après son installation : on améliore le projet ailleurs (sur
+le Mac, ou sur le HUB en mode Bureau), puis le HUB doit prendre la nouvelle version
+sans qu'on ressorte une clé USB ni qu'on tape une commande devant la TV.
+
+COMMENT, SANS RIEN CASSER.
+- Chaque version est un clone à part, rangé par commit dans /var/lib/hub/versions/.
+  On ne modifie jamais un clone existant : pas de pull, pas de retour forcé.
+- Avant d'installer, les tests du dépôt tournent dans le nouveau clone. S'ils
+  échouent, rien n'est installé.
+- L'installateur est relancé depuis le nouveau clone ; il ne touche pas aux réglages,
+  profils, codes et photos (~/.config/hub). S'il échoue, l'installateur de la
+  version précédente est relancé : le HUB revient à ce qui marchait.
+- L'état est publié dans /run/hub-mise-a-jour/etat.json pour que le menu l'affiche.
+
+La source (une URL git : GitHub privé, ou le Mac sur le réseau) est lue dans
+/etc/hub/mise-a-jour.json : {"source": "...", "branche": "main"}.
+
+    hub-mise-a-jour verifier     y a-t-il une version plus récente ? (JSON)
+    hub-mise-a-jour appliquer    installer la plus récente (root, via hub-mise-a-jour.service)
+"""
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+CONFIG = Path("/etc/hub/mise-a-jour.json")
+VERSIONS = Path("/var/lib/hub/versions")
+ETAT = Path("/run/hub-mise-a-jour/etat.json")
+VERSION_INSTALLEE = Path("/usr/local/share/hub/VERSION")
+GARDER = 3
+
+
+def lire_config(chemin=CONFIG):
+    try:
+        donnees = json.loads(Path(chemin).read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(donnees, dict) or not isinstance(donnees.get("source"), str) or not donnees["source"]:
+        return None
+    return {"source": donnees["source"], "branche": donnees.get("branche") or "main"}
+
+
+def version_installee(chemin=VERSION_INSTALLEE):
+    """L'installateur écrit `git describe --always --dirty` : on n'en garde que le commit."""
+    try:
+        brut = Path(chemin).read_text().split()[0]
+    except (OSError, IndexError):
+        return None
+    commit = brut.removesuffix("-dirty").rsplit("-g", 1)[-1]
+    return commit or None
+
+
+def meme_commit(a, b):
+    return bool(a and b) and (a.startswith(b) or b.startswith(a))
+
+
+def ecrire_etat(etat, chemin=ETAT):
+    chemin = Path(chemin)
+    chemin.parent.mkdir(parents=True, exist_ok=True)
+    provisoire = chemin.with_name(chemin.name + ".tmp")
+    provisoire.write_text(json.dumps({**etat, "le": int(time.time() * 1000)}))
+    os.chmod(provisoire, 0o644)
+    os.replace(provisoire, chemin)
+
+
+def executer(commande, **options):
+    return subprocess.run(commande, capture_output=True, text=True, **options)
+
+
+def dernier_commit(config, lancer=executer):
+    r = lancer(["git", "ls-remote", config["source"], f"refs/heads/{config['branche']}"], timeout=60)
+    if r.returncode != 0 or not r.stdout.strip():
+        raise RuntimeError(f"source injoignable : {(r.stderr or r.stdout).strip()[:300]}")
+    return r.stdout.split()[0]
+
+
+def verifier(config, installee, lancer=executer):
+    distant = dernier_commit(config, lancer)
+    return {"disponible": not meme_commit(distant, installee), "distant": distant[:12], "installee": installee}
+
+
+def cloner(config, commit, dossier_versions, lancer=executer):
+    cible = Path(dossier_versions) / commit
+    if (cible / ".git").is_dir():
+        return cible
+    provisoire = Path(dossier_versions) / f".{commit}.tmp"
+    shutil.rmtree(provisoire, ignore_errors=True)
+    provisoire.parent.mkdir(parents=True, exist_ok=True)
+    r = lancer(["git", "clone", "--quiet", "--branch", config["branche"], config["source"], str(provisoire)], timeout=600)
+    if r.returncode != 0:
+        shutil.rmtree(provisoire, ignore_errors=True)
+        raise RuntimeError(f"clone impossible : {r.stderr.strip()[:300]}")
+    obtenu = lancer(["git", "-C", str(provisoire), "rev-parse", "HEAD"]).stdout.strip()
+    if obtenu != commit:
+        # La branche a avancé entre la vérification et le clone : on installe ce qu'on a
+        # vraiment téléchargé, rangé sous son vrai nom.
+        commit, cible = obtenu, Path(dossier_versions) / obtenu
+        if (cible / ".git").is_dir():
+            shutil.rmtree(provisoire, ignore_errors=True)
+            return cible
+    os.replace(provisoire, cible)
+    return cible
+
+
+def lancer_tests(depot, lancer=executer):
+    if not (Path(depot) / "tests").is_dir():
+        return True, "aucun test"
+    r = lancer([sys.executable, "-m", "unittest", "discover", "-s", "tests"], cwd=depot, timeout=900)
+    return r.returncode == 0, (r.stderr or r.stdout)[-800:]
+
+
+def installer(depot, utilisateur, lancer=executer):
+    environnement = {**os.environ, "SUDO_USER": utilisateur, "DEBIAN_FRONTEND": "noninteractive"}
+    r = lancer(["bash", str(Path(depot) / "installer" / "hub-installer.sh"), "--pour-de-vrai", "--sans-audit"],
+               cwd=depot, env=environnement, timeout=3600)
+    return r.returncode == 0, (r.stderr or r.stdout)[-800:]
+
+
+def menage(dossier_versions, a_garder):
+    versions = sorted((d for d in Path(dossier_versions).iterdir() if d.is_dir() and not d.name.startswith(".")),
+                      key=lambda d: d.stat().st_mtime, reverse=True)
+    for d in versions[GARDER:]:
+        if d.name not in a_garder:
+            shutil.rmtree(d, ignore_errors=True)
+
+
+def appliquer(config, utilisateur, dossier_versions=VERSIONS, etat=ecrire_etat, lancer=executer, installee=None):
+    installee = installee if installee is not None else version_installee()
+    etat({"etape": "verification"})
+    commit = dernier_commit(config, lancer)
+    if meme_commit(commit, installee):
+        etat({"etape": "a-jour", "version": commit[:12]})
+        return 0
+    precedente = next((d for d in Path(dossier_versions).glob("*") if installee and meme_commit(d.name, installee)), None) \
+        if Path(dossier_versions).is_dir() else None
+
+    etat({"etape": "telechargement", "version": commit[:12]})
+    depot = cloner(config, commit, dossier_versions, lancer)
+
+    etat({"etape": "tests", "version": depot.name[:12]})
+    reussi, sortie = lancer_tests(depot, lancer)
+    if not reussi:
+        etat({"etape": "echec", "raison": "tests", "detail": sortie, "version": depot.name[:12]})
+        return 1
+
+    etat({"etape": "installation", "version": depot.name[:12]})
+    reussi, sortie = installer(depot, utilisateur, lancer)
+    if reussi:
+        etat({"etape": "terminee", "version": depot.name[:12]})
+        menage(dossier_versions, {depot.name, precedente.name if precedente else ""})
+        return 0
+
+    if precedente:
+        etat({"etape": "retour", "version": precedente.name[:12], "detail": sortie})
+        revenu, _ = installer(precedente, utilisateur, lancer)
+        etat({"etape": "echec", "raison": "installation", "retour": revenu, "detail": sortie, "version": precedente.name[:12]})
+    else:
+        etat({"etape": "echec", "raison": "installation", "retour": False, "detail": sortie})
+    return 1
+
+
+def main(arguments):
+    if not arguments or arguments[0] not in ("verifier", "appliquer"):
+        print(__doc__.strip().splitlines()[-2:], file=sys.stderr)
+        return 2
+    config = lire_config()
+    if not config:
+        print(json.dumps({"erreur": "configuration", "detail": f"{CONFIG} absent ou sans source"}))
+        return 3
+    try:
+        if arguments[0] == "verifier":
+            print(json.dumps(verifier(config, version_installee())))
+            return 0
+        utilisateur = os.environ.get("HUB_UTILISATEUR") or (arguments[1] if len(arguments) > 1 else None)
+        if not utilisateur:
+            print("hub-mise-a-jour appliquer : HUB_UTILISATEUR manquant", file=sys.stderr)
+            return 2
+        return appliquer(config, utilisateur)
+    except (RuntimeError, OSError, subprocess.SubprocessError) as erreur:
+        if arguments[0] == "appliquer":
+            ecrire_etat({"etape": "echec", "raison": "source", "detail": str(erreur)})
+        print(json.dumps({"erreur": "source", "detail": str(erreur)}))
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

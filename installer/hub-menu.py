@@ -378,6 +378,32 @@ def etat_telecommande(c):
     return {k: donnees.get(k) for k in garder}
 
 
+# ── Mise à jour ───────────────────────────────────────────────────────────
+ETAT_MISE_A_JOUR = Path("/run/hub-mise-a-jour/etat.json")
+
+
+def verifier_mise_a_jour(executer=subprocess.run):
+    """Demande à hub-mise-a-jour s'il existe une version plus récente (sans rien installer)."""
+    try:
+        r = executer(["hub-mise-a-jour", "verifier"], capture_output=True, text=True, timeout=90)
+        reponse = json.loads(r.stdout or "{}")
+    except (OSError, ValueError, subprocess.SubprocessError) as erreur:
+        return {"erreur": "indisponible", "detail": str(erreur)[:200]}
+    return reponse if isinstance(reponse, dict) else {"erreur": "indisponible"}
+
+
+def lancer_mise_a_jour(executer=subprocess.run):
+    # Le service tourne en root ; une règle polkit autorise l'utilisateur du HUB à le
+    # démarrer, lui et rien d'autre. --no-block : le menu suit la progression lui-même.
+    r = executer(["systemctl", "start", "--no-block", "hub-mise-a-jour.service"], capture_output=True, text=True)
+    return r.returncode == 0
+
+
+def etat_mise_a_jour(chemin=ETAT_MISE_A_JOUR):
+    donnees = lire_json(chemin)
+    return donnees if isinstance(donnees, dict) and isinstance(donnees.get("etape"), str) else None
+
+
 # ── Messages ──────────────────────────────────────────────────────────────
 def message_voix(datagramme):
     """Traduit un datagramme de hub-voix en message pour la page, ou None."""
@@ -440,6 +466,7 @@ def lancer():
             super().__init__(application_id="fr.boudine.HubMenu")
             self.choix = None
             self.fichier = None
+            self.etat_maj = None
             self.vue = None
             self.ecoute = None
 
@@ -503,6 +530,13 @@ def lancer():
             GLib.timeout_add_seconds(2, self.surveiller_telecommande)
             return vue
 
+        def suivre_mise_a_jour(self):
+            etat = etat_mise_a_jour()
+            if etat != self.etat_maj:
+                self.etat_maj = etat
+                self.vers_page({"type": "maj", "etat": etat})
+            return not (etat and etat["etape"] in ("terminee", "echec", "a-jour"))
+
         def surveiller_telecommande(self):
             etat = etat_telecommande(c)
             if etat != self.telecommande:
@@ -552,6 +586,17 @@ def lancer():
             elif genre == "minuteur" and isinstance(message.get("minutes"), int):
                 minutes = max(0, min(message["minutes"], 240))
                 self.en_fond(lambda: {"type": "minuteur", "fin": programmer_minuteur(c, minutes)})
+            elif genre == "maj-verifier":
+                self.en_fond(lambda: {"type": "maj", "verification": verifier_mise_a_jour(), "etat": etat_mise_a_jour()})
+            elif genre == "maj-appliquer":
+                if lancer_mise_a_jour():
+                    self.etat_maj = None
+                    GLib.timeout_add_seconds(2, self.suivre_mise_a_jour)
+                else:
+                    self.vers_page({"type": "maj", "etat": {"etape": "echec", "raison": "lancement"}})
+            elif genre == "relancer":
+                # Sortir sans choix : le script de session relance le menu, dans sa nouvelle version.
+                self.quit()
             elif genre == "avatars":
                 self.en_fond(lambda: {"type": "avatars", "liste": avatars()})
             elif genre == "infos":

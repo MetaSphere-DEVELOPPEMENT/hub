@@ -1330,6 +1330,7 @@ function rendreSection(garderFocus = true) {
         info(t("apropos.allume"), i.allumeDepuis),
         info(t("apropos.disque"), i.disqueLibre),
         info(t("apropos.version"), i.version)),
+        contenuMiseAJour(),
         el("div", { class: "options", style: "justify-content:flex-start;margin-top:.4rem" },
           el("button", { class: "option", "data-nav": true, "data-cle": "fermer-reglages", "data-action": "fermer" }, t("fermer"))));
       break;
@@ -1340,6 +1341,47 @@ function rendreSection(garderFocus = true) {
     const retrouve = zone.querySelector(`[data-cle="${CSS.escape(cle)}"]`);
     if (retrouve) definirFocus(retrouve, true);
   }
+}
+
+// ── Mise à jour ───────────────────────────────────────────────────────────
+const maj = { verification: null, etat: null, enCours: false };
+const ETAPES_MAJ = ["verification", "telechargement", "tests", "installation", "terminee"];
+
+function contenuMiseAJour() {
+  const { verification: v, etat: e } = maj;
+  let texte = t("maj.detail"), boutons = [];
+  const actif = e && !["terminee", "echec", "a-jour"].includes(e.etape);
+  if (actif) {
+    texte = t(`maj.etape.${e.etape}`, { v: e.version || "" });
+  } else if (e?.etape === "terminee") {
+    texte = t("maj.terminee", { v: e.version || "" });
+  } else if (e?.etape === "echec") {
+    texte = t(e.retour ? "maj.echec.retour" : `maj.echec.${e.raison || "installation"}`);
+  } else if (maj.enCours) {
+    texte = t("maj.recherche");
+  } else if (v?.erreur) {
+    texte = t(v.erreur === "configuration" ? "maj.sans.source" : "maj.injoignable");
+  } else if (v) {
+    texte = v.disponible ? t("maj.disponible", { v: v.distant }) : t("maj.a.jour");
+  }
+  if (!actif && !maj.enCours) {
+    boutons.push(el("button", { class: "option", "data-nav": true, "data-cle": "maj-verifier", onclick: () => { maj.enCours = true; maj.etat = null; envoyer({ type: "maj-verifier" }); rendreSection(); } }, t("maj.rechercher")));
+    if (v?.disponible && e?.etape !== "terminee") {
+      boutons.push(el("button", { class: "option choisie", "data-nav": true, "data-cle": "maj-appliquer", onclick: () => { maj.etat = { etape: "verification" }; envoyer({ type: "maj-appliquer" }); rendreSection(); } }, t("maj.installer")));
+    }
+  }
+  const progression = actif ? el("div", { class: "barre-maj" }, el("i", { style: `width:${(ETAPES_MAJ.indexOf(e.etape) + 1) / ETAPES_MAJ.length * 100}%` })) : null;
+  return rangee(t("maj.titre"), el("span", {}, texte, progression), el("div", { class: "options" }, boutons));
+}
+
+function recevoirMiseAJour(message) {
+  if ("verification" in message) { maj.verification = message.verification; maj.enCours = false; }
+  if ("etat" in message) maj.etat = message.etat;
+  if (maj.etat?.etape === "terminee") {
+    annoncer(t("maj.terminee", { v: maj.etat.version || "" }));
+    setTimeout(() => envoyer({ type: "relancer" }), 4000);
+  }
+  if (pile.at(-1) === "reglages" && sectionCourante === "apropos") rendreSection();
 }
 
 // ── Télécommande sur téléphone ────────────────────────────────────────────
@@ -1630,6 +1672,7 @@ window.hub = {
       case "geocodage": return rappelGeocodage?.(message.resultats || []);
       case "minuteur": return recevoirMinuteur(message.fin);
       case "telecommande": return recevoirTelecommande(message.etat);
+      case "maj": return recevoirMiseAJour(message);
       case "texte":
         // Texte tapé sur le téléphone : il remplit la saisie en cours, s'il y en a une.
         if (saisie && typeof message.texte === "string") { saisie.valeur = message.texte.slice(0, 32); majSaisie(); }
