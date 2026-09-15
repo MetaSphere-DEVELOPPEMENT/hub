@@ -947,6 +947,10 @@ function rendreSecurite() {
     }, `${actif ? "✓ " : ""}${t(cle)}`));
   }
   $("editeur-restreint").hidden = !restreint;
+  // Une restriction ne tient que si on ne peut pas simplement passer sur un profil libre.
+  const brouillonRestreint = ["tv", "gaming", "bureau"].some(m => brouillon.modes?.[m] === false);
+  const librePasProtege = reglages.profils.some(x => x.id !== brouillon.id && !estRestreint(x) && !x.pin);
+  $("editeur-conseil").hidden = restreint || !brouillonRestreint || !librePasProtege;
 
   const code = $("editeur-code");
   code.innerHTML = "";
@@ -1176,6 +1180,7 @@ const SECTIONS = [
   ["profils", '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18 14.2a6.5 6.5 0 0 1 3.5 5.8"/>'],
   ["langue", '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>'],
   ["voix", '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/>'],
+  ["telecommande", '<rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/>'],
   ["meteo", '<path d="M7 18h10a4 4 0 0 0 .5-8A5.5 5.5 0 0 0 7 11a3.5 3.5 0 0 0 0 7z"/>'],
   ["veille", '<path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5z"/>'],
   ["raccourcis", '<rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6.5 10h1M10.5 10h1M14.5 10h1M8 14h8"/>'],
@@ -1306,6 +1311,10 @@ function rendreSection(garderFocus = true) {
       break;
     }
 
+    case "telecommande":
+      zone.append(contenuTelecommande());
+      break;
+
     case "raccourcis":
       zone.append(contenuRaccourcis());
       break;
@@ -1331,6 +1340,60 @@ function rendreSection(garderFocus = true) {
     const retrouve = zone.querySelector(`[data-cle="${CSS.escape(cle)}"]`);
     if (retrouve) definirFocus(retrouve, true);
   }
+}
+
+// ── Télécommande sur téléphone ────────────────────────────────────────────
+let telecommande = INITIAL.telecommande || null;
+
+// qrcode.js est installé à côté de la page ; dans le dépôt, il vit avec la télécommande.
+(function chargerQr() {
+  const script = document.createElement("script");
+  script.src = "qrcode.js";
+  script.onerror = () => {
+    const secours = document.createElement("script");
+    secours.src = "../telecommande/qrcode.js";
+    secours.onload = () => { if (pile.at(-1) === "reglages" && sectionCourante === "telecommande") rendreSection(); };
+    document.head.append(secours);
+  };
+  document.head.append(script);
+})();
+
+function contenuTelecommande() {
+  if (!telecommande) {
+    return rangee(t("telecommande.absente"), t("telecommande.absente.detail"), null, true);
+  }
+  const qr = el("div", { class: "qr" });
+  if (window.qrSvg) qr.innerHTML = window.qrSvg(telecommande.url, { sombre: "#000", clair: "#fff", marge: 3 });
+  const code = String(telecommande.code).replace(/(\d{3})(\d{3})/, "$1 $2");
+  return el("div", { class: "appairage" },
+    qr,
+    el("div", { class: "etapes" },
+      el("div", { class: "etape" }, el("b", {}, "1"), t("telecommande.etape1")),
+      el("div", { class: "etape" }, el("b", {}, "2"), t("telecommande.etape2")),
+      el("div", { class: "etape" }, el("b", {}, "3"), t("telecommande.etape3")),
+      el("div", { class: "code-appairage" }, code),
+      el("div", { class: "aide", id: "telecommande-expire" }, texteExpiration()),
+      el("div", { class: "aide url" }, telecommande.url),
+      el("div", { class: "aide" }, t("telecommande.telephones", { n: telecommande.telephones ?? 0 }))));
+}
+function texteExpiration() {
+  if (!telecommande?.expire) return "";
+  const s = Math.max(0, Math.round((telecommande.expire - Date.now()) / 1000));
+  return t("telecommande.expire", { m: Math.floor(s / 60), s: String(s % 60).padStart(2, "0") });
+}
+setInterval(() => {
+  const e = document.getElementById("telecommande-expire");
+  if (e) e.textContent = texteExpiration();
+}, 1000);
+
+function recevoirTelecommande(etat) {
+  const avant = telecommande;
+  telecommande = etat;
+  if (etat?.appairageLe && etat.appairageLe !== avant?.appairageLe) {
+    son("ok");
+    annoncer(t("telecommande.reliee"));
+  }
+  if (pile.at(-1) === "reglages" && sectionCourante === "telecommande") rendreSection();
 }
 
 function contenuRaccourcis() {
@@ -1566,6 +1629,11 @@ window.hub = {
       case "meteo": return recevoirMeteo(message.donnees, message.releveLe, message.horsLigne);
       case "geocodage": return rappelGeocodage?.(message.resultats || []);
       case "minuteur": return recevoirMinuteur(message.fin);
+      case "telecommande": return recevoirTelecommande(message.etat);
+      case "texte":
+        // Texte tapé sur le téléphone : il remplit la saisie en cours, s'il y en a une.
+        if (saisie && typeof message.texte === "string") { saisie.valeur = message.texte.slice(0, 32); majSaisie(); }
+        return;
       case "avatars":
         listeAvatars = Array.isArray(message.liste) ? message.liste : [];
         if (brouillon && pile.includes("editeur-profil")) rendreEditeur();

@@ -31,6 +31,7 @@ class AvecDossier(unittest.TestCase):
             "socket": d / "run/hub/menu.sock",
             "deja-ouvert": d / "run/hub/menu-deja-ouvert",
             "minuteur": d / "run/hub/minuteur-fin",
+            "telecommande": d / "run/hub/telecommande.json",
         }
 
     def tearDown(self):
@@ -133,6 +134,22 @@ class Minuteur(AvecDossier):
         executer = lambda cmd, **_: SimpleNamespace(returncode=0)
         hub_menu.programmer_minuteur(self.c, 1, executer=executer, maintenant=1000)
         self.assertIsNone(hub_menu.minuteur_en_cours(self.c, maintenant=1000 + 120))
+
+
+class Telecommande(AvecDossier):
+    def test_absent_ou_incomplet_rend_none(self):
+        self.assertIsNone(hub_menu.etat_telecommande(self.c))
+        hub_menu.ecrire_atomique(self.c["telecommande"], json.dumps({"code": "123456"}))
+        self.assertIsNone(hub_menu.etat_telecommande(self.c))
+
+    def test_ne_garde_que_les_champs_connus(self):
+        hub_menu.ecrire_atomique(self.c["telecommande"], json.dumps(
+            {"url": "http://192.168.1.40:8790/", "code": "123456", "expire": 5, "telephones": 1, "appairageLe": None, "secret": "x"}))
+        self.assertEqual(hub_menu.etat_telecommande(self.c),
+                         {"url": "http://192.168.1.40:8790/", "code": "123456", "expire": 5, "telephones": 1, "appairageLe": None})
+
+    def test_texte_envoye_du_telephone(self):
+        self.assertEqual(hub_menu.message_voix("texte:Brest".encode()), {"type": "texte", "texte": "Brest"})
 
 
 class ReprisesKodi(unittest.TestCase):

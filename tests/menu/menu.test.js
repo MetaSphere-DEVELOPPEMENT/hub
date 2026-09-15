@@ -327,6 +327,20 @@ test("profil restreint : Bureau masqué et refusé, profils non gérables", asyn
   assert.ok(!(await page.isVisible('[data-cle="profil-ajout"]')));
 });
 
+test("télécommande : QR code et code d'appairage, annonce quand un téléphone est relié", async () => {
+  const etat = { url: "http://192.168.1.40:8790/", code: "482913", expire: Date.now() + 240000, telephones: 0, appairageLe: null };
+  await ouvrir({ retour: true, telecommande: etat });
+  await page.evaluate(() => window.hub.recevoir({ type: "commande", nom: "reglages" }));
+  await page.click('[data-section="telecommande"]');
+  await page.waitForFunction(() => document.querySelector(".qr svg"));
+  assert.equal(await page.textContent(".code-appairage"), "482 913");
+  await page.evaluate(e => window.hub.recevoir({ type: "telecommande", etat: { ...e, telephones: 1, appairageLe: Date.now() } }), etat);
+  assert.match(await page.textContent("#annonce"), /Téléphone relié/);
+  assert.match(await page.textContent(".appairage"), /Téléphones reliés : 1/);
+  await page.evaluate(() => window.hub.recevoir({ type: "telecommande", etat: null }));
+  assert.match(await page.textContent("#contenu-reglages"), /indisponible/);
+});
+
 test("météo reçue de hub-menu : puce, alerte pluie et panneau détaillé", async () => {
   await ouvrir();
   // Open-Meteo (timezone=auto) donne des heures locales sans fuseau : on fait pareil.
