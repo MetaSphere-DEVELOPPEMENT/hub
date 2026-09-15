@@ -927,6 +927,104 @@ etape_allumage() {
   activer_wake_on_lan
 }
 
+# ── 14. Enceinte réseau : Spotify Connect, AirPlay, recopie d'écran ─────────
+# Versions FIGÉES. librespot n'est empaqueté ni par Ubuntu ni par le projet (sources
+# seules) : on prend le binaire du .deb raspotify, vérifié par son empreinte, sans
+# installer le paquet (installer/enceinte/README.md). Monter de version : ces trois
+# lignes, après avoir relancé la preuve en conteneur.
+LIBRESPOT_DEB_URL="https://github.com/dtcooper/raspotify/releases/download/0.48.2/raspotify_0.48.2.librespot.v0.8.0-9c7d756_amd64.deb"
+LIBRESPOT_DEB_SHA256=7f2c232af89834608bc393f6f9295a22a2659fe938f65c108b78a70c8b539733
+LIBRESPOT_VERSION="librespot 0.8.0 9c7d7561"
+
+# Le réseau de l'interface qui porte la route par défaut : ce qu'on ouvre ne doit être
+# joignable ni depuis un VPN ni depuis une interface de conteneur.
+reseau_local() {
+  local iface
+  iface=$(ip -4 route show default 2>/dev/null | awk '{print $5; exit}')
+  ip -4 -o addr show dev "${iface:-lo}" 2>/dev/null | awk '{print $4; exit}' |
+    python3 -c 'import ipaddress,sys; print(ipaddress.ip_interface(sys.stdin.read().strip()).network)' 2>/dev/null
+}
+
+etape_enceinte() {
+  etape "14. Enceinte réseau (Spotify Connect, AirPlay, recopie d'écran)"
+  local src="$DEPOT/enceinte" lib=/usr/local/lib/hub/enceinte opt=/opt/hub-enceinte
+  if [ ! -f "$src/hub_enceinte.py" ] || [ ! -f "$src/hub-enceinte.service" ]; then
+    deja "aucune enceinte réseau dans le dépôt ($src) — étape sautée"
+    return 0
+  fi
+  if [ "$(dpkg --print-architecture 2>/dev/null)" != amd64 ]; then
+    alerte "architecture $(dpkg --print-architecture) : le librespot figé est amd64, enceinte réseau non installée"
+    return 0
+  fi
+
+  # Le paquet shairport-sync active un service SYSTÈME sur ALSA, démarré dès
+  # l'installation : il prendrait la carte son à PipeWire. Masqué AVANT le paquet,
+  # il ne démarre jamais ; le masque survit aux mises à jour du paquet.
+  if [ "$(systemctl is-enabled shairport-sync.service 2>/dev/null)" = masked ]; then
+    deja "service système shairport-sync masqué"
+  else
+    if systemctl cat shairport-sync.service >/dev/null 2>&1; then
+      faire systemctl disable --now shairport-sync.service || return 1
+    fi
+    faire systemctl mask shairport-sync.service || return 1
+    ok "service système shairport-sync masqué (hub-airplay le lance dans la session)"
+  fi
+  # uxplay avec les greffons GStreamer qu'il utilise : waylandsink (bad), pulsesink
+  # (good), et le décodage H.264 (libav en repli du décodage matériel VA-API).
+  installer_paquets -- shairport-sync uxplay avahi-daemon libpulse0 libasound2t64 libglib2.0-bin \
+    gstreamer1.0-plugins-bad gstreamer1.0-plugins-good gstreamer1.0-libav curl || return 1
+
+  if [ "$("$opt/librespot" --version 2>/dev/null | head -n 1)" = "$LIBRESPOT_VERSION" ]; then
+    deja "$opt/librespot ($LIBRESPOT_VERSION)"
+  elif [ "$POUR_DE_VRAI" = 1 ]; then
+    local tmp; tmp=$(mktemp -d) || { echec "mktemp impossible"; return 1; }
+    faire curl -fsSL --retry 3 -o "$tmp/raspotify.deb" "$LIBRESPOT_DEB_URL" &&
+    faire sh -c 'echo "$1  $2" | sha256sum -c -' empreinte "$LIBRESPOT_DEB_SHA256" "$tmp/raspotify.deb" &&
+    faire dpkg-deb -x "$tmp/raspotify.deb" "$tmp/paquet" &&
+    faire install -D -m 0755 "$tmp/paquet/usr/bin/librespot" "$opt/librespot"
+    local code=$?; rm -rf "$tmp"; [ "$code" -eq 0 ] || return 1
+    [ "$("$opt/librespot" --version 2>/dev/null | head -n 1)" = "$LIBRESPOT_VERSION" ] ||
+      { echec "$opt/librespot ne répond pas « $LIBRESPOT_VERSION »"; return 1; }
+    ok "$opt/librespot ($LIBRESPOT_VERSION, .deb vérifié, paquet non installé)"
+  else
+    faire "télécharger $LIBRESPOT_DEB_URL, vérifier sha256 ${LIBRESPOT_DEB_SHA256:0:12}…, extraire librespot vers $opt/librespot"
+  fi
+
+  poser "$src/hub_enceinte.py" "$lib/hub_enceinte.py" 0755 || return 1
+  [ -f "$src/README.md" ] && { poser "$src/README.md" "$lib/README.md" 0644 || return 1; }
+  if [ "$(readlink /usr/local/bin/hub-enceinte 2>/dev/null)" = "$lib/hub_enceinte.py" ]; then
+    deja "/usr/local/bin/hub-enceinte"
+  else
+    faire ln -sfn "$lib/hub_enceinte.py" /usr/local/bin/hub-enceinte || return 1
+    ok "/usr/local/bin/hub-enceinte"
+  fi
+  local u
+  for u in hub-enceinte hub-spotify hub-airplay hub-airplay-ecran; do
+    poser "$src/$u.service" "/usr/local/lib/systemd/user/$u.service" 0644 || return 1
+    activer_unite_globale "$u.service" || return 1
+  done
+
+  # Même règle que la télécommande : ufw inactif par défaut ; actif, on n'ouvre qu'au
+  # réseau local. Ports fixés dans hub_enceinte.py (PORT_*).
+  if command -v ufw >/dev/null && LC_ALL=C ufw status 2>/dev/null | grep -q '^Status: active'; then
+    local reseau regle port proto
+    reseau=$(reseau_local)
+    if [ -z "$reseau" ]; then
+      alerte "ufw actif mais réseau local introuvable : Spotify et AirPlay seront bloqués"
+      return 0
+    fi
+    for regle in 5353/udp 5390/tcp 5000/tcp 6001:6010/udp 7000:7002/tcp 7000:7002/udp; do
+      port=${regle%/*}; proto=${regle#*/}
+      if LC_ALL=C ufw status 2>/dev/null | grep -Eq "^$port/$proto[[:space:]]+ALLOW[[:space:]]+$reseau\b"; then
+        deja "ufw : $regle ouvert à $reseau"
+      else
+        faire ufw allow from "$reseau" to any port "$port" proto "$proto" || return 1
+        ok "ufw : $regle ouvert à $reseau seulement"
+      fi
+    done
+  fi
+}
+
 etape_mesure
 etape_session
 etape_accueil
@@ -943,6 +1041,8 @@ etape_allumage
 etape_voix
 # Chrome aussi après la bascule : 110 Mo à télécharger, et Kodi ne doit pas en dépendre.
 etape_navigateur
+# L'enceinte télécharge librespot : après la bascule, comme la voix et Chrome.
+etape_enceinte
 
 # ── Fin ───────────────────────────────────────────────────────────────────────
 etape "Ce qui reste à faire à la main"
@@ -954,6 +1054,8 @@ cat <<'RESTE'
   [ ] régler l'audio de Kodi après mesure (ARCHITECTURE.md, section Audio)
   [ ] BIOS : Automatic Power On (réveil programmé), Wake on LAN, Enhanced Power Saving
       Mode désactivé ; éprouver avec sudo rtcwake -m off -s 120 (installer/allumage/README.md)
+  [ ] enceinte réseau : Spotify (compte Premium) et iPhone sur le même réseau que le HUB,
+      puis la liste « À éprouver » de installer/enceinte/README.md
   [ ] vérifier le décodage matériel de Chrome : vainfo, puis chrome://gpu (hub-web --essai)
 RESTE
 printf '\n'
