@@ -1,0 +1,66 @@
+# Thème GRUB de la clé HUB. Coordonnées en pourcentages : la TV peut être en 1080p ou en 4K.
+title-text: ""
+desktop-image: "fond.png"
+desktop-color: "#06070c"
+terminal-font: "Ubuntu Regular 20"
+terminal-box: "cadre_*.png"
+
++ image {
+    left = 50%-60
+    top = 12%
+    width = 120
+    height = 120
+    file = "logo.png"
+}
++ label {
+    left = 0
+    top = 12%+118
+    width = 100%
+    align = "center"
+    text = "H  U  B"
+    font = "Ubuntu Bold Regular 64"
+    color = "#f3f5fb"
+}
++ label {
+    left = 0
+    top = 12%+200
+    width = 100%
+    align = "center"
+    text = "Clé d'installation"
+    font = "Ubuntu Regular 24"
+    color = "#9aa6bd"
+}
++ boot_menu {
+    left = 28%
+    width = 44%
+    top = 44%
+    height = 36%
+    item_font = "Ubuntu Regular 26"
+    selected_item_font = "Ubuntu Bold Regular 26"
+    item_color = "#c9d1e1"
+    selected_item_color = "#06070c"
+    item_height = 58
+    item_padding = 26
+    item_spacing = 14
+    item_pixmap_style = "entree_*.png"
+    selected_item_pixmap_style = "choix_*.png"
+    scrollbar = false
+}
++ label {
+    left = 0
+    top = 86%
+    width = 100%
+    align = "center"
+    text = "↑ ↓  choisir     Entrée  valider"
+    font = "Ubuntu Regular 20"
+    color = "#7c8699"
+}
++ label {
+    left = 0
+    top = 90%
+    width = 100%
+    align = "center"
+    text = "« Installer » efface le disque interne. « Aperçu » et « Essayer » ne modifient rien."
+    font = "Ubuntu Regular 20"
+    color = "#e3a85a"
+}
