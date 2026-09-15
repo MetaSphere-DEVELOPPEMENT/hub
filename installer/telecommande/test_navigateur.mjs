@@ -124,4 +124,154 @@ test("encart iPhone : gestes de Safari et avertissement sur le code à retaper",
   await page.context().close();
 });
 
+// ── Pavé tactile ────────────────────────────────────────────────────────────
+// De vrais événements tactiles envoyés à Chrome par le protocole DevTools : ils
+// passent par le même chemin qu'un doigt (touch-action, pointer events), à la
+// différence d'un dispatchEvent fabriqué dans la page.
+async function doigts(page) {
+  const cdp = await page.context().newCDPSession(page);
+  const boite = await page.locator("#pave-tactile").boundingBox();
+  const cx = boite.x + boite.width / 2, cy = boite.y + boite.height / 2;
+  const envoyer = (type, points) => cdp.send("Input.dispatchTouchEvent", {
+    type, touchPoints: points.map(([x, y], id) => ({ x, y, id, radiusX: 8, radiusY: 8, force: 1 })),
+  });
+  const pause = ms => new Promise(ok => setTimeout(ok, ms));
+  return {
+    cx, cy, envoyer, pause,
+    async toucher() { await envoyer("touchStart", [[cx, cy]]); await pause(60); await envoyer("touchEnd", []); },
+    async glisser(dx, dy, { tenir = 0 } = {}) {
+      await envoyer("touchStart", [[cx, cy]]);
+      for (let i = 1; i <= 6; i++) { await envoyer("touchMove", [[cx + dx * i / 6, cy + dy * i / 6]]); await pause(12); }
+      if (tenir) await pause(tenir);
+      await envoyer("touchEnd", []);
+    },
+    async appuiLong(ms = 750) { await envoyer("touchStart", [[cx, cy]]); await pause(ms); await envoyer("touchEnd", []); },
+    async deuxDoigts() {
+      await envoyer("touchStart", [[cx - 40, cy]]);
+      await pause(25);
+      await envoyer("touchStart", [[cx - 40, cy], [cx + 40, cy]]);
+      await pause(60);
+      await envoyer("touchEnd", []);
+    },
+  };
+}
+
+// Un seul appairage pour tous les tests du pavé : le service limite à 5 essais par
+// minute par adresse, et c'est voulu. Le jeton passe d'un contexte à l'autre.
+let stockageAppaire = null;
+async function remoteAppairee(appareil = PIXEL) {
+  const url = `http://127.0.0.1:${banc.ports.http}/`;
+  if (!stockageAppaire) {
+    const page = await ouvrir(navigateur, url, appareil);
+    await appairer(page, banc);
+    stockageAppaire = await page.context().storageState();
+    await page.context().close();
+  }
+  const page = await ouvrir(navigateur, url, appareil, { storageState: stockageAppaire });
+  await page.locator("#pave-tactile").waitFor({ state: "visible" });
+  return page;
+}
+
+const recus = async (depuis, combien) => attendre(() => {
+  const r = banc.menu().slice(depuis);
+  return r.length >= combien && r;
+});
+
+test("pavé : toucher = OK, glissements = flèches, appui long = retour, deux doigts = accueil", async () => {
+  const page = await remoteAppairee();
+  const d = await doigts(page);
+  const cas = [
+    ["toucher", () => d.toucher(), "ok"],
+    ["glisser à droite", () => d.glisser(90, 6), "droite"],
+    ["glisser à gauche", () => d.glisser(-90, -4), "gauche"],
+    ["glisser en haut", () => d.glisser(5, -90), "haut"],
+    ["glisser en bas", () => d.glisser(-3, 90), "bas"],
+    ["appui long", () => d.appuiLong(), "retour"],
+    ["deux doigts", () => d.deuxDoigts(), "accueil"],
+  ];
+  for (const [nom, geste, attendu] of cas) {
+    const avant = banc.menu().length;
+    await geste();
+    const r = await recus(avant, 1);
+    await d.pause(250);  // rien d'autre ne doit suivre (pas de OK après un glissement)
+    // accueil devient « retour » au menu (protocole du menu) : le banc a un menu ouvert.
+    assert.deepEqual(banc.menu().slice(avant), [attendu === "accueil" ? "retour" : attendu], nom);
+    assert.ok(r);
+  }
+  assert.deepEqual(page.erreurs, []);
+  await page.context().close();
+});
+
+test("pavé : glisser puis rester posé répète la flèche, lever l'arrête", async () => {
+  const page = await remoteAppairee();
+  const d = await doigts(page);
+  const avant = banc.menu().length;
+  await d.glisser(0, 90, { tenir: 1100 });
+  await d.pause(400);
+  const apres = banc.menu().slice(avant);
+  assert.ok(apres.length >= 4, `répétitions : ${apres.length}`);
+  assert.ok(apres.every(c => c === "bas"), apres.join(","));
+  const fige = banc.menu().length;
+  await d.pause(400);
+  assert.equal(banc.menu().length, fige, "plus rien après le relâcher");
+  await page.context().close();
+});
+
+test("pavé : un long glissement enchaîne plusieurs flèches, un glissement court une seule", async () => {
+  const page = await remoteAppairee();
+  const d = await doigts(page);
+  let avant = banc.menu().length;
+  await d.glisser(260, 0);
+  await d.pause(300);
+  const long = banc.menu().slice(avant);
+  assert.ok(long.length >= 3 && long.every(c => c === "droite"), long.join(","));
+  avant = banc.menu().length;
+  await d.glisser(40, 0);
+  await d.pause(300);
+  assert.deepEqual(banc.menu().slice(avant), ["droite"]);
+  await page.context().close();
+});
+
+test("réactivité : la flèche part pendant le glissement, avant de lever le doigt", async () => {
+  const page = await remoteAppairee();
+  const d = await doigts(page);
+  const avant = banc.menu().length;
+  const t0 = Date.now();
+  await d.envoyer("touchStart", [[d.cx, d.cy]]);
+  for (let i = 1; i <= 4; i++) await d.envoyer("touchMove", [[d.cx, d.cy + 20 * i]]);
+  await recus(avant, 1);
+  const delai = Date.now() - t0;
+  await d.envoyer("touchEnd", []);
+  assert.ok(delai < 300, `commande reçue par le menu en ${delai} ms, doigt encore posé`);
+  await page.context().close();
+});
+
+test("boutons conservés, et gaucher/droitier place Retour et le volume sous le pouce", async () => {
+  const page = await remoteAppairee();
+  const cote = async sel => {
+    const b = await page.locator(sel).first().boundingBox();
+    return b.x + b.width / 2 > PIXEL.viewport.width / 2 ? "droite" : "gauche";
+  };
+  assert.equal(await cote("#rangee-retour [data-cmd=retour]"), "droite");
+  assert.equal(await cote("#zone-tactile [data-cmd='volume:+']"), "droite");
+  await page.locator('[data-action="options"]').tap();
+  await page.locator('[data-action="main"]').tap();
+  await page.locator("#options [data-action=fermer]").tap();
+  assert.equal(await cote("#rangee-retour [data-cmd=retour]"), "gauche");
+  assert.equal(await cote("#zone-tactile [data-cmd='volume:+']"), "gauche");
+
+  await page.locator('.bascule [data-valeur="boutons"]').tap();
+  assert.equal(await page.locator("#pave-tactile").isVisible(), false);
+  const avant = banc.menu().length;
+  const croix = await page.locator("#zone-croix .pave").boundingBox();
+  await page.touchscreen.tap(croix.x + croix.width / 2, croix.y + croix.height * 0.12);
+  await page.locator("#zone-croix .ok").tap();
+  assert.deepEqual(await recus(avant, 2), ["haut", "ok"]);
+  await page.reload();
+  await page.locator("#zone-croix").waitFor({ state: "visible" });
+  assert.equal(await cote("#rangee-retour [data-cmd=retour]"), "gauche", "préférences gardées");
+  assert.deepEqual(page.erreurs, []);
+  await page.context().close();
+});
+
 export { PIXEL, IPHONE };

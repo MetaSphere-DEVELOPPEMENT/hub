@@ -188,6 +188,69 @@ header .marque { margin-right: auto; }
 }
 .ok.appui { transform: scale(.95); background: radial-gradient(circle at 50% 30%, rgb(var(--tv) / .55), rgb(var(--tv) / .25)); }
 
+/* ── Pavé tactile ────────────────────────────────────────────────────────── */
+.bascule {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px;
+  border-radius: 999px; background: var(--verre); border: 1px solid var(--lisere);
+}
+.bascule button {
+  min-height: 38px; border: 0; border-radius: 999px; background: transparent;
+  color: var(--texte-doux); font-size: 14px; font-weight: 600;
+}
+.bascule button[aria-pressed="true"] { background: var(--verre-fort); color: var(--texte); }
+.zone-tactile { display: grid; grid-template-columns: 1fr 66px; gap: 10px; }
+.gaucher .zone-tactile { grid-template-columns: 66px 1fr; }
+.gaucher .colonne-volume { order: -1; }
+.pave-tactile {
+  position: relative; overflow: hidden;
+  height: min(46dvh, 400px); min-height: 250px;
+  border-radius: 28px;
+  background:
+    radial-gradient(90% 70% at 50% 0%, rgb(var(--tv) / .10), transparent 70%),
+    rgba(255, 255, 255, .04);
+  border: 1px solid var(--lisere);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06);
+  /* Aucun geste du navigateur ici (défilement, zoom, double-toucher) : chaque
+     glissement est à nous, et pointermove arrive sans pointercancel. */
+  touch-action: none;
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+}
+.pave-tactile .aide {
+  position: absolute; inset: auto 0 16px; text-align: center;
+  font-size: 13px; line-height: 1.6; color: var(--texte-pale); pointer-events: none;
+  transition: opacity .4s;
+}
+.pave-tactile.utilise .aide { opacity: 0; }
+.pave-tactile .reperes {
+  position: absolute; inset: 0; pointer-events: none;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(255, 255, 255, .07) 0 2px, transparent 3px) 0 0 / 28px 28px;
+  mask-image: radial-gradient(circle at 50% 45%, #000 20%, transparent 75%);
+  -webkit-mask-image: radial-gradient(circle at 50% 45%, #000 20%, transparent 75%);
+}
+.impact {
+  position: absolute; width: 84px; height: 84px; margin: -42px 0 0 -42px; left: 50%; top: 50%;
+  border-radius: 50%; pointer-events: none; opacity: 0;
+  background: radial-gradient(circle, rgb(var(--tv) / .45), rgb(var(--tv) / 0) 70%);
+  transition: opacity .18s;
+}
+.pave-tactile.touche .impact { opacity: 1; }
+.pave-tactile.long .impact { background: radial-gradient(circle, rgb(var(--bureau) / .5), rgb(var(--bureau) / 0) 70%); }
+.fleche {
+  position: absolute; left: 50%; top: 50%; width: 72px; height: 72px; margin: -36px 0 0 -36px;
+  color: rgb(var(--tv)); opacity: 0; pointer-events: none;
+}
+.fleche.eclair { animation: eclair .32s var(--souple); }
+@keyframes eclair { from { opacity: .95; transform: rotate(var(--angle, 0deg)) translateY(0) scale(1); } to { opacity: 0; transform: rotate(var(--angle, 0deg)) translateY(-26px) scale(.9); } }
+.colonne-volume { display: grid; grid-template-rows: 1fr auto 1fr; gap: 8px; }
+.colonne-volume .touche { min-height: 0; font-size: 28px; font-weight: 400; }
+.colonne-volume .niveau { text-align: center; font-size: 13px; color: var(--texte-doux); font-variant-numeric: tabular-nums; }
+.disposition-pave #zone-croix, .disposition-pave #rangee-volume { display: none; }
+.disposition-boutons #zone-tactile { display: none; }
+/* Le pouce tombe du côté de la main qui tient : « Retour », le plus fréquent, y va. */
+body:not(.gaucher) #rangee-retour [data-cmd="retour"] { order: 2; }
+.haptique { position: fixed; left: -200px; top: 0; opacity: 0; pointer-events: none; }
+
 /* ── Boutons ─────────────────────────────────────────────────────────────── */
 .rangee { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .touche {
@@ -365,7 +428,27 @@ dialog h2 { font-size: 18px; margin: 4px 4px 14px; }
     </button>
   </nav>
 
-  <div class="zone-pave">
+  <div class="bascule" role="group" aria-label="Disposition">
+    <button data-action="disposition" data-valeur="pave" aria-pressed="true">Pavé tactile</button>
+    <button data-action="disposition" data-valeur="boutons" aria-pressed="false">Boutons</button>
+  </div>
+
+  <div class="zone-tactile" id="zone-tactile">
+    <div class="pave-tactile" id="pave-tactile" role="application"
+      aria-label="Pavé tactile : glisser pour se déplacer, toucher pour valider, appui long pour revenir, deux doigts pour l'accueil">
+      <div class="reperes"></div>
+      <div class="impact" id="impact"></div>
+      <svg class="fleche" id="fleche" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 14l6-6 6 6"/></svg>
+      <div class="aide">Glisser : se déplacer · maintenir : répéter<br>Toucher : OK · appui long : Retour<br>Deux doigts : Accueil</div>
+    </div>
+    <div class="colonne-volume" role="group" aria-label="Volume">
+      <button class="touche" data-cmd="volume:+" data-repete aria-label="Monter le volume">+</button>
+      <span class="niveau" id="niveau" aria-live="polite">Vol.</span>
+      <button class="touche" data-cmd="volume:-" data-repete aria-label="Baisser le volume">−</button>
+    </div>
+  </div>
+
+  <div class="zone-pave" id="zone-croix">
     <div class="pave" role="group" aria-label="Croix directionnelle">
       <button class="secteur haut" data-cmd="haut" data-repete aria-label="Haut">
         <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg>
@@ -383,7 +466,7 @@ dialog h2 { font-size: 18px; margin: 4px 4px 14px; }
     </div>
   </div>
 
-  <div class="rangee">
+  <div class="rangee" id="rangee-retour">
     <button class="touche" data-cmd="retour">
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>
       Retour
@@ -394,7 +477,7 @@ dialog h2 { font-size: 18px; margin: 4px 4px 14px; }
     </button>
   </div>
 
-  <div class="volume" role="group" aria-label="Volume">
+  <div class="volume" id="rangee-volume" role="group" aria-label="Volume">
     <button class="touche" data-cmd="volume:-" data-repete aria-label="Baisser le volume">−</button>
     <div class="jauge" aria-live="polite">
       <div class="remplissage" id="jauge"></div>
@@ -446,6 +529,14 @@ dialog h2 { font-size: 18px; margin: 4px 4px 14px; }
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
       Thème sombre
     </button>
+    <button class="touche" data-action="disposition-basculer">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="3"/><path d="M9 12h6M12 9v6"/></svg>
+      <span id="libelle-disposition">Passer aux boutons</span>
+    </button>
+    <button class="touche" data-action="main">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 13V5.5a1.5 1.5 0 0 1 3 0V12M11 11.5v-2a1.5 1.5 0 0 1 3 0V12M14 10.5a1.5 1.5 0 0 1 3 0V12M17 11.5a1.5 1.5 0 0 1 3 0V15a6 6 0 0 1-6 6h-1.5a6 6 0 0 1-4.6-2.2L4.5 15.5a1.5 1.5 0 0 1 2.3-2L8 15"/></svg>
+      <span id="libelle-main">Main : droitier</span>
+    </button>
     <button class="touche" data-action="encart-montrer">
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M12 8v6M9 11h6"/></svg>
       Ajouter à l'écran d'accueil
@@ -481,6 +572,7 @@ dialog h2 { font-size: 18px; margin: 4px 4px 14px; }
 </dialog>
 
 <div id="message" role="status" aria-live="polite"></div>
+<label class="haptique" id="haptique" aria-hidden="true"><input type="checkbox" switch tabindex="-1"></label>
 
 <script>
 "use strict";
@@ -498,8 +590,18 @@ function garderJeton(j) {
   try { if (j) localStorage.setItem(CLE_JETON, j); else localStorage.removeItem(CLE_JETON); } catch { /* mémoire seule */ }
 }
 
-// iOS n'a pas l'API de vibration : l'appel est simplement absent, pas une erreur.
-function vibrer(motif = 12) { try { if (navigator.vibrate) navigator.vibrate(motif); } catch { /* sans vibreur */ } }
+// Retour haptique. Android : l'API de vibration. iOS n'a pas cette API, mais Safari
+// (depuis iOS 18) donne un « tic » quand un interrupteur <input switch> change d'état
+// sous le doigt, y compris par un clic sur son label : c'est la seule vibration
+// qu'une page puisse obtenir sur iPhone. Ailleurs, rien, sans erreur.
+const IOS = /iPhone|iPad|iPod/.test(navigator.userAgent)
+  || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+function vibrer(motif = 12) {
+  try {
+    if (navigator.vibrate) navigator.vibrate(motif);
+    else if (IOS) $("haptique").click();
+  } catch { /* sans vibreur */ }
+}
 
 let minuterieMessage;
 function message(texte, duree = 2600) {
@@ -641,6 +743,7 @@ function envoyer(nom, extra = {}) {
 }
 
 function afficherVolume(niveau, muet) {
+  $("niveau").textContent = muet ? "Muet" : `${niveau} %`;
   $("jauge").style.width = `${Math.max(0, Math.min(100, niveau))}%`;  // CSSOM : permis par la CSP
   $("volume").textContent = muet ? `${niveau} % (muet)` : `${niveau} %`;
 }
@@ -724,6 +827,159 @@ async function lireEtat() {
 setInterval(lireEtat, 6000);
 document.addEventListener("visibilitychange", lireEtat);
 
+// ── Pavé tactile ───────────────────────────────────────────────────────────
+// Glisser = une flèche ; rester posé après le glissement = la flèche se répète ;
+// toucher = OK ; appui long = Retour ; deux doigts = Accueil.
+//
+// Pointer events et non touch events : mêmes gestes à la souris et au stylet, et
+// pas de délai de 300 ms (touch-action: none, rien n'attend un double toucher).
+// Le glissement part pendant le mouvement, dès le seuil franchi, sans attendre
+// qu'on lève le doigt : c'est ce qui rend le pavé « immédiat ».
+const GESTE = {
+  seuil: 26,          // px de glissement pour la première flèche (≈ 7 mm)
+  // Les suivantes, dans le même geste, en demandent plus : un glissement vif de
+  // 1 à 2 cm doit rester UNE flèche ; seul un long trait en enchaîne plusieurs.
+  pas: 80,
+  toucher: 10,        // px de tremblement tolérés pour un toucher ou un appui long
+  appuiLong: 480,     // ms : au-delà, c'est Retour (iOS et Android appellent long vers 500 ms)
+  avantRepetition: 380,
+  periode: 130,       // ms entre deux répétitions : ≈ 7 éléments par seconde, lisible sur la TV
+};
+const pave = $("pave-tactile");
+const pointeurs = new Map();
+let geste = null;
+
+function seuilGlissement(g) {
+  // Un grand pavé (tablette, paysage) demande un geste proportionné.
+  const cote = Math.min(pave.clientWidth, pave.clientHeight);
+  return g.emis ? Math.max(GESTE.pas, cote * 0.25) : Math.max(GESTE.seuil, cote * 0.08);
+}
+
+function eclair(direction) {
+  const angles = { haut: 0, droite: 90, bas: 180, gauche: 270 };
+  const f = $("fleche");
+  f.style.setProperty("--angle", `${angles[direction]}deg`);  // CSSOM : permis par la CSP
+  f.classList.remove("eclair");
+  void f.getBoundingClientRect();
+  f.classList.add("eclair");
+}
+
+function commandeGeste(nom, motif) {
+  vibrer(motif);
+  envoyer(nom);
+  pave.classList.add("utilise");
+}
+
+function arreterMinuteries(g) {
+  clearTimeout(g.minuterieLong);
+  clearTimeout(g.minuterieRepetition);
+  clearInterval(g.minuterieRepetition);
+}
+
+function placerImpact(x, y) {
+  const r = pave.getBoundingClientRect();
+  const impact = $("impact");
+  impact.style.left = `${x - r.left}px`;
+  impact.style.top = `${y - r.top}px`;
+}
+
+pave.addEventListener("pointerdown", e => {
+  e.preventDefault();
+  try { pave.setPointerCapture(e.pointerId); } catch { /* pointeur déjà relâché */ }
+  pointeurs.set(e.pointerId, true);
+  if (pointeurs.size === 2 && geste && !geste.fini) {
+    // Deux doigts : Accueil, sauf si le premier a déjà fait quelque chose.
+    arreterMinuteries(geste);
+    if (!geste.emis && !geste.long) commandeGeste("accueil", [18, 50, 18]);
+    geste.fini = true;
+    return;
+  }
+  if (pointeurs.size > 1) return;
+  geste = {
+    id: e.pointerId, x0: e.clientX, y0: e.clientY, ax: e.clientX, ay: e.clientY,
+    emis: 0, long: false, fini: false, bouge: false, direction: null,
+  };
+  placerImpact(e.clientX, e.clientY);
+  pave.classList.add("touche");
+  const g = geste;
+  g.minuterieLong = setTimeout(() => {
+    if (g.fini || g.emis || g.bouge) return;
+    g.long = true;
+    pave.classList.add("long");
+    commandeGeste("retour", 35);
+  }, GESTE.appuiLong);
+});
+
+pave.addEventListener("pointermove", e => {
+  const g = geste;
+  if (!g || e.pointerId !== g.id || g.fini || g.long) return;
+  if (Math.hypot(e.clientX - g.x0, e.clientY - g.y0) > GESTE.toucher) g.bouge = true;
+  placerImpact(e.clientX, e.clientY);
+  const dx = e.clientX - g.ax, dy = e.clientY - g.ay;
+  if (Math.hypot(dx, dy) < seuilGlissement(g)) return;
+  const direction = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? "droite" : "gauche") : (dy > 0 ? "bas" : "haut");
+  // Nouvelle ancre : un long glissement enchaîne plusieurs flèches, comme une molette.
+  g.ax = e.clientX; g.ay = e.clientY;
+  g.emis++;
+  g.direction = direction;
+  clearTimeout(g.minuterieLong);
+  eclair(direction);
+  commandeGeste(direction, 10);
+  clearTimeout(g.minuterieRepetition);
+  clearInterval(g.minuterieRepetition);
+  g.minuterieRepetition = setTimeout(() => {
+    if (g.fini) return;
+    g.minuterieRepetition = setInterval(() => {
+      if (g.fini) return;
+      eclair(g.direction);
+      commandeGeste(g.direction, 6);
+    }, GESTE.periode);
+  }, GESTE.avantRepetition);
+});
+
+function relacher(e) {
+  if (!pointeurs.delete(e.pointerId)) return;
+  const g = geste;
+  if (g && e.pointerId === g.id && !g.fini) {
+    arreterMinuteries(g);
+    // Un toucher : ni flèche, ni appui long, ni tremblement, et un vrai relâcher
+    // (pointercancel = le système a repris le geste, on n'envoie rien).
+    if (e.type === "pointerup" && !g.emis && !g.long && !g.bouge) commandeGeste("ok", 12);
+    g.fini = true;
+  }
+  if (pointeurs.size === 0) {
+    if (geste) arreterMinuteries(geste);
+    geste = null;
+    pave.classList.remove("touche", "long");
+  }
+}
+pave.addEventListener("pointerup", relacher);
+pave.addEventListener("pointercancel", relacher);
+pave.addEventListener("lostpointercapture", relacher);
+// Anciens Safari : le pincement déclenche encore ses propres événements.
+pave.addEventListener("gesturestart", e => e.preventDefault());
+pave.addEventListener("contextmenu", e => e.preventDefault());
+
+// ── Préférences d'affichage ────────────────────────────────────────────────
+const CLE_DISPOSITION = "hub-telecommande-disposition";
+const CLE_MAIN = "hub-telecommande-main";
+function lirePreference(cle, defaut) { try { return localStorage.getItem(cle) || defaut; } catch { return defaut; } }
+function garderPreference(cle, valeur) { try { localStorage.setItem(cle, valeur); } catch { /* mémoire seule */ } }
+
+function appliquerPreferences() {
+  const disposition = lirePreference(CLE_DISPOSITION, "pave");
+  const main = lirePreference(CLE_MAIN, "droitier");
+  document.body.classList.toggle("disposition-pave", disposition === "pave");
+  document.body.classList.toggle("disposition-boutons", disposition !== "pave");
+  document.body.classList.toggle("gaucher", main === "gaucher");
+  for (const b of document.querySelectorAll('[data-action="disposition"]')) {
+    b.setAttribute("aria-pressed", String(b.dataset.valeur === disposition));
+  }
+  $("libelle-disposition").textContent = disposition === "pave" ? "Passer aux boutons" : "Passer au pavé tactile";
+  $("libelle-main").textContent = main === "gaucher" ? "Main : gaucher" : "Main : droitier";
+}
+appliquerPreferences();
+
 // ── Comme une app ──────────────────────────────────────────────────────────
 // Lancée depuis l'icône, la page n'a plus rien à conseiller. navigator.standalone
 // est l'ancienne propriété de Safari, display-mode la norme.
@@ -764,6 +1020,16 @@ addEventListener("appinstalled", () => { $("encart").hidden = true; invitationIn
 // ── Options et photo ───────────────────────────────────────────────────────
 const actions = {
   options: () => $("options").showModal(),
+  disposition: bouton => { garderPreference(CLE_DISPOSITION, bouton.dataset.valeur); appliquerPreferences(); },
+  "disposition-basculer": () => {
+    garderPreference(CLE_DISPOSITION, lirePreference(CLE_DISPOSITION, "pave") === "pave" ? "boutons" : "pave");
+    appliquerPreferences();
+    $("options").close();
+  },
+  main: () => {
+    garderPreference(CLE_MAIN, lirePreference(CLE_MAIN, "droitier") === "gaucher" ? "droitier" : "gaucher");
+    appliquerPreferences();
+  },
   "encart-fermer": () => {
     $("encart").hidden = true;
     try { localStorage.setItem(CLE_ENCART, "1"); } catch { /* sans stockage */ }
