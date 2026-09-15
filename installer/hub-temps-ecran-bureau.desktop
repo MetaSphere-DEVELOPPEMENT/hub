@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=HUB — temps d'écran du bureau
+Comment=Compte le temps passé sur le bureau pour le profil du HUB, et ramène au menu à l'échéance
+Exec=/usr/local/bin/hub-temps-ecran bureau
+OnlyShowIn=ubuntu;
+NoDisplay=true
+X-GNOME-Autostart-Phase=Application

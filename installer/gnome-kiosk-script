@@ -20,6 +20,19 @@ habiller() {
   [ -e "$HOME/.config/hub/habillage-desactive" ] || /usr/local/bin/hub-theme "$1" >/dev/null 2>&1
 }
 
+# Temps d'écran : chaque mode tourne À TRAVERS hub-temps-ecran, qui l'attend comme
+# cette boucle le ferait, compte sa durée pour le profil actif, prévient cinq minutes
+# avant la fin et le ferme à l'échéance (retour au menu). Absent (installation
+# ancienne) : le mode se lance tel quel, on ne prive personne de TV pour un compteur.
+compter() {
+  mode="$1"; shift
+  if [ -x /usr/local/bin/hub-temps-ecran ]; then
+    /usr/local/bin/hub-temps-ecran lancer "$mode" -- "$@"
+  else
+    "$@"
+  fi
+}
+
 case "$choix" in
   tv)
     # Avant Kodi, jamais pendant : Kodi réécrit ses réglages en quittant (hub-theme
@@ -30,9 +43,9 @@ case "$choix" in
     if [ -n "$fichier" ]; then
       # hub-kodi-lire lance Kodi lui-même et attend qu'il se ferme : pour cette
       # boucle, c'est comme avoir lancé Kodi.
-      /usr/local/bin/hub-kodi-lire "$fichier"
+      compter tv /usr/local/bin/hub-kodi-lire "$fichier"
     else
-      kodi --windowing=wayland
+      compter tv kodi --windowing=wayland
     fi
     ;;
   gaming)
@@ -45,7 +58,7 @@ case "$choix" in
     # Streaming ou jeu en nuage : la seconde ligne est un NOM de service (« netflix »),
     # jamais une adresse. hub-web le refuse s'il n'est pas dans sa liste blanche, ouvre
     # le navigateur du profil en plein écran et rend la main quand on revient au HUB.
-    /usr/local/bin/hub-web "$fichier"
+    compter web /usr/local/bin/hub-web "$fichier"
     ;;
   bureau)
     # Le bureau GNOME ne se lance pas à l'intérieur d'une session kiosque. On
