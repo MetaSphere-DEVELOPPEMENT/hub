@@ -1,0 +1,21 @@
+# Premier allumage après la clé HUB : audit puis installation, affichés sur l'écran.
+# Avant l'écran de connexion, pour que la TV montre l'avancement plutôt qu'un login.
+[Unit]
+Description=HUB : première mise en route (audit et installation)
+After=network-online.target systemd-user-sessions.service
+Wants=network-online.target
+Before=display-manager.service
+ConditionPathExists=/opt/hub/installer/hub-installer.sh
+
+[Service]
+Type=oneshot
+ExecStart=/opt/hub/cle/premier-demarrage.sh
+StandardInput=tty
+StandardOutput=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TimeoutStartSec=3h
+
+[Install]
+WantedBy=multi-user.target
