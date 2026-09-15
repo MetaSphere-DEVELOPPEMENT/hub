@@ -1,0 +1,50 @@
+#cloud-config
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Clé HUB — installation automatique d'Ubuntu 26.04 sur le M720q
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Même recette que vm/autoinstall/user-data, éprouvée en VM, avec trois différences :
+#  - le disque visé est désigné explicitement : le NVMe interne, jamais un disque USB
+#    (le disque de travail HIKSEMI, plus gros, serait choisi par « le plus grand ») ;
+#  - la machine S'ÉTEINT à la fin : on retire la clé avant de la rallumer ;
+#  - le projet HUB est copié depuis la clé et installé au premier démarrage.
+# Les valeurs @…@ sont remplies par construire-cle.sh.
+autoinstall:
+  version: 1
+  interactive-sections: []
+
+  locale: fr_FR.UTF-8
+  keyboard:
+    layout: fr
+  timezone: Europe/Paris
+
+  identity:
+    hostname: hub
+    realname: Samuel Boudine
+    username: samuel
+    password: "@MOT_DE_PASSE_HACHE@"
+
+  ssh:
+    install-server: true
+    allow-pw: false
+    authorized-keys:
+      - "@CLE_SSH@"
+
+  # Pas de chiffrement : le HUB démarre sans clavier.
+  storage:
+    layout:
+      name: direct
+      match:
+        path: "@DISQUE@"
+
+  packages:
+    - openssh-server
+    - git
+
+  late-commands:
+    - mkdir -p /target/opt/hub
+    - cp -a /cdrom/hub/. /target/opt/hub/
+    - cp /target/opt/hub/cle/hub-premier-demarrage.service /target/etc/systemd/system/
+    - curtin in-target --target=/target -- systemctl enable ssh hub-premier-demarrage.service
+
+  shutdown: poweroff
