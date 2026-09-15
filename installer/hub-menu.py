@@ -32,6 +32,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 
 MODES = ("tv", "gaming", "bureau", "eteindre", "web")
@@ -172,6 +173,165 @@ def avatars(dossiers=None):
     """Les photos de profil possibles : Images/HUB/profils, la plus récente d'abord,
     pour qu'une photo envoyée depuis le téléphone soit en tête de liste."""
     return images_de(dossiers if dossiers is not None else dossiers_images(str(Path("HUB") / "profils")), limite=40, recentes_d_abord=True)
+
+
+# ── Cadre photo du mode ambiant ───────────────────────────────────────────
+EXTENSIONS_PHOTO = {".jpg", ".jpeg", ".png", ".webp"}
+# Les photos de profil vivent dans Images/HUB/profils : ce ne sont pas des souvenirs.
+DOSSIERS_HORS_CADRE = {"profils"}
+
+
+def albums_cadre(dossiers=None):
+    """Les sous-dossiers d'Images/HUB qui contiennent au moins une photo : un album = un dossier."""
+    noms = set()
+    for d in dossiers if dossiers is not None else dossiers_images("HUB"):
+        try:
+            for sous in d.iterdir():
+                if sous.is_dir() and not sous.name.startswith(".") and sous.name not in DOSSIERS_HORS_CADRE \
+                        and any(f.suffix.lower() in EXTENSIONS_PHOTO for f in sous.rglob("*")):
+                    noms.add(sous.name)
+        except OSError:
+            continue
+    return sorted(noms, key=str.casefold)
+
+
+def photos_cadre(dossiers=None, album=None, limite=500):
+    """Toutes les photos (sous-dossiers compris), ou celles d'un album. Le nom d'album
+    vient de la page : un nom de dossier seulement, jamais un chemin."""
+    if album and (album != Path(album).name or album.startswith(".") or album in DOSSIERS_HORS_CADRE):
+        return []
+    fichiers = []
+    for d in dossiers if dossiers is not None else dossiers_images("HUB"):
+        racine = d / album if album else d
+        if not racine.is_dir():
+            continue
+        for chemin, sous_dossiers, noms in os.walk(racine):
+            profondeur_racine = Path(chemin) == racine
+            sous_dossiers[:] = sorted(s for s in sous_dossiers if not s.startswith(".")
+                                      and not (profondeur_racine and not album and s in DOSSIERS_HORS_CADRE))
+            fichiers += [Path(chemin) / n for n in sorted(noms) if Path(n).suffix.lower() in EXTENSIONS_PHOTO]
+            if len(fichiers) >= limite:
+                return fichiers[:limite]
+    return fichiers
+
+
+def date_exif(chemin, lecture_max=256_000):
+    """Date de prise de vue d'un JPEG, lue dans son bloc EXIF sans bibliothèque.
+
+    Pillow est bien dans le manifeste d'Ubuntu 26.04.1 Desktop (python3-pil 12.1.1,
+    relevé le 15/09/2026), mais une installation minimale ou un retrait l'ôterait sans
+    bruit, et on n'a besoin que d'une chaîne de 19 caractères. On lit donc le TIFF
+    embarqué : DateTimeOriginal (0x9003) du sous-IFD Exif, sinon DateTime (0x0132).
+    Tout ce qui ne ressemble pas à ce qu'on attend rend None, jamais une exception."""
+    import struct
+    try:
+        with open(chemin, "rb") as f:
+            donnees = f.read(lecture_max)
+    except OSError:
+        return None
+    if donnees[:2] != b"\xff\xd8":
+        return None
+    i = 2
+    while i + 4 <= len(donnees):
+        if donnees[i] != 0xFF:
+            return None
+        marqueur = donnees[i + 1]
+        if marqueur in (0xDA, 0xD9):
+            return None
+        longueur = struct.unpack(">H", donnees[i + 2:i + 4])[0]
+        segment = donnees[i + 4:i + 2 + longueur]
+        if marqueur == 0xE1 and segment[:6] == b"Exif\x00\x00":
+            return _date_tiff(segment[6:])
+        i += 2 + longueur
+    return None
+
+
+def _date_tiff(tiff):
+    import struct
+    if tiff[:4] == b"II*\x00":
+        o = "<"
+    elif tiff[:4] == b"MM\x00*":
+        o = ">"
+    else:
+        return None
+
+    def entrees(offset):
+        if offset < 8 or offset + 2 > len(tiff):
+            return {}
+        n = struct.unpack(o + "H", tiff[offset:offset + 2])[0]
+        resultat = {}
+        for k in range(min(n, 512)):
+            debut = offset + 2 + 12 * k
+            if debut + 12 > len(tiff):
+                break
+            resultat[struct.unpack(o + "H", tiff[debut:debut + 2])[0]] = tiff[debut + 2:debut + 12]
+        return resultat
+
+    def texte(brut):
+        genre, compte, valeur = struct.unpack(o + "HII", brut)
+        if genre != 2 or compte < 19:
+            return None
+        octets = brut[6:6 + compte] if compte <= 4 else tiff[valeur:valeur + compte]
+        try:
+            return datetime.strptime(octets[:19].decode("ascii"), "%Y:%m:%d %H:%M:%S")
+        except (UnicodeDecodeError, ValueError):
+            return None
+
+    ifd0 = entrees(struct.unpack(o + "I", tiff[4:8])[0])
+    if 0x8769 in ifd0:
+        exif = entrees(struct.unpack(o + "I", ifd0[0x8769][6:10])[0])
+        if 0x9003 in exif:
+            date = texte(exif[0x9003])
+            if date:
+                return date
+    return texte(ifd0[0x0132]) if 0x0132 in ifd0 else None
+
+
+def souvenirs(fichiers, aujourdhui, cache_chemin):
+    """Les photos prises le même jour et le même mois, les années précédentes, la plus
+    récente d'abord. Les dates lues sont gardées (chemin, date de modification, taille) :
+    le menu revient de Kodi dix fois par soir, il ne relit pas 500 en-têtes à chaque fois."""
+    cache = lire_json(cache_chemin)
+    cache = cache if isinstance(cache, dict) else {}
+    nouveau, trouves = {}, []
+    for f in fichiers:
+        try:
+            infos = f.stat()
+        except OSError:
+            continue
+        cle = str(f)
+        empreinte = [int(infos.st_mtime), infos.st_size]
+        connu = cache.get(cle)
+        if isinstance(connu, list) and connu[:2] == empreinte:
+            texte = connu[2]
+        else:
+            d = date_exif(f) if f.suffix.lower() in {".jpg", ".jpeg"} else None
+            texte = d.strftime("%Y-%m-%d") if d else None
+        nouveau[cle] = empreinte + [texte]
+        if texte:
+            annee, mois, jour = (int(x) for x in texte.split("-"))
+            if (mois, jour) == (aujourdhui.month, aujourdhui.day) and annee < aujourdhui.year:
+                trouves.append({"uri": f.resolve().as_uri(), "annee": annee})
+    if nouveau != cache:
+        try:
+            ecrire_atomique(cache_chemin, json.dumps(nouveau))
+        except OSError:
+            pass
+    trouves.sort(key=lambda s: s["annee"], reverse=True)
+    return trouves
+
+
+def cadre(album=None, avec_souvenirs=False, dossiers=None, cache_chemin=None, aujourdhui=None):
+    """Ce que la page demande pour son diaporama."""
+    dossiers = dossiers if dossiers is not None else dossiers_images("HUB")
+    fichiers = photos_cadre(dossiers, album or None)
+    reponse = {"type": "cadre", "albums": albums_cadre(dossiers), "album": album or None,
+               "photos": [f.resolve().as_uri() for f in fichiers], "souvenirs": []}
+    if avec_souvenirs:
+        tout = fichiers if not album else photos_cadre(dossiers)
+        cache = cache_chemin or dossier("XDG_CACHE_HOME", Path.home() / ".cache") / "hub" / "exif.json"
+        reponse["souvenirs"] = souvenirs(tout, aujourdhui or datetime.now().date(), cache)
+    return reponse
 
 
 # ── Kodi : reprendre la lecture ───────────────────────────────────────────
