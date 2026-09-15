@@ -34,14 +34,14 @@ terminal-box: "cadre_*.png"
     left = 28%
     width = 44%
     top = 44%
-    height = 36%
+    height = 40%
     item_font = "Ubuntu Regular 26"
     selected_item_font = "Ubuntu Bold 26"
     item_color = "#c9d1e1"
     selected_item_color = "#06070c"
     item_height = 60
     item_padding = 26
-    item_spacing = 22
+    item_spacing = 36
     item_pixmap_style = "entree_*.png"
     selected_item_pixmap_style = "choix_*.png"
     scrollbar = false
