@@ -361,7 +361,13 @@ def _analyse_detaillee(texte, langue, mot_eveil=MOT_EVEIL_PAR_DEFAUT):
         return False, _commande(mots, langue, phrases), bool(mots)
 
     reste = mots[apres:]
-    return True, _commande(reste, langue, phrases), bool(reste)
+    commande = _commande(reste, langue, phrases)
+    connus = [m for m in reste if m != INCONNU]
+    if commande is None and len(connus) >= 2 and connus[0] in EVEILS_CONFONDUS[langue]:
+        # « ok hub aide xbox » : le « hub » dit deux fois, ou son écho, rendu « aide ».
+        # Seulement devant une autre commande : « ok hub aide » reste l'aide.
+        commande = _commande(connus[1:], langue, phrases)
+    return True, commande, bool(reste)
 
 
 def analyser(texte, langue, mot_eveil=MOT_EVEIL_PAR_DEFAUT):
@@ -476,6 +482,13 @@ class Ecoute:
             return [_entendu(texte), "voix:incompris"]
 
         mots = _mots(texte)
+        ancres = {_mots(p)[0] for p in eveils(self.mot_eveil, self.langue) if len(_mots(p)) >= 2}
+        if len(mots) == 1 and mots[0] in ancres:
+            # « okay » seul, au repos : « OK HUB » dont le « hub » s'est perdu (mesuré : 5
+            # des échecs de la voix tom sur 72). Au repos, « ok » n'aurait rien fait de
+            # toute façon ; pendant l'écoute, il reste la commande qui valide.
+            self.fin_eveil = maintenant + self.delai_eveil
+            return [_entendu(texte), "voix:eveil"]
         if eveils(self.mot_eveil, self.langue) == MOTS_EVEIL["hub"][_langue(self.langue)] and \
                 len(mots) == 1 and mots[0] in EVEILS_CONFONDUS[_langue(self.langue)]:
             # « aide » seul, au repos, avec le mot d'éveil « HUB » : sur le corpus, c'est

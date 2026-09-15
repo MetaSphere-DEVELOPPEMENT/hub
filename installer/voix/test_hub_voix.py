@@ -342,6 +342,19 @@ class AncreDuMotEveil(unittest.TestCase):
         ]:
             self.assertEqual(L.analyser(texte, "fr", mot), attendu, texte)
 
+    def test_ancre_seule_au_repos_ouvre_l_ecoute_mais_ok_valide_pendant(self):
+        e = L.Ecoute("fr")
+        self.assertEqual(e.entendre("okay", 0.0), ["voix:entendu:okay", "voix:eveil"])
+        self.assertEqual(e.entendre("ok", 2.0), ["voix:entendu:ok", "ok", "voix:repos"])
+        s = L.Ecoute("fr", mot_eveil="salut-hub")
+        self.assertEqual(s.entendre("salut", 0.0)[-1], "voix:eveil")
+        # Plus tard, une phrase qui commence par « salut » : la fenêtre se ferme, rien d'autre.
+        self.assertEqual(s.entendre("salut [unk]", 10.0), ["voix:repos"])
+
+    def test_aide_juste_apres_le_mot_d_eveil(self):
+        self.assertEqual(L.analyser("ok hub aide xbox", "fr"), (True, "web:xcloud"))
+        self.assertEqual(L.analyser("ok hub aide", "fr"), (True, "aide"))
+
     def test_ancre_seule_ou_presque_ouvre_l_ecoute(self):
         e = L.Ecoute("fr", mot_eveil="salut-hub")
         self.assertEqual(e.entendre("salut hommes", 0.0), ["voix:entendu:salut hommes", "voix:eveil"])
