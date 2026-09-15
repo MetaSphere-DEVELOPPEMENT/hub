@@ -28,6 +28,7 @@ vraies touches (une page ignore souvent les touches synthétisées en JavaScript
 Ce fichier se charge sans rien lancer : tests/test_hub_web.py et hub-menu l'importent.
 """
 
+import fcntl
 import json
 import os
 import re
@@ -344,8 +345,11 @@ def demarrer(args):
     depuis_chrome_l, depuis_chrome_e = os.pipe()
 
     def placer():
-        # Copies d'abord : un des tuyaux peut déjà occuper le 3 ou le 4.
-        a, b = os.dup(vers_chrome_l), os.dup(depuis_chrome_e)
+        # Copies au-dessus de 10 d'abord : une copie ordinaire prend le plus petit numéro
+        # libre, souvent 3 ou 4, et le dup2 suivant l'écraserait (vu : les tests passaient
+        # seuls et échouaient quand un test précédent avait laissé ces numéros libres).
+        a = fcntl.fcntl(vers_chrome_l, fcntl.F_DUPFD, 10)
+        b = fcntl.fcntl(depuis_chrome_e, fcntl.F_DUPFD, 10)
         os.dup2(a, 3)
         os.dup2(b, 4)
         os.close(a)
@@ -369,10 +373,20 @@ ESSAI_PREPARER = """(() => {
   addEventListener("keydown", e => window.__hubEssai.touches.push([e.key, e.isTrusted]));
   window.hubHub(JSON.stringify({ type: "touche", cle: "ArrowDown" }));
 })()"""
-ESSAI_VERIFIER = """JSON.stringify({
-  av1Refuse: !MediaSource.isTypeSupported('video/mp4; codecs="av01.0.08M.08"'),
-  vp9Accepte: MediaSource.isTypeSupported('video/webm; codecs="vp9"'),
-  toucheReelle: window.__hubEssai.touches.some(([k, vraie]) => k === "ArrowDown" && vraie),
+# La touche part par un autre message que la vérification : on lui laisse jusqu'à deux
+# secondes pour arriver plutôt que de lire trop tôt (vu : un essai sur cinq échouait).
+ESSAI_VERIFIER = """new Promise(fini => {
+  const debut = Date.now();
+  const lire = () => {
+    const vue = window.__hubEssai.touches.some(([k, vraie]) => k === "ArrowDown" && vraie);
+    if (!vue && Date.now() - debut < 2000) return setTimeout(lire, 50);
+    fini(JSON.stringify({
+      av1Refuse: !MediaSource.isTypeSupported('video/mp4; codecs="av01.0.08M.08"'),
+      vp9Accepte: MediaSource.isTypeSupported('video/webm; codecs="vp9"'),
+      toucheReelle: vue,
+    }));
+  };
+  lire();
 })"""
 
 
@@ -431,7 +445,7 @@ def piloter(processus, tuyau, fiche, url, essai=False, journal=None, trace=False
             elif demande and demande["type"] == "touche":
                 touche(demande["cle"], session)
                 if essai and verification is None:
-                    verification = tuyau.envoyer("Runtime.evaluate", {"expression": ESSAI_VERIFIER, "returnByValue": True}, session)
+                    verification = tuyau.envoyer("Runtime.evaluate", {"expression": ESSAI_VERIFIER, "returnByValue": True, "awaitPromise": True}, session)
         elif methode == "Page.loadEventFired" and essai and session == principale and verification is None:
             tuyau.envoyer("Runtime.evaluate", {"expression": ESSAI_PREPARER}, session)
         elif essai and verification is not None and message.get("id") == verification:
