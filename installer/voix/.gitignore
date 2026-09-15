@@ -1,0 +1,5 @@
+# Modèles Vosk : téléchargés par telecharger-modele.sh, jamais commités.
+modeles/
+vosk-model-*/
+__pycache__/
+.pytest_cache/
