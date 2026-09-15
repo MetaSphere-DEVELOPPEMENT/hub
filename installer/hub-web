@@ -1,0 +1,547 @@
+#!/usr/bin/env python3
+"""Lanceur des services du HUB : streaming et jeu en nuage, en plein écran.
+
+    hub-web <service> [--profil ID]   lance un service de la liste blanche, attend sa fin
+    hub-web --disponibles             JSON : navigateur trouvé, services lançables
+    hub-web --fermer                  ferme le service en cours (voix, télécommande)
+    hub-web --essai [URL-locale]      fenêtre d'essai, retour au HUB simulé, puis sortie
+
+POURQUOI UNE LISTE BLANCHE ET PAS UNE URL. Le choix arrive du menu, que pilotent aussi
+la voix et le téléphone. Si la deuxième ligne pouvait être une adresse, n'importe quel
+appareil appairé ouvrirait n'importe quelle page dans une session qui a les cookies de
+la famille. Le menu ne transmet qu'un identifiant (« netflix ») ; l'adresse, l'agent
+utilisateur et le reste ne vivent qu'ici. --essai accepte une URL, mais seulement
+locale, et il n'est jamais appelé par gnome-kiosk-script.
+
+POURQUOI GOOGLE CHROME. GeForce NOW et Xbox Cloud Gaming ne prennent en charge que les
+navigateurs Chromium ; Firefox est refusé ou dégradé. Ubuntu 26.04 ne livre Chromium et
+Firefox qu'en snap, où VA-API et Widevine dépendent du confinement. Le .deb de Google
+porte Widevine, sait décoder en VA-API sous Wayland, et vient d'un dépôt signé.
+
+POURQUOI LE PROTOCOLE DEVTOOLS. Il faut une touche « retour au HUB » qui marche aussi
+à la manette, au-dessus d'une page qu'on ne contrôle pas. Une extension ferait l'affaire,
+mais Chrome 137 a retiré --load-extension des versions de Google. Le protocole DevTools
+sur tuyau (--remote-debugging-pipe) reste : pas de port réseau ouvert, et il permet
+d'injecter un petit script avant la page, d'en recevoir les appels, et d'envoyer de
+vraies touches (une page ignore souvent les touches synthétisées en JavaScript).
+
+Ce fichier se charge sans rien lancer : tests/test_hub_web.py et hub-menu l'importent.
+"""
+
+import json
+import os
+import re
+import select
+import shutil
+import signal
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+
+# L'agent d'une console : youtube.com/tv renvoie tout navigateur de bureau vers
+# youtube.com, qui ne se pilote pas aux flèches. Chaîne relevée dans VacuumTube
+# (src/index.js, septembre 2026), client libre de l'interface TV de YouTube.
+AGENT_TV = "Mozilla/5.0 (PS4; Leanback Shell) Cobalt/25.lts.40.1035033; compatible"
+
+# categorie : « streaming » va avec le mode TV, « jeux » avec le mode Gaming (un profil
+# privé de TV n'a pas Netflix non plus).
+# touches : la manette pilote la page comme des flèches. Faux pour le jeu en nuage, où
+#   la manette doit arriver telle quelle au jeu.
+# sans_av1 : l'UHD 630 ne décode pas l'AV1 ; refuser ce codec à la page fait choisir
+#   VP9 ou H.264, décodés par la puce, au lieu d'un AV1 que le processeur ne tient pas.
+# appli : commande native préférée si elle est installée.
+SERVICES = {
+    "youtube": {"categorie": "streaming", "url": "https://www.youtube.com/tv", "agent": AGENT_TV,
+                "touches": True, "sans_av1": True},
+    "netflix": {"categorie": "streaming", "url": "https://www.netflix.com/browse", "touches": True},
+    "primevideo": {"categorie": "streaming", "url": "https://www.primevideo.com/", "touches": True},
+    "disneyplus": {"categorie": "streaming", "url": "https://www.disneyplus.com/", "touches": True},
+    "canalplus": {"categorie": "streaming", "url": "https://www.canalplus.com/", "touches": True},
+    "twitch": {"categorie": "streaming", "url": "https://www.twitch.tv/", "touches": True, "sans_av1": True},
+    "arte": {"categorie": "streaming", "url": "https://www.arte.tv/fr/", "touches": True},
+    "francetv": {"categorie": "streaming", "url": "https://www.france.tv/", "touches": True},
+    # L'appli Linux de NVIDIA (Flatpak, sortie de bêta en août 2026) monte plus haut
+    # que la page web, limitée à 1440p sous Linux : elle passe devant si elle est là.
+    "geforcenow": {"categorie": "jeux", "url": "https://play.geforcenow.com/",
+                   "appli": {"flatpak": "com.nvidia.geforcenow"}},
+    "xcloud": {"categorie": "jeux", "url": "https://www.xbox.com/play"},
+    "boosteroid": {"categorie": "jeux", "url": "https://cloud.boosteroid.com/"},
+    # Pas de page web : proposés seulement s'ils sont installés.
+    "steam": {"categorie": "jeux", "appli": {"commande": ["steam", "-gamepadui"]}},
+    "moonlight": {"categorie": "jeux", "appli": {"commande": ["moonlight-qt"],
+                                                 "flatpak": "com.moonlight_stream.Moonlight"}},
+}
+
+NAVIGATEURS = ("google-chrome-stable", "google-chrome", "chromium", "chromium-browser")
+PROFIL_VALIDE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
+TOUCHES = {  # clé DOM → (code, code de touche Windows) pour Input.dispatchKeyEvent
+    "ArrowUp": ("ArrowUp", 38), "ArrowDown": ("ArrowDown", 40), "ArrowLeft": ("ArrowLeft", 37),
+    "ArrowRight": ("ArrowRight", 39), "Enter": ("Enter", 13), "Escape": ("Escape", 27),
+    "F12": ("F12", 123),
+}
+DELAI_ESSAI_S = 40
+
+
+# ── Ce qui se décide sans rien lancer ──────────────────────────────────────
+def dossier(variable, defaut):
+    return Path(os.environ.get(variable) or defaut)
+
+
+def chemin_reglages():
+    return dossier("XDG_CONFIG_HOME", Path.home() / ".config") / "hub" / "reglages.json"
+
+
+def chemin_pid():
+    return dossier("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}") / "hub" / "web.pid"
+
+
+def service(identifiant):
+    """La fiche d'un service de la liste blanche, ou None."""
+    return SERVICES.get(identifiant) if isinstance(identifiant, str) else None
+
+
+def lire_profil(chemin=None):
+    """(identifiant du profil actif, langue). Un réglage illisible donne un profil
+    « defaut » plutôt qu'un refus : on regarde YouTube sans session, pas un écran noir."""
+    try:
+        donnees = json.loads(Path(chemin or chemin_reglages()).read_text(encoding="utf-8"))
+        actif = next(p for p in donnees["profils"] if p.get("id") == donnees.get("profilActif"))
+    except (OSError, ValueError, KeyError, TypeError, StopIteration, AttributeError):
+        return "defaut", "fr"
+    ident = actif.get("id")
+    langue = actif.get("langue") if actif.get("langue") in ("fr", "en") else "fr"
+    return (ident if isinstance(ident, str) and PROFIL_VALIDE.match(ident) else "defaut"), langue
+
+
+def dossier_profil(profil):
+    """Un dossier de navigateur par profil du HUB : cookies, sessions Netflix et comptes
+    Xbox d'un profil ne se voient pas depuis un autre."""
+    if not isinstance(profil, str) or not PROFIL_VALIDE.match(profil):
+        profil = "defaut"
+    return dossier("XDG_DATA_HOME", Path.home() / ".local/share") / "hub" / "navigateur" / profil
+
+
+def flatpak_installe(identifiant, racines=None):
+    racines = racines if racines is not None else (
+        Path.home() / ".local/share/flatpak/app", Path("/var/lib/flatpak/app"))
+    return any((Path(r) / identifiant / "current").exists() for r in racines)
+
+
+def commande_appli(fiche, which=shutil.which, flatpak=flatpak_installe):
+    appli = fiche.get("appli") or {}
+    if appli.get("commande") and which(appli["commande"][0]):
+        return list(appli["commande"])
+    if appli.get("flatpak") and which("flatpak") and flatpak(appli["flatpak"]):
+        return ["flatpak", "run", appli["flatpak"]]
+    return None
+
+
+def trouver_navigateur(which=shutil.which):
+    for nom in NAVIGATEURS:
+        if which(nom):
+            return nom
+    return None
+
+
+def disponibles(which=shutil.which, flatpak=flatpak_installe):
+    """Ce que le menu peut proposer : une tuile sans navigateur ni appli ne lancerait rien."""
+    navigateur = trouver_navigateur(which)
+    services = {}
+    for ident, fiche in SERVICES.items():
+        appli = commande_appli(fiche, which, flatpak)
+        via = "appli" if appli else "navigateur" if fiche.get("url") and navigateur else None
+        services[ident] = {"disponible": via is not None, "via": via}
+    return {"navigateur": navigateur, "services": services}
+
+
+def url_locale(url):
+    """--essai n'ouvre que du local : ce n'est pas une porte vers le web."""
+    return isinstance(url, str) and bool(re.match(
+        r"^(file:///|data:text/html|https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(/|$))", url))
+
+
+def arguments_navigateur(navigateur, fiche, dossier_navigateur, langue="fr", essai=False, wayland=True):
+    args = [
+        navigateur,
+        f"--user-data-dir={dossier_navigateur}",
+        "--remote-debugging-pipe",
+        "--no-first-run", "--no-default-browser-check",
+        # Une session kiosque n'a pas de trousseau déverrouillé : sans ceci, Chrome ouvre
+        # « Déverrouiller le trousseau » par-dessus Netflix, et on n'a pas de clavier.
+        "--password-store=basic",
+        "--hide-crash-restore-bubble", "--noerrdialogs",
+        "--autoplay-policy=no-user-gesture-required",
+        f"--lang={langue}",
+        # Décodage vidéo par la puce Intel (VA-API) sous Wayland. Les noms ont changé au
+        # fil des versions ; Chrome ignore ceux qu'il ne connaît pas. À vérifier sur la
+        # machine dans chrome://gpu (« Video Decode: Hardware accelerated »).
+        "--enable-features=AcceleratedVideoDecodeLinuxGL,AcceleratedVideoDecodeLinuxZeroCopyGL,"
+        "VaapiVideoDecoder,VaapiIgnoreDriverChecks",
+        "--disable-features=Translate,MediaRouter,HardwareMediaKeyHandling",
+    ]
+    if wayland:
+        args.append("--ozone-platform=wayland")
+    if fiche.get("agent"):
+        args.append(f"--user-agent={fiche['agent']}")
+    if essai:
+        args += ["--window-size=640,360", "--new-window"]
+    else:
+        args.append("--kiosk")
+    # La page vierge d'abord : le script de retour doit être en place AVANT que le
+    # service ne charge, sinon la première page n'aurait pas de touche de retour.
+    args.append("about:blank")
+    return args
+
+
+def script_injecte(fiche):
+    """Le JavaScript posé dans chaque page avant ses propres scripts.
+
+    Il n'a qu'un canal vers ce programme, la fonction hubHub ajoutée par le protocole
+    DevTools ; il ne sait rien faire d'autre que demander le retour ou une touche."""
+    options = {"touches": bool(fiche.get("touches")), "sansAv1": bool(fiche.get("sans_av1"))}
+    return "(" + _JS + ")(" + json.dumps(options) + ");"
+
+
+_JS = r"""function (options) {
+  if (window.top !== window || window.__hubRetour) return;
+  window.__hubRetour = true;
+  const appeler = message => { try { window.hubHub(JSON.stringify(message)); } catch (e) { /* hors HUB */ } };
+  const retour = () => appeler({ type: "retour" });
+
+  if (options.sansAv1) {
+    const av1 = type => /av01|av1/i.test(String(type || ""));
+    const ms = window.MediaSource;
+    if (ms && ms.isTypeSupported) {
+      const original = ms.isTypeSupported.bind(ms);
+      ms.isTypeSupported = type => !av1(type) && original(type);
+    }
+    const canPlay = HTMLMediaElement.prototype.canPlayType;
+    HTMLMediaElement.prototype.canPlayType = function (type) { return av1(type) ? "" : canPlay.call(this, type); };
+    const mc = navigator.mediaCapabilities;
+    if (mc && mc.decodingInfo) {
+      const decodage = mc.decodingInfo.bind(mc);
+      mc.decodingInfo = config => av1(config && config.video && config.video.contentType)
+        ? Promise.resolve({ supported: false, smooth: false, powerEfficient: false })
+        : decodage(config);
+    }
+  }
+
+  // Clavier : F12 comme dans Kodi. Écouté en capture sur window, avant la page.
+  let echapDepuis = 0;
+  addEventListener("keydown", e => {
+    if (e.key === "F12") { e.preventDefault(); e.stopImmediatePropagation(); retour(); }
+    if (e.key === "Escape" && !e.repeat) echapDepuis = Date.now();
+    // Échap maintenue deux secondes : pour une télécommande sans F12.
+    if (e.key === "Escape" && e.repeat && echapDepuis && Date.now() - echapDepuis > 2000) { echapDepuis = 0; retour(); }
+  }, true);
+  addEventListener("keyup", e => { if (e.key === "Escape") echapDepuis = 0; }, true);
+
+  // Manette : bouton central (Guide, Xbox, PS) ou Select + Start, maintenus une seconde.
+  // Une pression brève reste au jeu : GeForce NOW ouvre son propre menu sur Guide.
+  let comboDepuis = 0;
+  const repetition = {};
+  setInterval(() => {
+    const manettes = navigator.getGamepads ? [...navigator.getGamepads()].filter(Boolean) : [];
+    let combo = false;
+    const voulues = {};
+    for (const m of manettes) {
+      const b = i => !!(m.buttons[i] && m.buttons[i].pressed);
+      if (b(16) || (b(8) && b(9))) combo = true;
+      if (options.touches) {
+        if (b(12) || m.axes[1] < -.6) voulues.ArrowUp = true;
+        if (b(13) || m.axes[1] > .6) voulues.ArrowDown = true;
+        if (b(14) || m.axes[0] < -.6) voulues.ArrowLeft = true;
+        if (b(15) || m.axes[0] > .6) voulues.ArrowRight = true;
+        if (b(0)) voulues.Enter = true;
+        if (b(1)) voulues.Escape = true;
+      }
+    }
+    const maintenant = Date.now();
+    if (combo) {
+      comboDepuis = comboDepuis || maintenant;
+      if (maintenant - comboDepuis > 1000) { comboDepuis = 0; retour(); }
+    } else comboDepuis = 0;
+    for (const cle of ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Enter", "Escape"]) {
+      if (!voulues[cle]) { delete repetition[cle]; continue; }
+      const prochain = repetition[cle];
+      if (prochain === undefined) { appeler({ type: "touche", cle }); repetition[cle] = maintenant + 450; }
+      else if (cle.startsWith("Arrow") && maintenant >= prochain) { appeler({ type: "touche", cle }); repetition[cle] = maintenant + 130; }
+    }
+  }, 50);
+}"""
+
+
+def lire_message_page(brut):
+    """Ce que le script injecté peut demander, et rien d'autre."""
+    try:
+        message = json.loads(brut)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(message, dict):
+        return None
+    if message.get("type") == "retour":
+        return {"type": "retour"}
+    if message.get("type") == "touche" and message.get("cle") in TOUCHES and message["cle"] != "F12":
+        return {"type": "touche", "cle": message["cle"]}
+    return None
+
+
+def evenements_touche(cle):
+    code, vk = TOUCHES[cle]
+    commun = {"key": cle, "code": code, "windowsVirtualKeyCode": vk, "nativeVirtualKeyCode": vk}
+    return [{"type": "rawKeyDown", **commun}, {"type": "keyUp", **commun}]
+
+
+# ── Le protocole DevTools sur tuyau ────────────────────────────────────────
+class Tuyau:
+    """Messages JSON séparés par un octet nul, sur les descripteurs 3 et 4 de Chrome."""
+
+    def __init__(self, ecriture, lecture):
+        self.ecriture, self.lecture = ecriture, lecture
+        self.tampon = b""
+        self.numero = 0
+        self.verrou = threading.Lock()
+
+    def envoyer(self, methode, parametres=None, session=None):
+        with self.verrou:
+            self.numero += 1
+            message = {"id": self.numero, "method": methode, "params": parametres or {}}
+            if session:
+                message["sessionId"] = session
+            donnees = json.dumps(message).encode() + b"\0"
+            try:
+                while donnees:
+                    donnees = donnees[os.write(self.ecriture, donnees):]
+            except OSError:
+                return None
+            return self.numero
+
+    def recevoir(self, delai=None):
+        """Le message suivant ; None à la fin du tuyau (Chrome fermé) ; {} si délai écoulé."""
+        while b"\0" not in self.tampon:
+            prets, _, _ = select.select([self.lecture], [], [], delai)
+            if not prets:
+                return {}
+            try:
+                morceau = os.read(self.lecture, 65536)
+            except OSError:
+                return None
+            if not morceau:
+                return None
+            self.tampon += morceau
+        brut, _, self.tampon = self.tampon.partition(b"\0")
+        try:
+            return json.loads(brut)
+        except ValueError:
+            return {}
+
+
+def demarrer(args):
+    """Chrome avec le tuyau DevTools sur ses descripteurs 3 (entrée) et 4 (sortie)."""
+    vers_chrome_l, vers_chrome_e = os.pipe()
+    depuis_chrome_l, depuis_chrome_e = os.pipe()
+
+    def placer():
+        # Copies d'abord : un des tuyaux peut déjà occuper le 3 ou le 4.
+        a, b = os.dup(vers_chrome_l), os.dup(depuis_chrome_e)
+        os.dup2(a, 3)
+        os.dup2(b, 4)
+        os.close(a)
+        os.close(b)
+        os.setsid()
+
+    # close_fds=False : les descripteurs de Python ne sont pas hérités (PEP 446), seuls
+    # les 3 et 4 posés par dup2 le sont. Avec close_fds, ils seraient refermés après.
+    processus = subprocess.Popen(args, close_fds=False, preexec_fn=placer,
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    os.close(vers_chrome_l)
+    os.close(depuis_chrome_e)
+    return processus, Tuyau(vers_chrome_e, depuis_chrome_l)
+
+
+# L'essai vérifie, dans une vraie page, les deux chemins que la TV ne montre pas au
+# premier coup d'œil : l'AV1 refusé à la page, et une touche relayée qui arrive comme
+# une vraie (isTrusted), telle que la manette l'enverra à YouTube.
+ESSAI_PREPARER = """(() => {
+  window.__hubEssai = { touches: [] };
+  addEventListener("keydown", e => window.__hubEssai.touches.push([e.key, e.isTrusted]));
+  window.hubHub(JSON.stringify({ type: "touche", cle: "ArrowDown" }));
+})()"""
+ESSAI_VERIFIER = """JSON.stringify({
+  av1Refuse: !MediaSource.isTypeSupported('video/mp4; codecs="av01.0.08M.08"'),
+  vp9Accepte: MediaSource.isTypeSupported('video/webm; codecs="vp9"'),
+  toucheReelle: window.__hubEssai.touches.some(([k, vraie]) => k === "ArrowDown" && vraie),
+})"""
+
+
+def piloter(processus, tuyau, fiche, url, essai=False, journal=None, trace=False):
+    """Boucle jusqu'à la fermeture de Chrome. Rend vrai si le retour au HUB a été demandé
+    (et, en essai, si les vérifications de la page ont réussi)."""
+    journal = journal or (lambda *_: None)
+    script = script_injecte(fiche)
+    etat = {"retour": False, "fermeture": False, "essai_ok": not essai}
+    principale = None
+    verification = None
+    tuyau.envoyer("Target.setAutoAttach", {"autoAttach": True, "waitForDebuggerOnStart": True, "flatten": True})
+    fin = time.monotonic() + DELAI_ESSAI_S if essai else None
+
+    def touche(cle, session):
+        for evenement in evenements_touche(cle):
+            tuyau.envoyer("Input.dispatchKeyEvent", evenement, session)
+
+    # Le signal ne fait que lever un drapeau : écrire dans le tuyau depuis le
+    # gestionnaire pourrait couper un message en cours d'envoi.
+    signal.signal(signal.SIGTERM, lambda *_: etat.update(fermeture=True))
+    while True:
+        if fin and time.monotonic() > fin:
+            journal("essai : délai dépassé")
+            etat["fermeture"], fin = True, None
+        if etat["fermeture"]:
+            tuyau.envoyer("Browser.close")
+            etat["fermeture"] = False
+        message = tuyau.recevoir(delai=1.0)
+        if trace and message:
+            journal(str(message)[:200])
+        if message is None:
+            break
+        methode = message.get("method")
+        session = message.get("sessionId")
+        if methode == "Target.attachedToTarget":
+            info = message["params"]["targetInfo"]
+            cible = message["params"]["sessionId"]
+            if info.get("type") == "page":
+                # Sans Runtime.enable, la page appelle hubHub mais l'événement ne sort pas.
+                tuyau.envoyer("Runtime.enable", session=cible)
+                tuyau.envoyer("Runtime.addBinding", {"name": "hubHub"}, cible)
+                tuyau.envoyer("Page.enable", session=cible)
+                tuyau.envoyer("Page.addScriptToEvaluateOnNewDocument", {"source": script, "runImmediately": True}, cible)
+            tuyau.envoyer("Runtime.runIfWaitingForDebugger", session=cible)
+            # Seule la première page est menée au service ; une fenêtre ouverte ensuite
+            # par le site (connexion à un compte) garde son adresse.
+            if info.get("type") == "page" and principale is None:
+                principale = cible
+                tuyau.envoyer("Page.navigate", {"url": url}, cible)
+        elif methode == "Runtime.bindingCalled" and message["params"].get("name") == "hubHub":
+            demande = lire_message_page(message["params"].get("payload"))
+            if demande and demande["type"] == "retour":
+                journal("retour au HUB demandé")
+                etat["retour"] = etat["fermeture"] = True
+            elif demande and demande["type"] == "touche":
+                touche(demande["cle"], session)
+                if essai and verification is None:
+                    verification = tuyau.envoyer("Runtime.evaluate", {"expression": ESSAI_VERIFIER, "returnByValue": True}, session)
+        elif methode == "Page.loadEventFired" and essai and session == principale and verification is None:
+            tuyau.envoyer("Runtime.evaluate", {"expression": ESSAI_PREPARER}, session)
+        elif essai and verification is not None and message.get("id") == verification:
+            try:
+                resultat = json.loads(message["result"]["result"]["value"])
+            except (KeyError, TypeError, ValueError):
+                resultat = {}
+            journal(f"essai : {resultat}")
+            etat["essai_ok"] = bool(resultat) and all(resultat.values())
+            # F12 par le même chemin qu'un vrai clavier : c'est la page qui doit demander le retour.
+            touche("F12", session)
+            verification = -1
+    try:
+        processus.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        os.killpg(processus.pid, signal.SIGKILL)
+        processus.wait()
+    return etat["retour"] and etat["essai_ok"]
+
+
+# ── Commandes ──────────────────────────────────────────────────────────────
+def ecrire_pid():
+    chemin = chemin_pid()
+    try:
+        chemin.parent.mkdir(parents=True, exist_ok=True)
+        chemin.write_text(str(os.getpid()))
+    except OSError:
+        pass
+
+
+def fermer_en_cours(chemin=None):
+    """Signale au hub-web en cours de fermer proprement son navigateur."""
+    chemin = Path(chemin or chemin_pid())
+    try:
+        pid = int(chemin.read_text().strip())
+        ligne = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except (OSError, ValueError):
+        return False
+    if b"hub-web" not in ligne:
+        return False
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        return False
+    return True
+
+
+def lancer_appli(commande):
+    try:
+        processus = subprocess.Popen(commande, start_new_session=True)
+    except OSError as erreur:
+        print(f"hub-web : {commande[0]} ne se lance pas ({erreur})", file=sys.stderr)
+        return 3
+    signal.signal(signal.SIGTERM, lambda *_: os.killpg(processus.pid, signal.SIGTERM))
+    return processus.wait()
+
+
+def principal(argv):
+    journal = lambda texte: print(f"hub-web : {texte}", file=sys.stderr)
+    if not argv or argv[0] in ("-h", "--help"):
+        print(__doc__.split("\n\n")[0])
+        return 0 if argv else 2
+    if argv[0] == "--disponibles":
+        print(json.dumps(disponibles()))
+        return 0
+    if argv[0] == "--fermer":
+        return 0 if fermer_en_cours() else 1
+
+    essai = argv[0] == "--essai"
+    if essai:
+        url = argv[1] if len(argv) > 1 else "data:text/html,<title>HUB</title><h1>Essai de hub-web</h1>"
+        if not url_locale(url):
+            journal("--essai n'ouvre que des adresses locales (file://, localhost)")
+            return 2
+        fiche, profil, langue = {"touches": True, "sans_av1": True}, "essai", "fr"
+    else:
+        fiche = service(argv[0])
+        if not fiche:
+            journal(f"service inconnu : {argv[0]!r} (liste : {', '.join(SERVICES)})")
+            return 2
+        profil, langue = lire_profil()
+        if "--profil" in argv[1:]:
+            i = argv.index("--profil")
+            profil = argv[i + 1] if i + 1 < len(argv) else profil
+        appli = commande_appli(fiche)
+        if appli:
+            ecrire_pid()
+            return lancer_appli(appli)
+        url = fiche.get("url")
+        if not url:
+            journal(f"{argv[0]} n'est pas installé")
+            return 3
+
+    navigateur = trouver_navigateur()
+    if not navigateur:
+        journal("aucun navigateur (google-chrome-stable) : relancer hub-installer.sh")
+        return 3
+    donnees = dossier_profil(profil)
+    donnees.mkdir(parents=True, exist_ok=True)
+    args = arguments_navigateur(navigateur, fiche, donnees, langue, essai=essai,
+                                wayland=bool(os.environ.get("WAYLAND_DISPLAY")))
+    processus, tuyau = demarrer(args)
+    ecrire_pid()
+    retour = piloter(processus, tuyau, fiche, url, essai=essai, journal=journal,
+                     trace=bool(os.environ.get("HUB_WEB_TRACE")))
+    if essai:
+        journal("essai réussi : AV1 refusé, touche relayée, F12 a fermé le navigateur" if retour else "essai raté")
+        return 0 if retour else 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(principal(sys.argv[1:]))

@@ -78,6 +78,9 @@ OK, MAUVAIS, TROP = "ok", "mauvais", "trop"
 COMMANDES_MENU = frozenset({
     "tv", "gaming", "bureau", "eteindre", "reglages", "aide", "meteo", "profils",
     "retour", "gauche", "droite", "haut", "bas", "ok", "theme:clair", "theme:sombre",
+    "web:youtube", "web:netflix", "web:primevideo", "web:disneyplus", "web:canalplus",
+    "web:twitch", "web:arte", "web:francetv", "web:geforcenow", "web:xcloud",
+    "web:boosteroid", "web:steam", "web:moonlight",
 })
 # « accueil » n'existe pas dans le protocole du menu : la télécommande le traduit
 # (« retour » dans le menu, quitter Kodi, fermer le bureau).

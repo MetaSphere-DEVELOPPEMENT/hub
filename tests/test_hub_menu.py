@@ -58,9 +58,10 @@ class Reglages(AvecDossier):
         hub_menu.enregistrer_reglages(self.c, {"profils": [{"id": "a"}]})
         self.assertEqual([p.name for p in self.c["reglages"].parent.iterdir()], ["reglages.json"])
 
-    def test_dernier_choix_ignore_eteindre(self):
+    def test_dernier_choix_ignore_eteindre_et_web(self):
         hub_menu.retenir(self.c, "bureau")
         hub_menu.retenir(self.c, "eteindre")
+        hub_menu.retenir(self.c, "web")
         self.assertEqual(hub_menu.dernier_choix(self.c), "bureau")
 
 
@@ -288,6 +289,19 @@ class Messages(unittest.TestCase):
         self.assertEqual(hub_menu.duree_lisible(59), "0 min")
         self.assertEqual(hub_menu.duree_lisible(3 * 3600 + 5 * 60), "3 h 05")
         self.assertEqual(hub_menu.duree_lisible(2 * 86400 + 4 * 3600), "2 j 4 h")
+
+    def test_services_web_par_nom_jamais_par_adresse(self):
+        self.assertEqual(hub_menu.message_voix(b"web:netflix"), {"type": "commande", "nom": "web:netflix"})
+        for brut in (b"web:https://exemple.org", b"web:", b"web:NETFLIX"):
+            self.assertIsNone(hub_menu.message_voix(brut), brut)
+        self.assertEqual(hub_menu.service_choisi({"type": "choix", "mode": "web", "service": "youtube"}), "youtube")
+        for mauvais in ("https://www.youtube.com/tv", "youtube\nbureau", None, 3, ""):
+            self.assertIsNone(hub_menu.service_choisi({"type": "choix", "mode": "web", "service": mauvais}), mauvais)
+
+    def test_services_disponibles_lus_dans_hub_web(self):
+        d = hub_menu.services_disponibles(RACINE / "installer" / "hub-web")
+        self.assertEqual(set(d["services"]), hub_menu.SERVICES_WEB)
+        self.assertIsNone(hub_menu.services_disponibles(RACINE / "nexiste-pas"))
 
     def test_infos_ne_plantent_pas(self):
         i = hub_menu.infos()

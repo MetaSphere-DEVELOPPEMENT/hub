@@ -41,6 +41,12 @@ case "$choix" in
     habiller jeux
     [ -f "$HOME/.config/hub/jeux.env" ] && { set -a; . "$HOME/.config/hub/jeux.env"; set +a; }
     ;;
+  web)
+    # Streaming ou jeu en nuage : la seconde ligne est un NOM de service (« netflix »),
+    # jamais une adresse. hub-web le refuse s'il n'est pas dans sa liste blanche, ouvre
+    # le navigateur du profil en plein écran et rend la main quand on revient au HUB.
+    /usr/local/bin/hub-web "$fichier"
+    ;;
   bureau)
     # Le bureau GNOME ne se lance pas à l'intérieur d'une session kiosque. On
     # choisit la session Ubuntu pour la prochaine connexion et on ferme celle-ci ;
