@@ -172,14 +172,60 @@ class AnalyseAnglais(unittest.TestCase):
 
 
 class Protocole(unittest.TestCase):
-    # Recopié du protocole fixé avec hub-menu.py : une commande hors de cette liste
-    # serait jetée par le menu sans un mot.
-    PROTOCOLE = {"tv", "gaming", "bureau", "eteindre", "reglages", "aide", "meteo", "profils",
-                 "retour", "gauche", "droite", "haut", "bas", "ok", "theme:clair", "theme:sombre"}
+    # Lu dans hub-menu.py plutôt que recopié : une commande que le menu ne connaît pas
+    # serait jetée sans un mot, et une commande du menu sans phrase ne se dirait pas.
+    @staticmethod
+    def commandes_du_menu():
+        import ast
+        source = Path(__file__).resolve().parent.parent / "hub-menu.py"
+        for noeud in ast.parse(source.read_text(encoding="utf-8")).body:
+            if isinstance(noeud, ast.Assign) and any(getattr(c, "id", None) == "COMMANDES"
+                                                     for c in noeud.targets):
+                return set(ast.literal_eval(noeud.value))
+        raise AssertionError("COMMANDES introuvable dans hub-menu.py")
 
     def test_commandes_du_protocole_et_seulement_elles(self):
+        protocole = self.commandes_du_menu()
+        self.assertIn("web:netflix", protocole)
         for langue in L.LANGUES:
-            self.assertEqual(set(L.COMMANDES[langue]), self.PROTOCOLE, langue)
+            self.assertEqual(set(L.COMMANDES[langue]), protocole, langue)
+
+
+class Web(unittest.TestCase):
+    def test_services_francais(self):
+        for texte, commande in [("hub lance netflix", "web:netflix"), ("hub youtube", "web:youtube"),
+                                ("hub mets france télé", "web:francetv"), ("hub disney plus", "web:disneyplus"),
+                                ("hub ouvre prime vidéo", "web:primevideo"), ("hub va sur twitch", "web:twitch"),
+                                ("hub lance geforce now", "web:geforcenow"), ("hub xbox", "web:xcloud"),
+                                ("hub steam", "web:steam"), ("hub moonlight", "web:moonlight"),
+                                ("hub canal plus", "web:canalplus"), ("hub arte", "web:arte"),
+                                ("hub booster", "web:boosteroid")]:
+            self.assertEqual(L.analyser(texte, "fr"), (True, commande), texte)
+
+    def test_france_tele_n_est_pas_la_tele(self):
+        # « télé » seul est la commande tv : la phrase la plus longue doit l'emporter.
+        self.assertEqual(L.analyser("hub france télé", "fr"), (True, "web:francetv"))
+        self.assertEqual(L.analyser("hub télé", "fr"), (True, "tv"))
+
+    def test_services_anglais(self):
+        for texte, commande in [("hub launch netflix", "web:netflix"), ("hub open prime video", "web:primevideo"),
+                                ("hub france tv", "web:francetv"), ("hub xbox cloud", "web:xcloud"),
+                                ("hub tv", "tv")]:
+            self.assertEqual(L.analyser(texte, "en"), (True, commande), texte)
+
+    def test_hub_web_vivant(self):
+        racine = Path(tempfile.mkdtemp())
+        pid = racine / "web.pid"
+        self.assertFalse(L.web_en_cours(pid, racine=str(racine)))
+        pid.write_text("4242\n")
+        self.assertFalse(L.web_en_cours(pid, racine=str(racine)))  # processus disparu
+        (racine / "4242").mkdir()
+        (racine / "4242" / "cmdline").write_bytes(b"bash\x00")
+        self.assertFalse(L.web_en_cours(pid, racine=str(racine)))  # pid repris par un autre
+        (racine / "4242" / "cmdline").write_bytes(b"/usr/bin/python3\x00/usr/local/bin/hub-web\x00netflix\x00")
+        self.assertTrue(L.web_en_cours(pid, racine=str(racine)))
+        pid.write_text("pas un nombre")
+        self.assertFalse(L.web_en_cours(pid, racine=str(racine)))
 
 
 class Processus(unittest.TestCase):
@@ -322,6 +368,11 @@ class Cible(unittest.TestCase):
         for commande in ("tv", "eteindre", "gauche", "meteo", "profils", "voix:eveil",
                          "voix:micro-absent"):
             self.assertIsNone(L.cible(commande, menu_ouvert=False, kodi=True, bureau=True), commande)
+
+    def test_retour_ferme_d_abord_le_service_web(self):
+        self.assertEqual(L.cible("retour", menu_ouvert=False, kodi=True, bureau=True, web=True), "web")
+        self.assertEqual(L.cible("retour", menu_ouvert=True, kodi=False, bureau=False, web=True), "menu")
+        self.assertIsNone(L.cible("web:netflix", menu_ouvert=False, kodi=False, bureau=False, web=True))
 
     def test_retour_sans_rien_a_fermer(self):
         self.assertIsNone(L.cible("retour", menu_ouvert=False, kodi=False, bureau=False))

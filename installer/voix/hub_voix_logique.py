@@ -32,6 +32,42 @@ EVEILS = {
     "en": ("hey hub", "okay hub", "ok hub", "hub"),
 }
 
+# Services de streaming et de jeu (« web:<service> », lancés par hub-web). Chaque nom
+# est dans le vocabulaire des deux petits modèles, vérifié dans leur table de mots
+# (Gr.fst) : youtube, netflix, twitch, arte, xbox, geforce, steam, moonlight y sont
+# tels quels. « boosteroid » n'y est pas : « booster » est le mot le plus proche
+# qu'il connaisse. « France TV » a ses deux formes parlées : on dit « France Télé ».
+WEB_FR = {
+    "youtube": ("youtube",),
+    "netflix": ("netflix",),
+    "primevideo": ("prime vidéo", "amazon prime", "amazon"),
+    "disneyplus": ("disney plus", "disney"),
+    "canalplus": ("canal plus",),
+    "twitch": ("twitch",),
+    "arte": ("arte",),
+    "francetv": ("france télé", "france télévisions", "france tv"),
+    "geforcenow": ("geforce now", "geforce"),
+    "xcloud": ("xbox", "xbox cloud"),
+    "boosteroid": ("booster",),
+    "steam": ("steam",),
+    "moonlight": ("moonlight",),
+}
+WEB_EN = {
+    "youtube": ("youtube",),
+    "netflix": ("netflix",),
+    "primevideo": ("prime video", "amazon prime", "amazon"),
+    "disneyplus": ("disney plus", "disney"),
+    "canalplus": ("canal plus",),
+    "twitch": ("twitch",),
+    "arte": ("arte",),
+    "francetv": ("france tv", "france television"),
+    "geforcenow": ("geforce now", "geforce"),
+    "xcloud": ("xbox", "xbox cloud"),
+    "boosteroid": ("booster",),
+    "steam": ("steam",),
+    "moonlight": ("moonlight",),
+}
+
 # Les commandes, écrites comme le vocabulaire de Vosk les connaît (avec accents) :
 # ces phrases servent aussi à construire la grammaire du reconnaisseur. Chaque mot a
 # été vérifié présent dans vosk-model-small-fr-0.22 et vosk-model-small-en-us-0.15
@@ -55,6 +91,7 @@ COMMANDES = {
         "ok": ("ok", "okay", "valide", "valider", "ouvre", "entrée"),
         "theme:clair": ("thème clair", "mode clair"),
         "theme:sombre": ("thème sombre", "mode sombre"),
+        **{f"web:{service}": phrases for service, phrases in WEB_FR.items()},
     },
     "en": {
         "tv": ("tv", "television", "movies", "films", "kodi"),
@@ -73,6 +110,7 @@ COMMANDES = {
         "ok": ("ok", "okay", "select", "open", "enter"),
         "theme:clair": ("light theme", "light mode"),
         "theme:sombre": ("dark theme", "dark mode"),
+        **{f"web:{service}": phrases for service, phrases in WEB_EN.items()},
     },
 }
 
@@ -88,7 +126,8 @@ AMORCES = {
            "mets les", "ouvre", "ouvre la", "ouvre le", "ouvre les", "va sur"),
     "en": ("launch", "launch the", "open", "open the", "start", "start the", "go to"),
 }
-DESTINATIONS = ("tv", "gaming", "bureau", "reglages", "aide", "meteo", "profils")
+DESTINATIONS = ("tv", "gaming", "bureau", "reglages", "aide", "meteo", "profils") + \
+    tuple(f"web:{service}" for service in WEB_FR)
 
 # Petits mots qu'on retire en tête pour retrouver la commande quand la phrase n'est
 # pas une forme exacte : couvre les amorces ci-dessus et les variantes d'articles
@@ -306,8 +345,8 @@ class Ecoute:
         return self.tic(maintenant)
 
 
-def cible(commande, menu_ouvert, kodi, bureau):
-    """Où va l'événement : « menu », « kodi », « bureau » ou None (ignoré).
+def cible(commande, menu_ouvert, kodi, bureau, web=False):
+    """Où va l'événement : « menu », « web », « kodi », « bureau » ou None (ignoré).
 
     Menu ouvert : il reçoit tout, c'est lui qui décide (et qui demande confirmation
     avant d'éteindre). Menu fermé : seul « retour » a un sens, il ferme le mode en
@@ -318,12 +357,33 @@ def cible(commande, menu_ouvert, kodi, bureau):
         return "menu"
     if commande != "retour":
         return None
-    # Kodi d'abord : lancé depuis le bureau, c'est lui qu'on regarde.
+    # Un service web (hub-web) s'ouvre par-dessus la session du HUB : quand il tourne,
+    # c'est lui qu'on regarde. Kodi ensuite : lancé depuis le bureau, c'est lui qu'on
+    # regarde plutôt que le bureau derrière.
+    if web:
+        return "web"
     if kodi:
         return "kodi"
     if bureau:
         return "bureau"
     return None
+
+
+def web_en_cours(chemin_pid, racine="/proc"):
+    """Vrai si le fichier pid de hub-web désigne un hub-web vivant.
+
+    POURQUOI VÉRIFIER LE PROCESSUS. hub-web tué net laisse son fichier pid : se fier au
+    fichier seul ferait prendre chaque « retour » pour la fermeture d'un navigateur
+    disparu, et Kodi ou le bureau ne se fermeraient plus jamais à la voix. Même
+    vérification que `hub-web --fermer` (le pid peut avoir été repris par un autre
+    programme).
+    """
+    try:
+        pid = int(Path(chemin_pid).read_text().strip())
+        ligne = Path(racine, str(pid), "cmdline").read_bytes()
+    except (OSError, ValueError):
+        return False
+    return b"hub-web" in ligne
 
 
 def lire_reglages(chemin):

@@ -51,6 +51,16 @@ admises devant les destinations.
 | `gauche` `droite` `haut` `bas` | (à) gauche, (à) droite, (en) haut, (en) bas | left, right, up, down |
 | `ok` | ok, okay, valide, valider, ouvre, entrée | ok, okay, select, open, enter |
 | `theme:clair` `theme:sombre` | thème / mode clair, sombre | light / dark theme, mode |
+| `web:youtube` `web:netflix` `web:twitch` `web:arte` `web:steam` `web:moonlight` | youtube, netflix, twitch, arte, steam, moonlight | idem |
+| `web:primevideo` | prime vidéo, amazon prime, amazon | prime video, amazon prime, amazon |
+| `web:disneyplus` `web:canalplus` | disney plus, disney · canal plus | idem |
+| `web:francetv` | france télé, france télévisions, france tv | france tv, france television |
+| `web:geforcenow` `web:xcloud` | geforce now, geforce · xbox, xbox cloud | idem |
+| `web:boosteroid` | booster | booster |
+
+Les noms de services sont vérifiés présents dans la table de mots des deux petits
+modèles (`graph/Gr.fst`, 15 septembre 2026). « boosteroid » n'y est pas : on dit
+« booster ». Les amorces (« lance netflix », « va sur youtube ») sont admises.
 
 `avatars` n'est jamais produit : ce datagramme est réservé à la télécommande.
 
@@ -88,10 +98,13 @@ Menu fermé (un mode tourne) : seul `retour` agit.
    3. `kodi-send --action=Quit` s'il existe (paquet `kodi-eventclients-kodi-send`,
       facultatif).
    4. `SIGTERM` au processus Kodi, que Kodi traite comme une demande de sortie.
-2. **Bureau GNOME** (`gnome-shell` de l'utilisateur ; la session kiosque tourne sous
+2. **Service web** (`$XDG_RUNTIME_DIR/hub/web.pid` désigne un `hub-web` vivant — un
+   fichier resté après un arrêt brutal ne compte pas) : `hub-web --fermer`. Il passe
+   avant Kodi, parce qu'il s'ouvre par-dessus la session du HUB.
+3. **Bureau GNOME** (`gnome-shell` de l'utilisateur ; la session kiosque tourne sous
    `gnome-kiosk`, qui ne compte pas) : `gnome-session-quit --logout --no-prompt`.
    `hub-session-par-defaut` a déjà remis le HUB comme session suivante.
-3. Tout le reste est ignoré hors menu, **`eteindre` compris** : éteindre sans écran de
+4. Tout le reste est ignoré hors menu, **`eteindre` compris** : éteindre sans écran de
    confirmation parce que la TV a dit « éteins » serait inacceptable.
 
 Un socket présent mais muet (menu tombé sans nettoyer) est traité comme fermé.
