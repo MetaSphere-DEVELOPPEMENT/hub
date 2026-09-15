@@ -1,0 +1,25 @@
+# Enceinte réseau du HUB : coordinateur — unité UTILISATEUR.
+#
+# Il ne joue aucun son : il rassemble ce que racontent librespot, shairport-sync et
+# UxPlay en un état de lecture ($XDG_RUNTIME_DIR/hub/lecture.json, relayé par le menu)
+# et applique la règle de priorité avec Kodi. Utilisateur, parce que tout ce qu'il
+# touche vit dans la session : le socket du menu, Kodi, systemctl --user, le bus D-Bus.
+
+[Unit]
+Description=HUB : enceinte réseau, état de lecture et priorité avec Kodi
+Documentation=file:///usr/local/lib/hub/enceinte/README.md
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/hub-enceinte servir
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+UMask=0077
+# Garde-fou : quelques Mo suffisent (bibliothèque standard, une pochette à la fois).
+MemoryMax=100M
+
+[Install]
+WantedBy=graphical-session.target

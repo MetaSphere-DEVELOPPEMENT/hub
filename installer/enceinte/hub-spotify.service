@@ -1,0 +1,30 @@
+# Spotify Connect du HUB (librespot) — unité UTILISATEUR.
+#
+# Utilisateur, parce que le son passe par le PipeWire de la session : un service
+# système n'y aurait pas accès et prendrait la carte son en direct, contre Kodi.
+#
+# ExecCondition : désactivé dans le menu (Réglages → Enceinte réseau), l'unité est
+# sautée sans être marquée en échec. `hub-enceinte appliquer` la relance quand le
+# réglage change, ce qui réévalue la condition.
+
+[Unit]
+Description=HUB : Spotify Connect (librespot)
+Documentation=file:///usr/local/lib/hub/enceinte/README.md
+PartOf=graphical-session.target
+Wants=hub-enceinte.service
+After=graphical-session.target hub-enceinte.service pipewire-pulse.service
+
+[Service]
+Type=simple
+ExecCondition=/usr/local/bin/hub-enceinte actif spotify
+ExecStart=/usr/local/bin/hub-enceinte lancer spotify
+# Tué ou planté, librespot ne dit plus rien : le bandeau du menu doit disparaître quand même.
+ExecStopPost=/usr/local/bin/hub-enceinte evenement spotify arret
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=yes
+UMask=0077
+MemoryMax=300M
+
+[Install]
+WantedBy=graphical-session.target

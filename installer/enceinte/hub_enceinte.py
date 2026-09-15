@@ -696,9 +696,19 @@ def appliquer(c, executer=subprocess.run):
 
 
 # ── Lanceurs ──────────────────────────────────────────────────────────────
+def environnement_uxplay(env):
+    """UxPlay 1.73 plante (std::string construite depuis NULL) quand -scrsv trouve un bus
+    de session mais pas XDG_CURRENT_DESKTOP — vu en conteneur le 15/09/2026. Une unité
+    utilisateur n'hérite de cette variable que si la session l'a importée : on ne parie pas."""
+    env = dict(env)
+    env.setdefault("XDG_CURRENT_DESKTOP", "GNOME")
+    return env
+
+
 def lancer_ecran(c, r):
     Path(c["config"]).mkdir(parents=True, exist_ok=True)
-    enfant = subprocess.Popen(arguments_uxplay(r, c), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+    enfant = subprocess.Popen(arguments_uxplay(r, c), env=environnement_uxplay(os.environ),
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                               text=True, errors="replace", bufsize=1)
     signal.signal(signal.SIGTERM, lambda *_: enfant.terminate())
     actif = False
