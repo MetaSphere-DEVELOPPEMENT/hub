@@ -142,21 +142,29 @@ poser() { # source destination mode [utilisateur]
   ok "$dst"
 }
 
-# Remplace un répertoire entier par celui du dépôt. Copier fichier par fichier
-# laisserait en place ce que le dépôt a supprimé ; on construit la nouvelle version
-# à côté et on l'échange, pour ne jamais laisser un menu à moitié copié.
-poser_repertoire() { # source destination
-  local src="$1" dst="$2"
+# Remplace un répertoire entier par celui du dépôt, plus d'éventuels fichiers venus
+# d'ailleurs (qrcode.js de la télécommande vit à côté de la page du menu). Copier
+# fichier par fichier laisserait en place ce que le dépôt a supprimé ; on compare
+# donc l'état voulu entier, puis on construit la nouvelle version à côté et on
+# l'échange, pour ne jamais laisser un menu à moitié copié.
+poser_repertoire() { # source destination [fichier-ajouté…]
+  local src="$1" dst="$2" f voulu
+  shift 2
   [ -d "$src" ] || { echec "absent du dépôt : $src"; return 1; }
-  if [ -d "$dst" ] && diff -r -q "$src" "$dst" >/dev/null 2>&1; then
-    deja "$dst/"; return 0
+  for f in "$@"; do [ -f "$f" ] || { echec "absent du dépôt : $f"; return 1; }; done
+  voulu=$(mktemp -d) || { echec "mktemp impossible"; return 1; }
+  cp -r "$src/." "$voulu/" && { [ $# -eq 0 ] || cp "$@" "$voulu/"; } &&
+    find "$voulu" \( -name __pycache__ -o -name '*.pyc' \) -prune -exec rm -rf {} +
+  if [ -d "$dst" ] && diff -r -q "$voulu" "$dst" >/dev/null 2>&1; then
+    rm -rf "$voulu"; deja "$dst/"; return 0
   fi
   faire mkdir -p "$(dirname "$dst")" &&
   faire rm -rf "$dst.nouveau" &&
-  faire cp -r "$src" "$dst.nouveau" &&
+  faire cp -r "$voulu" "$dst.nouveau" &&
   faire chmod -R u=rwX,go=rX "$dst.nouveau" &&
   faire rm -rf "$dst" &&
-  faire mv "$dst.nouveau" "$dst" || return 1
+  faire mv "$dst.nouveau" "$dst"
+  local code=$?; rm -rf "$voulu"; [ "$code" -eq 0 ] || return 1
   ok "$dst/"
 }
 
@@ -292,6 +300,17 @@ poser_version() {
   local version_depot cible=/usr/local/share/hub/VERSION
   # safe.directory : lancé par sudo, git refuse un dépôt appartenant à l'utilisateur.
   version_depot=$(git -c safe.directory='*' -C "$DEPOT/.." describe --always --dirty 2>/dev/null)
+  # Une Ubuntu neuve n'a pas git : la révision se lit alors directement dans .git
+  # (sans l'indication « -dirty », que seul git sait calculer).
+  if [ -z "$version_depot" ] && [ -f "$DEPOT/../.git/HEAD" ]; then
+    local tete; tete=$(cat "$DEPOT/../.git/HEAD")
+    case "$tete" in
+      "ref: "*) version_depot=$(cat "$DEPOT/../.git/${tete#ref: }" 2>/dev/null ||
+                  awk -v r="${tete#ref: }" '$2 == r {print $1}' "$DEPOT/../.git/packed-refs" 2>/dev/null) ;;
+      *) version_depot="$tete" ;;
+    esac
+    version_depot="${version_depot:0:7}"
+  fi
   if [ -z "$version_depot" ] && [ -f "$DEPOT/../VERSION" ]; then
     version_depot=$(head -n 1 "$DEPOT/../VERSION")
   fi
@@ -324,7 +343,11 @@ etape_session() {
   fi
 
   poser "$DEPOT/hub-menu.py"              /usr/local/bin/hub-menu              0755 || return 1
-  poser_repertoire "$DEPOT/menu"          /usr/local/share/hub/menu            || return 1
+  # qrcode.js appartient à la télécommande mais le menu le charge : il est posé avec
+  # la page, sinon chaque relance supprimerait l'autre moitié.
+  local ajouts=()
+  [ -f "$DEPOT/telecommande/qrcode.js" ] && ajouts+=("$DEPOT/telecommande/qrcode.js")
+  poser_repertoire "$DEPOT/menu" /usr/local/share/hub/menu "${ajouts[@]}" || return 1
   poser_version || return 1
   poser "$DEPOT/hub-vers-bureau"          /usr/local/bin/hub-vers-bureau       0755 || return 1
   poser "$DEPOT/hub-session-par-defaut"   /usr/local/bin/hub-session-par-defaut 0755 || return 1
@@ -417,9 +440,69 @@ etape_kodi() {
   fi
 }
 
-# ── 6. Démarrage automatique sur le HUB ───────────────────────────────────────
+# ── 6. Télécommande téléphone ─────────────────────────────────────────────────
+activer_unite_globale() { # nom
+  if [ "$(systemctl --global is-enabled "$1" 2>/dev/null)" = enabled ]; then
+    deja "$1 activé pour les sessions"
+  else
+    faire systemctl --global enable "$1" || return 1
+    ok "$1 activé à l'ouverture des sessions"
+  fi
+}
+
+etape_telecommande() {
+  etape "6. Télécommande téléphone"
+  local tel="$DEPOT/telecommande" lib=/usr/local/lib/hub
+  if [ ! -f "$tel/hub_telecommande.py" ] || [ ! -f "$tel/hub-telecommande.service" ]; then
+    deja "aucune télécommande dans le dépôt ($tel) — étape sautée"
+    return 0
+  fi
+  # Sans Bluetooth ni CEC, c'est le seul moyen de piloter le HUB depuis le canapé :
+  # elle passe avant la bascule du démarrage, et son échec l'empêche.
+  # page.html doit rester à côté du programme : il la lit là (lien résolu).
+  poser "$tel/hub_telecommande.py" "$lib/telecommande/hub_telecommande.py" 0755 || return 1
+  poser "$tel/page.html"           "$lib/telecommande/page.html"           0644 || return 1
+  if [ -f "$tel/README.md" ]; then
+    poser "$tel/README.md" "$lib/telecommande/README.md" 0644 || return 1
+  fi
+  # La télécommande pilote Kodi et le bureau avec la logique de la voix ; elle la
+  # cherche ici, que la commande vocale soit installée ou non.
+  if [ -f "$DEPOT/voix/hub_voix_logique.py" ]; then
+    poser "$DEPOT/voix/hub_voix_logique.py" "$lib/voix/hub_voix_logique.py" 0644 || return 1
+  else
+    alerte "voix/hub_voix_logique.py absent : la télécommande ne pilotera ni Kodi ni le bureau"
+  fi
+  if [ "$(readlink /usr/local/bin/hub-telecommande 2>/dev/null)" = "$lib/telecommande/hub_telecommande.py" ]; then
+    deja "/usr/local/bin/hub-telecommande"
+  else
+    faire ln -sfn "$lib/telecommande/hub_telecommande.py" /usr/local/bin/hub-telecommande || return 1
+    ok "/usr/local/bin/hub-telecommande"
+  fi
+  poser "$tel/hub-telecommande.service" /usr/local/lib/systemd/user/hub-telecommande.service 0644 || return 1
+  activer_unite_globale hub-telecommande.service || return 1
+
+  # ufw est inactif sur une Ubuntu neuve. S'il a été activé, on ouvre le port au seul
+  # réseau de l'interface qui porte la route par défaut : la télécommande n'a rien à
+  # faire joignable depuis un VPN ou une interface de conteneur.
+  if command -v ufw >/dev/null && LC_ALL=C ufw status 2>/dev/null | grep -q '^Status: active'; then
+    local iface reseau
+    iface=$(ip -4 route show default 2>/dev/null | awk '{print $5; exit}')
+    reseau=$(ip -4 -o addr show dev "${iface:-lo}" 2>/dev/null | awk '{print $4; exit}' |
+             python3 -c 'import ipaddress,sys; print(ipaddress.ip_interface(sys.stdin.read().strip()).network)' 2>/dev/null)
+    if [ -z "$reseau" ]; then
+      alerte "ufw actif mais réseau local introuvable : port 8790 non ouvert, la télécommande sera bloquée"
+    elif LC_ALL=C ufw status 2>/dev/null | grep -Eq "^8790/tcp[[:space:]]+ALLOW[[:space:]]+$reseau\b"; then
+      deja "ufw : 8790/tcp ouvert à $reseau"
+    else
+      faire ufw allow from "$reseau" to any port 8790 proto tcp || return 1
+      ok "ufw : 8790/tcp ouvert à $reseau seulement"
+    fi
+  fi
+}
+
+# ── 7. Démarrage automatique sur le HUB ───────────────────────────────────────
 etape_demarrage() {
-  etape "6. Démarrage automatique sur le HUB"
+  etape "7. Démarrage automatique sur le HUB"
   # Basculer le démarrage sur une session dont une pièce manque, c'est allumer la TV
   # sur un écran noir sans clavier pour réparer. On ne le fait que sur un parcours
   # sans échec.
@@ -482,9 +565,9 @@ etape_demarrage() {
   fi
 }
 
-# ── 7. Commande vocale (si elle est livrée) ──────────────────────────────────
+# ── 8. Commande vocale (si elle est livrée) ──────────────────────────────────
 etape_voix() {
-  etape "7. Commande vocale (si elle est livrée)"
+  etape "8. Commande vocale (si elle est livrée)"
   local voix="$DEPOT/voix" opt=/opt/hub-voix f
   if [ ! -f "$voix/hub-voix.py" ] || [ ! -f "$voix/hub-voix.service" ]; then
     deja "aucun service vocal complet dans le dépôt ($voix) — étape sautée"
@@ -516,18 +599,14 @@ etape_voix() {
   # Unité UTILISATEUR (micro de PipeWire, socket du menu dans $XDG_RUNTIME_DIR) ;
   # /etc/systemd/user la rend disponible à toute session, activée par --global.
   poser "$voix/hub-voix.service" /etc/systemd/user/hub-voix.service 0644 || return 1
-  if [ "$(systemctl --global is-enabled hub-voix.service 2>/dev/null)" = enabled ]; then
-    deja "hub-voix.service activé pour les sessions"
-  else
-    faire systemctl --global enable hub-voix.service || return 1
-    ok "hub-voix.service activé à l'ouverture des sessions"
-  fi
+  activer_unite_globale hub-voix.service
 }
 
 etape_mesure
 etape_session
 etape_accueil
 etape_kodi
+etape_telecommande
 etape_demarrage
 # La voix vient après la bascule du démarrage : elle télécharge (pip, modèles) et un
 # réseau capricieux ne doit pas priver le salon de son HUB. Son échec reste compté.
