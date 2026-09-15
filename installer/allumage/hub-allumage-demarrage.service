@@ -1,0 +1,18 @@
+# À chaque démarrage : dire au menu si c'est le réveil programmé qui a allumé la
+# machine (il ouvre alors le mode ambiant), puis réarmer. Réarmer aussi à l'arrêt :
+# certains firmwares effacent l'alarme de l'horloge en redémarrant.
+[Unit]
+Description=HUB : réveil programmé détecté et réarmé
+After=local-fs.target time-sync.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/hub/allumage.env
+RuntimeDirectory=hub-allumage
+RuntimeDirectoryMode=0755
+ExecStart=/usr/local/bin/hub-allumage demarrage
+ExecStop=/usr/local/bin/hub-allumage appliquer
+
+[Install]
+WantedBy=multi-user.target

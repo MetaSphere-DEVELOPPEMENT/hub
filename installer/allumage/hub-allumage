@@ -1,0 +1,199 @@
+#!/usr/bin/env python3
+"""Allumage et extinction programmés du HUB — /usr/local/bin/hub-allumage
+
+LE PRINCIPE. Le menu écrit les horaires dans ~/.config/hub/reglages.json
+("systeme": {"allumage": {"reveils": [lun…dim], "extinctions": [lun…dim]}}, "HH:MM"
+ou null). Ce programme, lancé en root par hub-allumage.service, en déduit :
+  - le prochain réveil, confié à l'horloge matérielle (rtcwake -m no -t EPOCH : on
+    arme l'alarme sans mettre en veille) — la machine s'allume seule, même éteinte,
+    SI le firmware l'autorise (BIOS du M720q : réveil sur alarme, voir README) ;
+  - la prochaine extinction, un minuteur systemd transitoire (hub-extinction.timer)
+    qui relance « hub-allumage eteindre » : réarmer le réveil suivant, puis éteindre.
+
+POURQUOI ROOT, ET POURQUOI SI PEU. rtcwake écrit dans /sys/class/rtc/rtc0/wakealarm,
+réservé à root. Plutôt que d'ouvrir ce fichier à l'utilisateur, un service unique
+fait le travail et la règle polkit autorise le groupe « hub » à le démarrer, lui
+seul (sur le modèle de hub-mise-a-jour). Le fichier lu appartient à l'utilisateur :
+seules des heures HH:MM strictes en sortent, jamais une chaîne passée à une commande.
+
+AU DÉMARRAGE (hub-allumage-demarrage.service), il regarde si la machine s'est
+allumée à l'heure du réveil armé ; si oui, il le dit au menu (/run/hub-allumage/reveil),
+qui ouvre directement le mode ambiant (horloge, météo, cadre photo). Puis il
+réarme : certains firmwares effacent l'alarme au démarrage. Il réarme aussi à
+l'arrêt (ExecStop), pour la même raison.
+
+    hub-allumage appliquer     relire les réglages et armer (service lancé par le menu)
+    hub-allumage demarrage     détecter un réveil programmé, puis appliquer
+    hub-allumage eteindre      réarmer le réveil suivant, puis éteindre
+    hub-allumage etat          JSON : prochains réveil et extinction, cartes Ethernet
+"""
+
+import json
+import os
+import pwd
+import re
+import subprocess
+import sys
+import time
+from datetime import datetime, timedelta
+from pathlib import Path
+
+ETAT = Path("/var/lib/hub/allumage.json")
+SIGNAL_REVEIL = Path("/run/hub-allumage/reveil")
+UNITE_EXTINCTION = "hub-extinction"
+MARGE_S = 60
+# Le firmware et le noyau mettent une à deux minutes à rendre la main : au-delà de dix,
+# ce n'est plus le réveil qui a allumé la machine.
+FENETRE_REVEIL_S = 10 * 60
+HEURE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+
+
+def horaire_valide(valeur):
+    return valeur if isinstance(valeur, str) and HEURE.match(valeur) else None
+
+
+def configuration(reglages):
+    allumage = ((reglages or {}).get("systeme") or {}).get("allumage") if isinstance(reglages, dict) else None
+    allumage = allumage if isinstance(allumage, dict) else {}
+
+    def sept(cle):
+        liste = allumage.get(cle)
+        if not isinstance(liste, list) or len(liste) != 7:
+            return [None] * 7
+        return [horaire_valide(v) for v in liste]
+    return {"reveils": sept("reveils"), "extinctions": sept("extinctions")}
+
+
+def prochain(horaires, maintenant):
+    """Le prochain horaire strictement après maintenant (+ une minute de marge), ou None."""
+    if not isinstance(horaires, list) or len(horaires) != 7:
+        return None
+    seuil = maintenant + timedelta(seconds=MARGE_S)
+    for decalage in range(8):
+        jour = (maintenant + timedelta(days=decalage)).date()
+        texte = horaire_valide(horaires[jour.weekday()])
+        if not texte:
+            continue
+        h, m = (int(x) for x in texte.split(":"))
+        candidat = datetime(jour.year, jour.month, jour.day, h, m)
+        if candidat >= seuil:
+            return candidat
+    return None
+
+
+def ecrire_atomique(chemin, donnees):
+    chemin = Path(chemin)
+    chemin.parent.mkdir(parents=True, exist_ok=True)
+    provisoire = chemin.with_name(chemin.name + ".tmp")
+    provisoire.write_text(json.dumps(donnees), encoding="utf-8")
+    os.chmod(provisoire, 0o644)
+    os.replace(provisoire, chemin)
+
+
+def lire_json(chemin, taille_max=256_000):
+    try:
+        chemin = Path(chemin)
+        if chemin.stat().st_size > taille_max:
+            return None
+        return json.loads(chemin.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def appliquer(config, maintenant, executer=subprocess.run, etat=ETAT):
+    reveil = prochain(config["reveils"], maintenant)
+    extinction = prochain(config["extinctions"], maintenant)
+    erreurs = []
+
+    commande = ["rtcwake", "-m", "no", "-t", str(int(reveil.timestamp()))] if reveil else ["rtcwake", "-m", "disable"]
+    r = executer(commande, capture_output=True, text=True)
+    if r.returncode != 0 and reveil:
+        erreurs.append((r.stderr or r.stdout or "rtcwake a échoué").strip()[:300])
+
+    executer(["systemctl", "stop", f"{UNITE_EXTINCTION}.timer"], capture_output=True, text=True)
+    if extinction:
+        r = executer([
+            "systemd-run", f"--unit={UNITE_EXTINCTION}", f"--on-calendar={extinction:%Y-%m-%d %H:%M:%S}",
+            "--timer-property=AccuracySec=1s", "--description=HUB : extinction programmée",
+            "/usr/local/bin/hub-allumage", "eteindre",
+        ], capture_output=True, text=True)
+        if r.returncode != 0:
+            erreurs.append((r.stderr or "systemd-run a échoué").strip()[:300])
+
+    resultat = {
+        "reveil": int(reveil.timestamp()) if reveil else None,
+        "extinction": int(extinction.timestamp()) if extinction else None,
+        "appliqueLe": int(maintenant.timestamp()),
+    }
+    if erreurs:
+        resultat["erreur"] = " ; ".join(erreurs)
+    ecrire_atomique(etat, resultat)
+    return resultat
+
+
+def demarre_par_reveil(demarrage, reveil):
+    return reveil is not None and 0 <= demarrage - reveil <= FENETRE_REVEIL_S
+
+
+def heure_de_demarrage(stat="/proc/stat"):
+    for ligne in Path(stat).read_text().splitlines():
+        if ligne.startswith("btime "):
+            return int(ligne.split()[1])
+    return int(time.time())
+
+
+def cartes_ethernet(net=Path("/sys/class/net")):
+    """Les cartes filaires physiques : type 1 (Ethernet), un vrai périphérique, pas de wifi."""
+    cartes = []
+    for d in sorted(Path(net).iterdir()):
+        try:
+            if (d / "type").read_text().strip() != "1" or not (d / "device").exists() or (d / "wireless").exists():
+                continue
+            cartes.append({"interface": d.name, "adresse": (d / "address").read_text().strip()})
+        except OSError:
+            continue
+    return cartes
+
+
+def reglages_de_l_utilisateur():
+    nom = os.environ.get("HUB_UTILISATEUR")
+    if not nom:
+        return None
+    try:
+        maison = Path(pwd.getpwnam(nom).pw_dir)
+    except KeyError:
+        return None
+    return lire_json(maison / ".config/hub/reglages.json")
+
+
+def main(arguments):
+    commande = arguments[0] if arguments else ""
+    if commande == "etat":
+        print(json.dumps({**(lire_json(ETAT) or {}), "ethernet": cartes_ethernet(),
+                          "reveilDetecte": lire_json(SIGNAL_REVEIL)}))
+        return 0
+    if commande not in ("appliquer", "demarrage", "eteindre"):
+        print(__doc__.strip().splitlines()[-5:], file=sys.stderr)
+        return 2
+    if os.geteuid() != 0:
+        print("hub-allumage : à lancer en root (hub-allumage.service)", file=sys.stderr)
+        return 1
+
+    if commande == "demarrage":
+        precedent = lire_json(ETAT) or {}
+        if demarre_par_reveil(heure_de_demarrage(), precedent.get("reveil")):
+            ecrire_atomique(SIGNAL_REVEIL, {"reveil": precedent["reveil"]})
+
+    maintenant = datetime.now()
+    if commande == "eteindre":
+        # L'extinction de 23 h 30 ne doit pas réarmer… 23 h 30 : on se place juste après.
+        maintenant += timedelta(seconds=MARGE_S)
+    resultat = appliquer(configuration(reglages_de_l_utilisateur()), maintenant)
+    print(json.dumps(resultat))
+    if commande == "eteindre":
+        return subprocess.run(["systemctl", "poweroff"]).returncode
+    return 1 if "erreur" in resultat else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
