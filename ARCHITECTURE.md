@@ -334,6 +334,14 @@ règle après mesure, pas avant : avec le jack analogique, c'est l'image qui ris
 d'être en retard (traitement de la TV) ; avec la sortie de la TV, elle compense en
 principe elle-même.
 
+### Enceinte réseau
+
+Le HUB reçoit Spotify Connect (librespot), AirPlay son (shairport-sync, AirPlay 1) et la
+recopie d'écran AirPlay (UxPlay), en unités utilisateur qui sortent par PipeWire : quel
+que soit le branchement tranché plus bas, ils suivent la sortie de la session. Règle :
+la dernière source lancée gagne, Kodi compris (pause par JSON-RPC). Choix, limites et
+preuves en conteneur du 15/09/2026 : `installer/enceinte/README.md`.
+
 ### Contenus 5.1
 
 Les enceintes sont 2.1 : **aucune sortie séparée pour le caisson.** Le caisson reçoit
