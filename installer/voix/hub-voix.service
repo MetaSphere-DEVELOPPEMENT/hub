@@ -1,0 +1,33 @@
+# Commande vocale du HUB — ~/.config/systemd/user/hub-voix.service
+# (ou /etc/systemd/user/hub-voix.service pour tous les utilisateurs)
+#
+# Service UTILISATEUR : il a besoin du PipeWire de la session (le micro), de
+# $XDG_RUNTIME_DIR (le socket du menu) et de ~/.config/hub (les réglages). Un service
+# système n'aurait aucun des trois.
+#
+# Attaché à graphical-session.target : il vit avec la session graphique, qu'elle soit
+# le kiosque du HUB ou le bureau Ubuntu, et s'arrête avec elle.
+
+[Unit]
+Description=Commande vocale hors ligne du HUB
+Documentation=file:///opt/hub-voix/README.md
+PartOf=graphical-session.target
+After=graphical-session.target pipewire.service wireplumber.service
+
+[Service]
+Type=simple
+ExecStart=/opt/hub-voix/venv/bin/python /opt/hub-voix/hub-voix.py
+# Planté : on relance, mais pas en boucle serrée qui chaufferait le processeur.
+Restart=on-failure
+RestartSec=5
+# 78 : Vosk ou pw-record absent. Relancer n'y changera rien, le journal le dit.
+RestartPreventExitStatus=78
+# La reconnaissance passe après Kodi : une image qui saccade se voit, une commande
+# vocale servie 50 ms plus tard ne se remarque pas.
+Nice=10
+# Garde-fou : le modèle français occupe ~150 Mo une fois chargé (mesuré, voir
+# README) ; au-delà de 600 Mo, c'est une fuite, pas un besoin.
+MemoryMax=600M
+
+[Install]
+WantedBy=graphical-session.target
