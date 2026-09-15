@@ -653,11 +653,20 @@ function defiler(cible) {
   zone.style.transform = `translateY(${-decalage}px)`;
 }
 
+// La navigation reste d'abord dans la zone où l'on est (contenu d'un réglage, sommaire,
+// pied…) : sans ça, « haut » depuis un bouton du contenu sautait dans le sommaire voisin
+// au lieu du bouton juste au-dessus.
+const ZONES = ".contenu, .sommaire, .entete, .pied, .modes, .reprises, .editeur-identite, .editeur-securite, .choix, .pave";
 function voisin(depart, direction) {
+  const zone = depart.closest(ZONES);
+  const dansZone = zone && voisinParmi(depart, direction, candidats().filter(e => zone.contains(e)));
+  return dansZone || voisinParmi(depart, direction, candidats());
+}
+function voisinParmi(depart, direction, liste) {
   const a = depart.getBoundingClientRect();
   const ax = a.left + a.width / 2, ay = a.top + a.height / 2;
   let meilleur = null, score = Infinity;
-  for (const e of candidats()) {
+  for (const e of liste) {
     if (e === depart) continue;
     const b = e.getBoundingClientRect();
     const bx = b.left + b.width / 2, by = b.top + b.height / 2;
@@ -1199,6 +1208,7 @@ function rendreReglages() {
   focusParCalque.reglages = sommaire.querySelector(`[data-section="${sectionCourante}"]`);
   rendreSection(false);
   if (!infosMachine) envoyer({ type: "infos" });
+  envoyer({ type: "maj-etat" });
 }
 
 function rangee(titre, aide, controle, large = false, commun = false) {
@@ -1346,7 +1356,7 @@ function rendreSection(garderFocus = true) {
 }
 
 // ── Mise à jour ───────────────────────────────────────────────────────────
-const maj = { verification: null, etat: null, enCours: false };
+const maj = { verification: null, etat: null, enCours: false, suivie: false };
 const ETAPES_MAJ = ["verification", "telechargement", "tests", "installation", "terminee"];
 
 function contenuMiseAJour() {
@@ -1369,7 +1379,7 @@ function contenuMiseAJour() {
   if (!actif && !maj.enCours) {
     boutons.push(el("button", { class: "option", "data-nav": true, "data-cle": "maj-verifier", onclick: () => { maj.enCours = true; maj.etat = null; envoyer({ type: "maj-verifier" }); rendreSection(); } }, t("maj.rechercher")));
     if (v?.disponible && e?.etape !== "terminee") {
-      boutons.push(el("button", { class: "option choisie", "data-nav": true, "data-cle": "maj-appliquer", onclick: () => { maj.etat = { etape: "verification" }; envoyer({ type: "maj-appliquer" }); rendreSection(); } }, t("maj.installer")));
+      boutons.push(el("button", { class: "option choisie", "data-nav": true, "data-cle": "maj-appliquer", onclick: () => { maj.etat = { etape: "verification" }; maj.suivie = true; envoyer({ type: "maj-appliquer" }); rendreSection(); } }, t("maj.installer")));
     }
   }
   const progression = actif ? el("div", { class: "barre-maj" }, el("i", { style: `width:${(ETAPES_MAJ.indexOf(e.etape) + 1) / ETAPES_MAJ.length * 100}%` })) : null;
@@ -1379,7 +1389,12 @@ function contenuMiseAJour() {
 function recevoirMiseAJour(message) {
   if ("verification" in message) { maj.verification = message.verification; maj.enCours = false; }
   if ("etat" in message) maj.etat = message.etat;
-  if (maj.etat?.etape === "terminee") {
+  const actif = maj.etat && !["terminee", "echec", "a-jour"].includes(maj.etat.etape);
+  if (actif) maj.suivie = true;
+  // Ne relancer que si l'on a vu cette mise à jour se dérouler : un état « terminee »
+  // resté d'une mise à jour passée ne doit pas faire redémarrer le menu en boucle.
+  if (maj.etat?.etape === "terminee" && maj.suivie) {
+    maj.suivie = false;
     annoncer(t("maj.terminee", { v: maj.etat.version || "" }));
     setTimeout(() => envoyer({ type: "relancer" }), 4000);
   }
@@ -1578,8 +1593,11 @@ addEventListener("keydown", e => {
   if (verrou) return;
   const haut = pile.at(-1);
 
+  // Sur un clavier AZERTY, la rangée du haut envoie « & é " » sans Maj : on lit la touche
+  // physique (Digit1…) en plus du caractère.
+  const chiffre = /^[0-9]$/.test(e.key) ? e.key : (/^(Digit|Numpad)([0-9])$/.exec(e.code || "") || [])[2];
   if (haut === "code") {
-    if (/^[0-9]$/.test(e.key)) { e.preventDefault(); return taperChiffre(e.key); }
+    if (chiffre) { e.preventDefault(); return taperChiffre(chiffre); }
     if (e.key === "Backspace") { e.preventDefault(); return effacerChiffre(); }
     if (e.key === "Escape") { e.preventDefault(); return annulerCode(); }
     if (DIRECTIONS[e.key]) { e.preventDefault(); return deplacer(DIRECTIONS[e.key]); }
@@ -1605,7 +1623,7 @@ addEventListener("keydown", e => {
   if (e.key === "Home") { e.preventDefault(); return fermerTout(); }
   if (e.ctrlKey || e.altKey || e.metaKey) return;
 
-  const touche = e.key.toLowerCase();
+  const touche = chiffre && ["1", "2", "3"].includes(chiffre) ? chiffre : e.key.toLowerCase();
   const raccourcis = {
     1: () => commande("tv"), 2: () => commande("gaming"), 3: () => commande("bureau"),
     r: () => { fermerTout(); ACTIONS.reglages(); },
