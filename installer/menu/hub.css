@@ -865,3 +865,110 @@ body.verrouille .centre, body.verrouille .pied .aides { filter: blur(18px); opac
 .infos + .rangee { margin-top: 1rem; }
 
 .bandeau-apercu { position: fixed; top: 1.2rem; left: 50%; translate: -50% 0; z-index: 30; padding: .55rem 1.2rem; border-radius: 99rem; font-size: .95rem; font-weight: 600; color: #1a1206; background: rgb(255 190 90 / .92); box-shadow: 0 .6rem 1.6rem -.6rem rgb(0 0 0 / .5); }
+
+/* ── Services : tuiles typographiques ────────────────────────────────────── */
+/* Le nom du service dans sa couleur, pas son logo : les marques restent hors du dépôt,
+   et une tuile qui ne dit que son nom se lit à trois mètres. */
+.applis { width: 100%; max-width: 62rem; animation: montee .9s .44s var(--souple) both; }
+.applis-liste { display: flex; gap: .8rem; }
+.tuile-service {
+  --c: var(--tv);
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  height: 4.2rem;
+  display: grid; place-items: center;
+  border-radius: .95rem;
+  overflow: hidden;
+  background: var(--fond);
+  color: var(--encre);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / .12), 0 .9rem 2rem -1rem var(--ombre);
+  opacity: .8;
+  transition: transform .5s var(--ressort), opacity .35s, box-shadow .35s;
+}
+.tuile-service::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(160deg, rgb(255 255 255 / .16), transparent 45%);
+  pointer-events: none;
+}
+.tuile-service .marque { font-size: 1.02rem; line-height: 1; white-space: nowrap; display: inline-block; }
+.tuile-service.focus {
+  opacity: 1;
+  transform: translateY(-.3rem) scale(1.1);
+  box-shadow: inset 0 0 0 2px rgb(255 255 255 / .9), 0 1.2rem 2.6rem -.8rem rgb(var(--accent) / .6);
+}
+.tuile-service.lance { transform: scale(1.2); }
+.tuile-service.indisponible { filter: grayscale(.85); opacity: .5; }
+.tuile-service.indisponible.focus { opacity: .8; }
+.tuile-service .etat-service {
+  position: absolute; left: 50%; bottom: .35rem; translate: -50% 0;
+  font-size: .62rem; font-weight: 600; letter-spacing: .05em; text-transform: uppercase;
+  color: rgb(255 255 255 / .8); white-space: nowrap;
+}
+body.depart .tuile-service:not(.lance), body.depart .reprise { opacity: 0; }
+
+/* Accueil complet (cartes, reprises, streaming) : on resserre pour tenir dans l'écran. */
+body.avec-applis .centre { gap: 1.8rem; }
+body.avec-applis .carte { height: 17rem; padding-top: 1.6rem; }
+body.avec-applis.avec-reprises .centre { gap: 1.2rem; }
+body.avec-applis.avec-reprises .carte { height: 14.5rem; padding-top: 1.3rem; }
+body.avec-applis.avec-reprises .carte .detail { display: none; }
+body.avec-applis.avec-reprises .salut p { display: none; }
+body.avec-applis.avec-reprises .reprise { height: 6.6rem; }
+
+/* Sous-écran Jeux */
+.feuille-corps.simple.large { width: min(72rem, 94vw); }
+.jeux-tete { display: flex; align-items: center; justify-content: space-between; }
+.jeux-tete h3 { margin-bottom: 0; }
+.grille-jeux { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.4rem; margin-top: .6rem; }
+.tuile-service.grande { --c: var(--jeux); height: 11rem; border-radius: 1.4rem; place-items: center; align-content: center; gap: .7rem; }
+.tuile-service.grande .marque { font-size: 2.3rem; }
+.tuile-service.grande .sous { font-size: .95rem; color: rgb(255 255 255 / .7); font-weight: 500; }
+.tuile-service.grande .etat-service { top: .9rem; right: .9rem; left: auto; bottom: auto; translate: none; padding: .25rem .6rem; border-radius: 99rem; background: rgb(0 0 0 / .35); }
+.tuile-service.grande.focus { transform: translateY(-.3rem) scale(1.05); }
+.retour-jeux { margin-top: 1rem; font-size: .95rem; color: var(--texte-doux); line-height: 1.5; }
+
+/* Réglages : le nom du service en miniature */
+.mini-service {
+  display: inline-grid; place-items: center;
+  width: 7.5rem; height: 2.6rem; border-radius: .6rem;
+  background: var(--fond); color: var(--encre);
+  font-size: .95rem; white-space: nowrap;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / .12);
+}
+.etat-fige { padding: .5rem 1rem; color: var(--texte-doux); }
+
+/* ── Enceinte réseau : en cours de lecture ──────────────────────────────────
+   Une puce dans l'en-tête (comme la météo) et une ligne sous l'heure du mode ambiant.
+   Des ondes animées disent « ça joue » sans lire le texte ; en pause, elles s'arrêtent. */
+.lecture-puce { gap: .75rem; padding-right: 1.1rem; max-width: 30rem; }
+.lecture-pochette {
+  flex: none; width: 2.6rem; height: 2.6rem; border-radius: .6rem;
+  background: rgb(var(--accent) / .25) center / cover no-repeat;
+  box-shadow: inset 0 0 0 1px var(--liseré);
+}
+.lecture-pochette.sans-image::after {
+  content: "♪"; display: grid; place-items: center; height: 100%;
+  font-size: 1.3rem; color: var(--texte);
+}
+.lecture-pochette.sans-image[data-source="ecran"]::after { content: "▭"; }
+.lecture-textes { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
+.lecture-titre { color: var(--texte); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lecture-detail { font-size: .82rem; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lecture-ondes { display: flex; align-items: flex-end; gap: .18rem; height: 1.1rem; flex: none; }
+.lecture-ondes i { width: .22rem; height: 100%; border-radius: 99rem; background: rgb(var(--accent)); animation: lecture-onde 1s ease-in-out infinite; transform-origin: bottom; }
+.lecture-ondes i:nth-child(2) { animation-delay: -.35s; }
+.lecture-ondes i:nth-child(3) { animation-delay: -.7s; }
+.en-pause .lecture-ondes i { animation: none; transform: scaleY(.3); }
+body.sans-animation .lecture-ondes i { animation: none; transform: scaleY(.6); }
+@keyframes lecture-onde { 0%, 100% { transform: scaleY(.3); } 50% { transform: scaleY(1); } }
+
+.ambiant-lecture {
+  display: flex; align-items: center; justify-content: center; gap: 1.2rem;
+  margin-top: 2rem; font-size: 1.6rem; color: var(--texte-doux);
+}
+.ambiant-lecture[hidden] { display: none; }
+.ambiant-lecture .lecture-pochette { width: 5.5rem; height: 5.5rem; border-radius: 1rem; }
+.ambiant-lecture .lecture-textes { text-align: left; max-width: 40rem; }
+.ambiant-lecture .lecture-detail { font-size: 1.2rem; }
+.ambiant-lecture.en-pause { opacity: .6; }

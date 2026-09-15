@@ -61,6 +61,12 @@ class ListeBlanche(unittest.TestCase):
     def test_memes_services_que_le_menu_et_le_protocole(self):
         # Le menu (hub.js) dessine les tuiles, hub-menu.py relaie la voix : un service
         # ajouté ici sans eux serait injoignable, ou l'inverse une tuile qui ne lance rien.
+        source = (RACINE / "installer" / "menu" / "hub.js").read_text(encoding="utf-8")
+        bloc = source[source.index("const SERVICES = ["):]
+        bloc = bloc[:bloc.index("];")]
+        self.assertEqual(set(re.findall(r'\bid: "([a-z0-9]+)"', bloc)), set(hub_web.SERVICES))
+        categories = dict(re.findall(r'\bid: "([a-z0-9]+)", categorie: "([a-z]+)"', bloc))
+        self.assertEqual(categories, {i: f["categorie"] for i, f in hub_web.SERVICES.items()})
         spec = importlib.util.spec_from_file_location("hub_menu_services", RACINE / "installer" / "hub-menu.py")
         menu = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(menu)

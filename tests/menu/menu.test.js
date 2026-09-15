@@ -71,19 +71,98 @@ test("les flèches changent de carte, Entrée lance le mode", async () => {
   await attendreReglages(d => d.profils[0].dernier === "bureau");
 });
 
-test("Jeux n'est pas configuré : un message, et le menu reste ouvert", async () => {
-  await ouvrir();
+test("Jeux ouvre le sous-écran des jeux en nuage, OK lance le service par son nom", async () => {
+  await ouvrir({ retour: true });
   await touche("2");
-  await page.waitForTimeout(800);
-  assert.deepEqual(await messages("choix"), []);
-  assert.match(await page.textContent("#annonce"), /Jeux arrive bientôt/);
+  assert.deepEqual(await calques(), ["jeux"]);
+  assert.deepEqual(await messages("choix"), [], "la carte Jeux n'est plus un départ");
+  const tuiles = await page.$$eval("#contenu-jeux .tuile-service", t => t.map(e => e.dataset.cle));
+  assert.deepEqual(tuiles, ["service-geforcenow", "service-xcloud", "service-boosteroid"], "sans relevé de hub-web, ni Steam ni Moonlight");
+  assert.equal(await focus(), "service-geforcenow");
+  assert.match(await page.textContent("#contenu-jeux"), /maintenu une seconde/);
+  await touche("ArrowRight", "Enter");
+  await attendreChoix();
+  assert.deepEqual(await messages("choix"), [{ type: "choix", mode: "web", service: "xcloud" }]);
 });
 
-test("depuis une carte, Bas atteint les boutons du pied, Haut revient aux cartes", async () => {
+test("Jeux : Steam et Moonlight n'apparaissent que détectés, un service sans navigateur refuse", async () => {
+  const services = { geforcenow: { disponible: true, via: "appli" }, xcloud: { disponible: false, via: null }, boosteroid: { disponible: true, via: "navigateur" }, steam: { disponible: true, via: "appli" }, moonlight: { disponible: false, via: null } };
+  await ouvrir({ retour: true, services: { navigateur: null, services } });
+  await page.evaluate(() => window.hub.recevoir({ type: "commande", nom: "gaming" }));
+  assert.deepEqual(await calques(), ["jeux"]);
+  const tuiles = await page.$$eval("#contenu-jeux .tuile-service", t => t.map(e => e.dataset.cle));
+  assert.deepEqual(tuiles, ["service-geforcenow", "service-xcloud", "service-boosteroid", "service-steam"]);
+  assert.match(await page.textContent('#contenu-jeux [data-cle="service-geforcenow"]'), /Appli/);
+  await page.click('#contenu-jeux [data-cle="service-xcloud"]');
+  await page.waitForTimeout(700);
+  assert.deepEqual(await messages("choix"), []);
+  assert.match(await page.textContent("#annonce"), /navigateur manque/);
+  await touche("Escape");
+  assert.deepEqual(await calques(), []);
+});
+
+test("streaming sur l'accueil : Bas depuis les cartes, OK lance le service", async () => {
+  await ouvrir({ retour: true });
+  assert.equal(await page.locator("#applis .tuile-service").count(), 8);
+  await touche("ArrowDown");
+  assert.equal(await focus(), "service-netflix", "la tuile sous la carte TV");
+  await touche("ArrowLeft");
+  assert.equal(await focus(), "service-youtube");
+  await touche("Enter");
+  await attendreChoix();
+  assert.deepEqual(await messages("choix"), [{ type: "choix", mode: "web", service: "youtube" }]);
+});
+
+test("voix : « HUB, Netflix » lance le service, sauf s'il est masqué pour le profil", async () => {
+  const reglages = { profilActif: "a", profils: [{ id: "a", nom: "Samuel", services: { netflix: false } }], systeme: { meteo: { active: false } } };
+  await ouvrir({ retour: true, reglages });
+  assert.equal(await page.locator('#applis [data-cle="service-netflix"]').count(), 0);
+  await page.evaluate(() => window.hub.recevoir({ type: "commande", nom: "web:netflix" }));
+  await page.waitForTimeout(700);
+  assert.deepEqual(await messages("choix"), []);
+  assert.match(await page.textContent("#annonce"), /masqué/);
+  await page.evaluate(() => window.hub.recevoir({ type: "commande", nom: "web:inconnu" }));
+  await page.evaluate(() => window.hub.recevoir({ type: "commande", nom: "web:francetv" }));
+  await attendreChoix();
+  assert.deepEqual(await messages("choix"), [{ type: "choix", mode: "web", service: "francetv" }]);
+});
+
+test("réglages : masquer un service l'enlève de l'accueil et l'enregistre dans le profil", async () => {
+  await ouvrir({ retour: true });
+  await touche("r");
+  await page.click('[data-section="services"]');
+  await page.click('[data-cle="service-twitch-false"]');
+  await attendreReglages(d => d.profils[0].services.twitch === false);
+  await touche("Escape");
+  assert.equal(await page.locator('#applis [data-cle="service-twitch"]').count(), 0);
+  assert.equal(await page.locator("#applis .tuile-service").count(), 7);
+});
+
+test("profil sans TV : pas de streaming, services figés dans les réglages, voix refusée", async () => {
+  const r = deuxProfils();
+  r.profils[1].modes = { tv: false, gaming: true, bureau: true };
+  r.profilActif = "alix";
+  await ouvrir({ retour: true, reglages: r });
+  assert.ok(!(await page.isVisible("#applis")));
+  await page.evaluate(() => window.hub.recevoir({ type: "commande", nom: "web:youtube" }));
+  await page.waitForTimeout(700);
+  assert.deepEqual(await messages("choix"), []);
+  assert.match(await page.textContent("#annonce"), /pas autorisé/);
+  await touche("r");
+  await page.click('[data-section="services"]');
+  assert.match(await page.textContent("#contenu-reglages"), /seul un profil sans restriction/);
+  assert.equal(await page.locator('[data-cle^="service-youtube-"]').count(), 0, "aucun bouton pour rallumer un service");
+  await touche("Escape", "2");
+  assert.deepEqual(await calques(), ["jeux"], "le mode Jeux, autorisé, garde ses services");
+});
+
+test("depuis une carte, Bas atteint le streaming puis les boutons du pied, Haut revient aux cartes", async () => {
   await ouvrir();
   await touche("ArrowDown");
+  assert.match(await focus(), /^service-/);
+  await touche("ArrowDown");
   assert.ok(["aide", "reglages", "arret", "minuteur"].includes(await focus()), `focus : ${await focus()}`);
-  await touche("ArrowUp");
+  await touche("ArrowUp", "ArrowUp");
   assert.ok(["tv", "gaming", "bureau"].includes(await focus()));
 });
 

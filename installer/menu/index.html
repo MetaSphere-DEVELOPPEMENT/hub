@@ -34,6 +34,12 @@
       </button>
     </div>
     <div class="droite">
+      <!-- En cours de lecture (Spotify, AirPlay, recopie) : une information, pas un bouton. -->
+      <div class="puce lecture-puce" id="lecture" hidden>
+        <span class="lecture-pochette" id="lecture-pochette"></span>
+        <span class="lecture-textes"><span class="lecture-titre" id="lecture-titre"></span><span class="lecture-detail" id="lecture-detail"></span></span>
+        <span class="lecture-ondes" id="lecture-ondes"><i></i><i></i><i></i></span>
+      </div>
       <div class="voix-pastille" id="voix-pastille" hidden>
         <svg class="micro" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
         <span class="ondes"><i></i><i></i><i></i><i></i></span>
@@ -69,9 +75,8 @@
         <span class="touche-rapide">1</span>
       </button>
 
-      <button class="carte" data-nav data-mode="gaming" data-accent="jeux" data-indisponible="mode.jeux.bientot">
+      <button class="carte" data-nav data-mode="gaming" data-accent="jeux">
         <span class="halo"></span>
-        <span class="pastille" data-t="badge.bientot"></span>
         <span class="pictogramme">
           <svg viewBox="0 0 32 32"><path d="M9.5 9h13a6 6 0 0 1 5.9 5l1 5.6a3.4 3.4 0 0 1-6 2.7L21 19.5H11l-2.4 2.8a3.4 3.4 0 0 1-6-2.7l1-5.6A6 6 0 0 1 9.5 9z"/><path d="M10 12.5v4M8 14.5h4"/><circle cx="21" cy="13.4" r=".6" fill="currentColor"/><circle cx="23.4" cy="15.8" r=".6" fill="currentColor"/></svg>
         </span>
@@ -96,6 +101,11 @@
     <div class="reprises" id="reprises" hidden>
       <div class="reprises-titre" data-t="reprendre.titre"></div>
       <div class="reprises-liste" id="reprises-liste"></div>
+    </div>
+
+    <div class="applis" id="applis" hidden>
+      <div class="reprises-titre" data-t="applis.titre"></div>
+      <div class="applis-liste" id="applis-liste"></div>
     </div>
   </section>
 
@@ -195,6 +205,12 @@
   </div>
 </div>
 
+<div class="calque feuille" id="jeux">
+  <div class="feuille-corps simple large">
+    <div class="contenu"><div class="contenu-defile" id="contenu-jeux"></div></div>
+  </div>
+</div>
+
 <div class="calque feuille" id="aide">
   <div class="feuille-corps simple">
     <div class="contenu"><div class="contenu-defile" id="contenu-aide"></div></div>
@@ -225,6 +241,10 @@
     <div class="ambiant-heure" id="ambiant-heure"></div>
     <div class="ambiant-date" id="ambiant-date"></div>
     <div class="ambiant-meteo" id="ambiant-meteo"></div>
+    <div class="ambiant-lecture" id="ambiant-lecture" hidden>
+      <span class="lecture-pochette" id="ambiant-lecture-pochette"></span>
+      <span class="lecture-textes"><span class="lecture-titre" id="ambiant-lecture-titre"></span><span class="lecture-detail" id="ambiant-lecture-detail"></span></span>
+    </div>
   </div>
 </div>
 
