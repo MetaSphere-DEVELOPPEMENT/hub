@@ -279,8 +279,12 @@ def fenetre(titre, detail, duree_s=10):
     def activer(application):
         f = Gtk.ApplicationWindow(application=application, title="HUB")
         fournisseur = Gtk.CssProvider()
-        fournisseur.load_from_data(b"window{background:rgba(6,7,12,.92);color:#fff}"
-                                   b".titre{font-size:48px;font-weight:700}.detail{font-size:26px;opacity:.8}")
+        css = "window{background:rgba(6,7,12,.92);color:#fff}.titre{font-size:48px;font-weight:700}.detail{font-size:26px;opacity:.8}"
+        # load_from_string depuis GTK 4.12 ; load_from_data y est déprécié mais reste le repli.
+        if hasattr(fournisseur, "load_from_string"):
+            fournisseur.load_from_string(css)
+        else:
+            fournisseur.load_from_data(css.encode())
         Gtk.StyleContext.add_provider_for_display(f.get_display(), fournisseur, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
         boite = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=24, halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
         for texte, classe in ((titre, "titre"), (detail, "detail")):
