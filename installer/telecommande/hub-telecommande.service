@@ -1,0 +1,31 @@
+# Télécommande téléphone du HUB — unité UTILISATEUR.
+#
+# Pourquoi une unité utilisateur : les commandes vont au menu, à Kodi, à PipeWire
+# (wpctl) et à gnome-session-quit, qui vivent tous dans la session de l'utilisateur
+# (XDG_RUNTIME_DIR, bus D-Bus de session). Un service système n'y aurait pas accès
+# sans bricolage.
+#
+# Pourquoi graphical-session.target : la session kiosque du HUB comme le bureau
+# GNOME l'atteignent ; le service suit la session (PartOf) et s'arrête avec elle, ce
+# qui efface le fichier d'état et renouvelle le code à la session suivante.
+#
+# Le réseau n'est pas une dépendance : les unités utilisateur ne voient pas
+# network-online.target. Le programme attend lui-même une adresse, et rouvre
+# l'écoute si elle change.
+
+[Unit]
+Description=HUB : télécommande téléphone (page web sur le réseau local, port 8790)
+Documentation=file:///usr/local/lib/hub/telecommande/README.md
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/lib/hub/telecommande/hub_telecommande.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+UMask=0077
+
+[Install]
+WantedBy=graphical-session.target

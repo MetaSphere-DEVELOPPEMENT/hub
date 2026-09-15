@@ -1,0 +1,782 @@
+<!doctype html>
+<!--
+  Page de la télécommande téléphone du HUB, servie par hub_telecommande.py.
+
+  Tout est dans ce fichier, sans ressource externe : le HUB peut être hors ligne, et
+  la CSP n'autorise que le bloc de style et le bloc de script ci-dessous, par empreinte.
+  Conséquences à garder en tête en modifiant :
+  - pas d'attribut style="…" ni de on…="…" (bloqués par la CSP) ; la visibilité
+    passe par l'attribut hidden, le reste par des classes ;
+  - des balises style et script sans aucun attribut, et jamais leur nom entre
+    chevrons ailleurs (commentaires compris) : le serveur les retrouve par cette
+    forme exacte pour en calculer l'empreinte ;
+  - pas d'URL blob: (img-src ne l'autorise pas) : l'aperçu photo est un canvas.
+-->
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#06070c">
+<meta name="color-scheme" content="dark">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="HUB">
+<title>HUB · Télécommande</title>
+<style>
+:root {
+  --encre: #06070c;
+  --texte: #f3f5fb;
+  --texte-doux: rgba(226, 232, 250, .64);
+  --texte-pale: rgba(226, 232, 250, .40);
+  --verre: rgba(255, 255, 255, .055);
+  --verre-fort: rgba(255, 255, 255, .11);
+  --lisere: rgba(255, 255, 255, .10);
+  --tv: 62 224 208;
+  --jeux: 179 107 255;
+  --bureau: 255 181 71;
+  --arret: 255 107 107;
+  --souple: cubic-bezier(.2, .8, .2, 1);
+  --rayon: 22px;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+[hidden] { display: none !important; }
+html, body { margin: 0; min-height: 100%; background: var(--encre); color: var(--texte); }
+body {
+  font-family: "Ubuntu Sans", "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+  background:
+    radial-gradient(120% 60% at 0% 0%, rgb(var(--tv) / .13), transparent 60%),
+    radial-gradient(90% 50% at 100% 100%, rgb(var(--jeux) / .12), transparent 60%),
+    var(--encre);
+  background-attachment: fixed;
+}
+button, input { font: inherit; color: inherit; }
+button {
+  touch-action: manipulation;
+  -webkit-user-select: none; user-select: none;
+  -webkit-touch-callout: none;
+  cursor: pointer;
+}
+svg { display: block; }
+
+.ecran {
+  max-width: 480px;
+  margin: 0 auto;
+  min-height: 100dvh;
+  padding: max(14px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+           max(18px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ── Appairage ───────────────────────────────────────────────────────────── */
+#appairage { justify-content: center; text-align: center; gap: 22px; }
+.marque {
+  font-weight: 800; letter-spacing: .32em; font-size: 15px; padding-left: .32em;
+  color: var(--texte-doux);
+}
+.marque b { color: var(--texte); }
+#appairage .marque { font-size: 18px; }
+#appairage h1 { margin: 0; font-size: 30px; line-height: 1.15; font-weight: 700; letter-spacing: -.01em; }
+#appairage p { margin: 0; color: var(--texte-doux); line-height: 1.5; }
+.chemin { display: inline-block; color: var(--texte); background: var(--verre-fort); border-radius: 8px; padding: 1px 8px; }
+#code {
+  width: 100%;
+  font-size: 44px; font-weight: 700; letter-spacing: .38em; text-align: center; text-indent: .38em;
+  font-variant-numeric: tabular-nums;
+  padding: 18px 8px;
+  background: var(--verre); border: 1px solid var(--lisere); border-radius: var(--rayon);
+  outline: none; caret-color: rgb(var(--tv));
+  transition: border-color .2s, box-shadow .2s;
+}
+#code:focus { border-color: rgb(var(--tv) / .7); box-shadow: 0 0 0 4px rgb(var(--tv) / .15); }
+#code::placeholder { color: var(--texte-pale); }
+.secoue { animation: secoue .38s var(--souple); }
+@keyframes secoue { 20% { transform: translateX(-10px); } 45% { transform: translateX(8px); } 70% { transform: translateX(-5px); } }
+.principal {
+  width: 100%; min-height: 60px; border: 0; border-radius: var(--rayon);
+  background: rgb(var(--tv)); color: #03201d; font-weight: 700; font-size: 18px;
+  transition: transform .12s var(--souple), opacity .2s;
+}
+.principal:active { transform: scale(.98); }
+.principal:disabled { opacity: .45; }
+.erreur { min-height: 1.5em; color: rgb(var(--arret)) !important; font-weight: 600; }
+
+/* ── En-tête ─────────────────────────────────────────────────────────────── */
+header { display: flex; align-items: center; gap: 10px; min-height: 44px; }
+header .marque { margin-right: auto; }
+.pastille {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 7px 12px; border-radius: 999px;
+  background: var(--verre); border: 1px solid var(--lisere);
+  font-size: 14px; color: var(--texte-doux);
+}
+.pastille::before {
+  content: ""; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--texte-pale);
+}
+.pastille.menu::before { background: rgb(var(--tv)); box-shadow: 0 0 10px rgb(var(--tv)); }
+.pastille.kodi::before { background: rgb(var(--tv)); box-shadow: 0 0 10px rgb(var(--tv)); }
+.pastille.bureau::before { background: rgb(var(--bureau)); box-shadow: 0 0 10px rgb(var(--bureau)); }
+.pastille.hors-ligne { color: rgb(var(--arret)); }
+.pastille.hors-ligne::before { background: rgb(var(--arret)); }
+.rond {
+  width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--lisere);
+  background: var(--verre); display: grid; place-items: center;
+}
+
+/* ── Modes ───────────────────────────────────────────────────────────────── */
+.modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.mode {
+  --c: var(--tv);
+  min-height: 78px; border-radius: var(--rayon);
+  border: 1px solid rgb(var(--c) / .28);
+  background: linear-gradient(160deg, rgb(var(--c) / .20), rgb(var(--c) / .05));
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  font-weight: 650; font-size: 15px;
+  transition: transform .12s var(--souple), background .15s;
+}
+.mode svg { color: rgb(var(--c)); }
+.mode.jeux { --c: var(--jeux); }
+.mode.bureau { --c: var(--bureau); }
+
+/* ── Croix directionnelle ────────────────────────────────────────────────── */
+.zone-pave { display: grid; place-items: center; padding: 4px 0; }
+.pave {
+  position: relative;
+  width: min(84vw, 330px); aspect-ratio: 1;
+  border-radius: 50%;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 50% 35%, rgba(255, 255, 255, .09), transparent 70%),
+    rgba(255, 255, 255, .045);
+  border: 1px solid var(--lisere);
+  box-shadow: 0 30px 60px -30px rgba(0, 0, 0, .9), inset 0 1px 0 rgba(255, 255, 255, .08);
+}
+/* Les quatre secteurs sont des boutons pleine taille découpés en triangles : la zone
+   tactile suit la forme dessinée, et le pouce qui glisse un peu vers le coin appuie
+   encore sur la bonne direction. */
+.secteur {
+  position: absolute; inset: 0; border: 0; background: transparent;
+  display: flex; color: var(--texte-doux);
+  transition: background .12s, color .12s;
+}
+.secteur.haut { clip-path: polygon(50% 50%, 0 0, 100% 0); justify-content: center; align-items: flex-start; padding-top: 11%; }
+.secteur.bas { clip-path: polygon(50% 50%, 100% 100%, 0 100%); justify-content: center; align-items: flex-end; padding-bottom: 11%; }
+.secteur.gauche { clip-path: polygon(50% 50%, 0 100%, 0 0); justify-content: flex-start; align-items: center; padding-left: 11%; }
+.secteur.droite { clip-path: polygon(50% 50%, 100% 0, 100% 100%); justify-content: flex-end; align-items: center; padding-right: 11%; }
+.secteur.appui { background: rgb(var(--tv) / .16); color: var(--texte); }
+.pave::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: repeating-conic-gradient(from 45deg, rgba(255, 255, 255, .08) 0 .5deg, transparent .5deg 90deg);
+}
+.ok {
+  position: absolute; inset: 30%; z-index: 1;
+  border-radius: 50%; border: 1px solid rgba(255, 255, 255, .16);
+  background: radial-gradient(circle at 50% 30%, #2a2f3d, #141722);
+  box-shadow: 0 10px 30px -8px rgba(0, 0, 0, .8), inset 0 1px 0 rgba(255, 255, 255, .12);
+  font-weight: 800; font-size: 22px; letter-spacing: .06em;
+  transition: transform .1s var(--souple), background .12s;
+}
+.ok.appui { transform: scale(.95); background: radial-gradient(circle at 50% 30%, rgb(var(--tv) / .55), rgb(var(--tv) / .25)); }
+
+/* ── Boutons ─────────────────────────────────────────────────────────────── */
+.rangee { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.touche {
+  min-height: 62px; border-radius: var(--rayon);
+  background: var(--verre); border: 1px solid var(--lisere);
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  font-weight: 600; font-size: 16px;
+  transition: transform .1s var(--souple), background .12s;
+}
+.touche svg { color: var(--texte-doux); }
+.appui.touche, .appui.mode, .appui.rond { transform: scale(.96); background: var(--verre-fort); }
+
+.volume { display: grid; grid-template-columns: 62px 1fr 62px; gap: 10px; align-items: center; }
+.volume .touche { font-size: 28px; font-weight: 400; }
+.jauge {
+  height: 62px; border-radius: var(--rayon); background: var(--verre); border: 1px solid var(--lisere);
+  position: relative; overflow: hidden;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  color: var(--texte-doux); font-size: 15px; font-variant-numeric: tabular-nums;
+}
+.jauge .remplissage {
+  position: absolute; inset: 0 auto 0 0; width: 0;
+  background: linear-gradient(90deg, rgb(var(--tv) / .10), rgb(var(--tv) / .28));
+  transition: width .25s var(--souple);
+}
+.jauge span, .jauge svg { position: relative; }
+
+form.texte { display: grid; grid-template-columns: 1fr auto; gap: 10px; }
+form.texte input {
+  min-width: 0; min-height: 58px; padding: 0 18px;
+  border-radius: var(--rayon); border: 1px solid var(--lisere); background: var(--verre);
+  outline: none; font-size: 17px;
+}
+form.texte input:focus { border-color: rgb(var(--tv) / .6); }
+form.texte input::placeholder { color: var(--texte-pale); }
+form.texte button {
+  min-width: 58px; border: 0; border-radius: var(--rayon);
+  background: rgb(var(--tv)); color: #03201d; display: grid; place-items: center;
+}
+
+.raccourcis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.raccourcis .touche { flex-direction: column; gap: 5px; min-height: 70px; font-size: 13px; font-weight: 550; color: var(--texte-doux); }
+
+/* ── Feuilles ────────────────────────────────────────────────────────────── */
+dialog {
+  width: min(480px, 100vw); max-width: 100vw; max-height: 90dvh;
+  margin: auto auto 0; padding: 10px 16px max(18px, env(safe-area-inset-bottom));
+  border: 1px solid var(--lisere); border-bottom: 0; border-radius: 26px 26px 0 0;
+  background: #10121b; color: var(--texte);
+}
+dialog[open] { animation: monte .28s var(--souple); }
+@keyframes monte { from { transform: translateY(40px); opacity: 0; } }
+dialog::backdrop { background: rgba(0, 0, 0, .55); }
+.poignee { width: 40px; height: 5px; border-radius: 3px; background: var(--verre-fort); margin: 2px auto 12px; }
+dialog h2 { font-size: 18px; margin: 4px 4px 14px; }
+.liste { display: flex; flex-direction: column; gap: 8px; }
+.liste .touche { justify-content: flex-start; padding: 0 18px; }
+.liste .danger { color: rgb(var(--arret)); }
+.liste .danger svg { color: rgb(var(--arret)); }
+
+.apercu {
+  width: min(62vw, 240px); aspect-ratio: 1; margin: 6px auto 16px;
+  border-radius: 50%; overflow: hidden;
+  background: var(--verre); border: 2px solid rgb(var(--tv) / .5);
+  display: grid; place-items: center; color: var(--texte-pale);
+}
+.apercu canvas { width: 100%; height: 100%; }
+.fichier { position: relative; }
+.fichier input { position: absolute; inset: 0; opacity: 0; width: 100%; cursor: pointer; }
+
+/* ── Message ─────────────────────────────────────────────────────────────── */
+#message {
+  position: fixed; left: 50%; bottom: max(24px, env(safe-area-inset-bottom));
+  transform: translate(-50%, 20px); opacity: 0; pointer-events: none;
+  max-width: calc(100vw - 32px);
+  padding: 12px 18px; border-radius: 16px;
+  background: rgba(24, 27, 38, .96); border: 1px solid var(--lisere);
+  box-shadow: 0 16px 40px -12px rgba(0, 0, 0, .8);
+  font-size: 15px; text-align: center;
+  transition: opacity .2s, transform .25s var(--souple);
+  z-index: 10;
+}
+#message.visible { opacity: 1; transform: translate(-50%, 0); }
+
+@media (max-height: 700px) {
+  .ecran { gap: 12px; }
+  .pave { width: min(74vw, 280px); }
+  .mode { min-height: 64px; }
+  .touche { min-height: 54px; }
+  .jauge { height: 54px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+</style>
+</head>
+<body>
+
+<main id="appairage" class="ecran" hidden>
+  <div class="marque"><b>HUB</b></div>
+  <h1>Relier ce téléphone</h1>
+  <p>Tapez le code à 6 chiffres affiché sur la TV, sous le QR code<br>
+    <span class="chemin">Réglages → Télécommande</span></p>
+  <form id="form-code" autocomplete="off">
+    <input id="code" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code"
+      placeholder="······" aria-label="Code à 6 chiffres" enterkeyhint="go">
+  </form>
+  <button class="principal" id="relier" type="submit" form="form-code" disabled>Relier</button>
+  <p class="erreur" id="erreur-code" role="alert"></p>
+</main>
+
+<main id="telecommande" class="ecran" hidden>
+  <header>
+    <div class="marque"><b>HUB</b></div>
+    <span class="pastille" id="contexte" aria-live="polite">…</span>
+    <button class="rond" data-action="options" aria-label="Plus d'options">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
+    </button>
+  </header>
+
+  <nav class="modes" aria-label="Modes">
+    <button class="mode" data-cmd="tv">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="5" width="19" height="13" rx="2.5"/><path d="M8 21h8M9 2.5l3 2.5 3-2.5"/></svg>
+      TV
+    </button>
+    <button class="mode jeux" data-cmd="gaming">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 7h11a4.5 4.5 0 0 1 4.4 5.4l-.9 4.4a2.6 2.6 0 0 1-4.5 1.2L14.6 16H9.4l-1.9 2A2.6 2.6 0 0 1 3 16.8l-.9-4.4A4.5 4.5 0 0 1 6.5 7z"/><path d="M8 10v4M6 12h4M15.5 11.5h.01M17.5 13h.01"/></svg>
+      Jeux
+    </button>
+    <button class="mode bureau" data-cmd="bureau">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
+      Bureau
+    </button>
+  </nav>
+
+  <div class="zone-pave">
+    <div class="pave" role="group" aria-label="Croix directionnelle">
+      <button class="secteur haut" data-cmd="haut" data-repete aria-label="Haut">
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg>
+      </button>
+      <button class="secteur droite" data-cmd="droite" data-repete aria-label="Droite">
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+      </button>
+      <button class="secteur bas" data-cmd="bas" data-repete aria-label="Bas">
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+      <button class="secteur gauche" data-cmd="gauche" data-repete aria-label="Gauche">
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>
+      </button>
+      <button class="ok" data-cmd="ok">OK</button>
+    </div>
+  </div>
+
+  <div class="rangee">
+    <button class="touche" data-cmd="retour">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>
+      Retour
+    </button>
+    <button class="touche" data-cmd="accueil">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V20h14V9.5"/></svg>
+      Accueil
+    </button>
+  </div>
+
+  <div class="volume" role="group" aria-label="Volume">
+    <button class="touche" data-cmd="volume:-" data-repete aria-label="Baisser le volume">−</button>
+    <div class="jauge" aria-live="polite">
+      <div class="remplissage" id="jauge"></div>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5L6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg>
+      <span id="volume">Volume</span>
+    </div>
+    <button class="touche" data-cmd="volume:+" data-repete aria-label="Monter le volume">+</button>
+  </div>
+
+  <form class="texte" id="form-texte" autocomplete="off">
+    <input id="texte" maxlength="300" placeholder="Envoyer du texte (recherche Kodi)" enterkeyhint="send" aria-label="Texte à envoyer">
+    <button type="submit" aria-label="Envoyer le texte">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+    </button>
+  </form>
+
+  <div class="raccourcis">
+    <button class="touche" data-cmd="reglages">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+      Réglages
+    </button>
+    <button class="touche" data-cmd="meteo">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 18a4.5 4.5 0 0 1-.6-9A6 6 0 0 1 18 9.5a4.3 4.3 0 0 1-.5 8.5z"/></svg>
+      Météo
+    </button>
+    <button class="touche" data-cmd="profils">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
+      Profils
+    </button>
+    <button class="touche" data-cmd="aide">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9.5"/><path d="M9.2 9a3 3 0 0 1 5.8 1c0 2-3 2.5-3 4.5M12 17.5h.01"/></svg>
+      Aide
+    </button>
+  </div>
+</main>
+
+<dialog id="options" aria-label="Options">
+  <div class="poignee"></div>
+  <div class="liste">
+    <button class="touche" data-action="photo">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v12H4z"/><circle cx="12" cy="13.5" r="3.5"/></svg>
+      Envoyer une photo de profil
+    </button>
+    <button class="touche" data-cmd="theme:clair" data-ferme>
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      Thème clair
+    </button>
+    <button class="touche" data-cmd="theme:sombre" data-ferme>
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+      Thème sombre
+    </button>
+    <button class="touche danger" data-cmd="eteindre" data-ferme>
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v9"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg>
+      Éteindre le HUB
+    </button>
+    <button class="touche danger" data-action="oublier">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7M3 3l18 18"/></svg>
+      Oublier ce téléphone
+    </button>
+    <button class="touche" data-action="fermer">Fermer</button>
+  </div>
+</dialog>
+
+<dialog id="photo" aria-label="Photo de profil">
+  <div class="poignee"></div>
+  <h2>Photo de profil</h2>
+  <div class="apercu" id="apercu">
+    <canvas id="photo-canvas" width="512" height="512" hidden></canvas>
+    <svg id="photo-vide" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
+  </div>
+  <div class="liste">
+    <label class="touche fichier">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v12H4z"/><circle cx="12" cy="13.5" r="3.5"/></svg>
+      <span id="photo-choisir">Prendre ou choisir une photo</span>
+      <input type="file" id="photo-fichier" accept="image/*" capture="user">
+    </label>
+    <button class="principal" id="photo-envoyer" disabled>Envoyer au HUB</button>
+    <button class="touche" data-action="fermer">Annuler</button>
+  </div>
+</dialog>
+
+<div id="message" role="status" aria-live="polite"></div>
+
+<script>
+"use strict";
+
+const $ = id => document.getElementById(id);
+const CLE_JETON = "hub-telecommande-jeton";
+const COTE_PHOTO = 512;
+
+// localStorage peut être refusé (navigation privée sur certains navigateurs) : la
+// télécommande marche alors le temps de la page, et redemande le code au rechargement.
+let jetonMemoire = null;
+function lireJeton() { try { return localStorage.getItem(CLE_JETON) || jetonMemoire; } catch { return jetonMemoire; } }
+function garderJeton(j) {
+  jetonMemoire = j;
+  try { if (j) localStorage.setItem(CLE_JETON, j); else localStorage.removeItem(CLE_JETON); } catch { /* mémoire seule */ }
+}
+
+// iOS n'a pas l'API de vibration : l'appel est simplement absent, pas une erreur.
+function vibrer(motif = 12) { try { if (navigator.vibrate) navigator.vibrate(motif); } catch { /* sans vibreur */ } }
+
+let minuterieMessage;
+function message(texte, duree = 2600) {
+  const m = $("message");
+  m.textContent = texte;
+  m.classList.add("visible");
+  clearTimeout(minuterieMessage);
+  minuterieMessage = setTimeout(() => m.classList.remove("visible"), duree);
+}
+
+const RAISONS = {
+  "rien-a-piloter": "Rien à piloter : allumez le HUB sur la TV",
+  "sans-effet-dans-kodi": "Sans effet dans Kodi",
+  "sans-effet-sur-le-bureau": "Sur le bureau, seul Accueil agit",
+  "texte-hors-kodi": "Le texte s'envoie à Kodi, pas au menu",
+  "texte-invalide": "Texte vide ou trop long",
+  "kodi-injoignable": "Kodi ne répond pas (contrôle à distance désactivé ?)",
+  "eteindre-depuis-le-menu": "Revenez au menu du HUB pour éteindre",
+  "volume-indisponible": "Volume indisponible",
+};
+
+class JetonRefuse extends Error {}
+
+async function api(chemin, corps, type = "application/json") {
+  const options = { method: corps === undefined ? "GET" : "POST", headers: {}, cache: "no-store" };
+  const jeton = lireJeton();
+  if (jeton) options.headers.Authorization = `Bearer ${jeton}`;
+  if (corps !== undefined) {
+    options.headers["Content-Type"] = type;
+    options.body = type === "application/json" ? JSON.stringify(corps) : corps;
+  }
+  const reponse = await fetch(chemin, options);
+  let donnees = null;
+  try { donnees = await reponse.json(); } catch { /* corps vide */ }
+  if (reponse.status === 401 && chemin !== "/api/appairer") {
+    // Jeton révoqué depuis le HUB : on revient à l'appairage plutôt que d'échouer en silence.
+    garderJeton(null);
+    afficher("appairage");
+    message("Ce téléphone n'est plus relié au HUB");
+    throw new JetonRefuse();
+  }
+  return { statut: reponse.status, donnees };
+}
+
+function afficher(ecran) {
+  $("appairage").hidden = ecran !== "appairage";
+  $("telecommande").hidden = ecran !== "telecommande";
+  if (ecran === "appairage") {
+    $("code").value = "";
+    $("relier").disabled = true;
+    setTimeout(() => $("code").focus(), 50);
+  } else {
+    lireEtat();
+  }
+}
+
+// ── Appairage ──────────────────────────────────────────────────────────────
+function nomDuTelephone() {
+  const ua = navigator.userAgent;
+  const modele = /Android[^;)]*;\s*([^;)]+?)(?:\s+Build|\))/.exec(ua);
+  if (modele && !/^(K|wv)$/.test(modele[1])) return modele[1].slice(0, 40);
+  if (/iPhone/.test(ua)) return "iPhone";
+  if (/iPad/.test(ua)) return "iPad";
+  if (/Android/.test(ua)) return "Android";
+  return "Téléphone";
+}
+
+$("code").addEventListener("input", e => {
+  const chiffres = e.target.value.replace(/\D/g, "").slice(0, 6);
+  e.target.value = chiffres;
+  $("relier").disabled = chiffres.length !== 6;
+  $("erreur-code").textContent = "";
+  if (chiffres.length === 6) relier();
+});
+$("form-code").addEventListener("submit", e => { e.preventDefault(); relier(); });
+
+let reliage = false;
+async function relier() {
+  const code = $("code").value;
+  if (reliage || code.length !== 6) return;
+  reliage = true;
+  $("relier").disabled = true;
+  try {
+    const { statut, donnees } = await api("/api/appairer", { code, nom: nomDuTelephone() });
+    if (statut === 200 && donnees?.jeton) {
+      garderJeton(donnees.jeton);
+      vibrer([15, 60, 25]);
+      $("code").blur();
+      afficher("telecommande");
+      message("Téléphone relié au HUB");
+      return;
+    }
+    vibrer([40, 40, 40]);
+    const erreur = $("erreur-code");
+    erreur.textContent = statut === 429
+      ? `Trop d'essais : réessayez dans ${donnees?.attente || 60} s`
+      : "Code incorrect — il change à chaque usage, relisez la TV";
+    const champ = $("code");
+    champ.classList.remove("secoue");
+    void champ.offsetWidth;  // relance l'animation
+    champ.classList.add("secoue");
+    champ.value = "";
+    champ.focus();
+  } catch {
+    $("erreur-code").textContent = "HUB injoignable : même wifi que la TV ?";
+  } finally {
+    reliage = false;
+    $("relier").disabled = $("code").value.length !== 6;
+  }
+}
+
+// ── Commandes ──────────────────────────────────────────────────────────────
+// Une file : deux appuis rapides sur « bas » doivent arriver dans l'ordre, et un HUB
+// qui rame ne doit pas accumuler cinquante déplacements qui défileraient ensuite.
+let file = Promise.resolve();
+let enAttente = 0;
+function envoyer(nom, extra = {}) {
+  if (enAttente >= 4) return Promise.resolve(null);
+  enAttente++;
+  const tache = file.then(async () => {
+    try {
+      const { statut, donnees } = await api("/api/commande", { nom, ...extra });
+      marquerEnLigne(true);
+      if (statut !== 200 || !donnees) { message("Commande refusée"); return null; }
+      if (typeof donnees.volume === "number") afficherVolume(donnees.volume, donnees.muet);
+      if (!donnees.ok && donnees.raison) message(RAISONS[donnees.raison] || "Sans effet");
+      if (donnees.ok && nom === "eteindre") message("Confirmez sur la TV");
+      return donnees;
+    } catch (e) {
+      if (!(e instanceof JetonRefuse)) { marquerEnLigne(false); message("HUB injoignable"); }
+      return null;
+    } finally {
+      enAttente--;
+    }
+  });
+  file = tache;
+  return tache;
+}
+
+function afficherVolume(niveau, muet) {
+  $("jauge").style.width = `${Math.max(0, Math.min(100, niveau))}%`;  // CSSOM : permis par la CSP
+  $("volume").textContent = muet ? `${niveau} % (muet)` : `${niveau} %`;
+}
+
+// Appui au pointerdown et non au click : le click arrive au relâcher, et une
+// télécommande qui réagit en retard donne l'impression de rater des appuis.
+let repetition = null;
+let boutonTenu = null;
+function arreter() {
+  clearTimeout(repetition);
+  clearInterval(repetition);
+  repetition = null;
+  if (boutonTenu) boutonTenu.classList.remove("appui");
+  boutonTenu = null;
+}
+
+function appuyer(bouton) {
+  vibrer();
+  envoyer(bouton.dataset.cmd);
+  if (bouton.hasAttribute("data-ferme")) $("options").close();
+}
+
+document.addEventListener("pointerdown", e => {
+  const bouton = e.target.closest("[data-cmd]");
+  if (!bouton || bouton.disabled || !e.isPrimary) return;
+  arreter();
+  boutonTenu = bouton;
+  bouton.classList.add("appui");
+  appuyer(bouton);
+  if (bouton.hasAttribute("data-repete")) {
+    // Maintenu : on défile une liste sans marteler l'écran.
+    repetition = setTimeout(() => {
+      repetition = setInterval(() => { vibrer(6); envoyer(bouton.dataset.cmd); }, 130);
+    }, 420);
+  }
+});
+for (const evenement of ["pointerup", "pointercancel", "pointerleave"]) {
+  document.addEventListener(evenement, e => { if (e.isPrimary) arreter(); }, true);
+}
+addEventListener("blur", arreter);
+document.addEventListener("contextmenu", e => { if (e.target.closest("button")) e.preventDefault(); });
+// Le clavier (lecteur d'écran, clavier Bluetooth) déclenche un click sans pointerdown.
+document.addEventListener("click", e => {
+  const bouton = e.target.closest("[data-cmd]");
+  if (bouton && e.detail === 0) appuyer(bouton);
+  const action = e.target.closest("[data-action]");
+  if (action) actions[action.dataset.action]?.(action);
+});
+
+$("form-texte").addEventListener("submit", async e => {
+  e.preventDefault();
+  const champ = $("texte");
+  const texte = champ.value.trim();
+  if (!texte) return;
+  vibrer();
+  const r = await envoyer("texte", { texte });
+  if (r?.ok) { champ.value = ""; champ.blur(); message("Texte envoyé"); }
+});
+
+// ── État ───────────────────────────────────────────────────────────────────
+const LIBELLES = { menu: "Menu", kodi: "Kodi", bureau: "Bureau" };
+function marquerEnLigne(enLigne) {
+  if (!enLigne) {
+    const p = $("contexte");
+    p.className = "pastille hors-ligne";
+    p.textContent = "Hors ligne";
+  }
+}
+async function lireEtat() {
+  if (!lireJeton() || document.hidden) return;
+  try {
+    const { statut, donnees } = await api("/api/etat");
+    if (statut !== 200) return;
+    const p = $("contexte");
+    p.className = `pastille ${donnees.contexte || ""}`;
+    p.textContent = LIBELLES[donnees.contexte] || "En veille";
+  } catch (e) {
+    if (!(e instanceof JetonRefuse)) marquerEnLigne(false);
+  }
+}
+setInterval(lireEtat, 6000);
+document.addEventListener("visibilitychange", lireEtat);
+
+// ── Options et photo ───────────────────────────────────────────────────────
+const actions = {
+  options: () => $("options").showModal(),
+  fermer: bouton => bouton.closest("dialog").close(),
+  photo: () => {
+    $("options").close();
+    $("photo-canvas").hidden = true;
+    $("photo-vide").hidden = false;
+    $("photo-envoyer").disabled = true;
+    $("photo-choisir").textContent = "Prendre ou choisir une photo";
+    $("photo-fichier").value = "";
+    $("photo").showModal();
+  },
+  oublier: async () => {
+    $("options").close();
+    if (!confirm("Oublier ce téléphone ? Il faudra de nouveau le code de la TV.")) return;
+    try { await api("/api/oublier", {}); } catch { /* déjà révoqué ou injoignable */ }
+    garderJeton(null);
+    afficher("appairage");
+  },
+};
+
+// Un clic sur le voile ferme la feuille, comme partout sur mobile.
+for (const d of document.querySelectorAll("dialog")) {
+  d.addEventListener("click", e => { if (e.target === d) d.close(); });
+}
+
+async function chargerImage(fichier) {
+  if (window.createImageBitmap) {
+    try { return await createImageBitmap(fichier, { imageOrientation: "from-image" }); } catch { /* repli */ }
+  }
+  // data: et non blob: — la CSP n'autorise que data: pour les images.
+  const url = await new Promise((ok, ko) => {
+    const lecteur = new FileReader();
+    lecteur.onload = () => ok(lecteur.result);
+    lecteur.onerror = ko;
+    lecteur.readAsDataURL(fichier);
+  });
+  const image = new Image();
+  image.src = url;
+  await image.decode();
+  return image;
+}
+
+function recadrer(image) {
+  const largeur = image.width, hauteur = image.height;
+  const cote = Math.min(largeur, hauteur);
+  let source = image, sx = (largeur - cote) / 2, sy = (hauteur - cote) / 2, taille = cote;
+  // Réduire par moitiés : d'un coup de 4000 à 512 px, le navigateur crénelle cheveux et
+  // contours ; par étapes, chaque passe reste un bon filtrage.
+  while (taille / 2 >= COTE_PHOTO * 1.5) {
+    const moitie = Math.round(taille / 2);
+    const etape = document.createElement("canvas");
+    etape.width = etape.height = moitie;
+    const c = etape.getContext("2d");
+    c.imageSmoothingQuality = "high";
+    c.drawImage(source, sx, sy, taille, taille, 0, 0, moitie, moitie);
+    source = etape; sx = 0; sy = 0; taille = moitie;
+  }
+  const toile = $("photo-canvas");
+  toile.width = toile.height = COTE_PHOTO;
+  const ctx = toile.getContext("2d");
+  ctx.imageSmoothingQuality = "high";
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, COTE_PHOTO, COTE_PHOTO);  // un PNG transparent ne devient pas noir au hasard
+  ctx.drawImage(source, sx, sy, taille, taille, 0, 0, COTE_PHOTO, COTE_PHOTO);
+}
+
+$("photo-fichier").addEventListener("change", async e => {
+  const fichier = e.target.files?.[0];
+  if (!fichier) return;
+  try {
+    recadrer(await chargerImage(fichier));
+    $("photo-canvas").hidden = false;
+    $("photo-vide").hidden = true;
+    $("photo-envoyer").disabled = false;
+    $("photo-choisir").textContent = "Choisir une autre photo";
+  } catch {
+    message("Image illisible (format non pris en charge par le navigateur ?)");
+  }
+});
+
+$("photo-envoyer").addEventListener("click", async () => {
+  const bouton = $("photo-envoyer");
+  bouton.disabled = true;
+  vibrer();
+  try {
+    const jpeg = await new Promise(ok => $("photo-canvas").toBlob(ok, "image/jpeg", 0.88));
+    if (!jpeg) throw new Error("toBlob");
+    const { statut, donnees } = await api("/photo-profil", jpeg, "image/jpeg");
+    if (statut === 200 && donnees?.ok) {
+      vibrer([15, 60, 25]);
+      $("photo").close();
+      message("Photo envoyée : choisissez-la dans le profil, sur la TV", 3600);
+      return;
+    }
+    message(statut === 413 ? "Photo trop lourde" : "Photo refusée par le HUB");
+  } catch (e) {
+    if (!(e instanceof JetonRefuse)) message("Envoi impossible : HUB injoignable");
+  }
+  bouton.disabled = false;
+});
+
+afficher(lireJeton() ? "telecommande" : "appairage");
+</script>
+</body>
+</html>
