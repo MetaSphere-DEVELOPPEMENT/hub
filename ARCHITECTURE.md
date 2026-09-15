@@ -354,6 +354,27 @@ enceintes.
 - [ ] film 5.1 en *Nombre de canaux* 2.0 : dialogues audibles, grave présent
 - [ ] **trancher le branchement**, et l'écrire ici avec la date et les mesures
 
+## Temps d'écran, allumage programmé, cadre photo
+
+État au 15 septembre 2026, prouvé par tests seulement (ni VM ni matériel).
+
+- **Temps d'écran.** Le menu est fermé pendant les modes : le décompte ne peut pas
+  vivre dans la page. `gnome-kiosk-script` lance TV et streaming à travers
+  `hub-temps-ecran`, qui compte par profil et par jour dans
+  `~/.local/state/hub/temps-ecran.json` (écriture atomique sous flock), prévient 5 min
+  avant la fin et ferme le mode. Le bureau, autre session, est compté par un
+  autostart. Avertissement : notification de Kodi par JSON-RPC en mode TV (dessinée
+  par Kodi, donc au-dessus), `notify-send` sur le bureau, fenêtre GTK plein écran
+  ailleurs — gnome-kiosk n'a pas de démon de notifications. **À éprouver en VM** :
+  que la fenêtre GTK passe bien au-dessus de Chrome plein écran dans la session kiosque.
+- **Allumage.** `installer/allumage/README.md`. rtcwake depuis l'arrêt complet dépend
+  du BIOS du M720q : **non mesuré**. Wake-on-LAN : jamais depuis la télécommande web
+  (servie par le HUB éteint, pas d'UDP dans un navigateur).
+- **Cadre photo.** EXIF lu sans bibliothèque. `python3-pil` 12.1.1 figure pourtant au
+  manifeste d'Ubuntu 26.04.1 Desktop (`releases.ubuntu.com/26.04/ubuntu-26.04.1-desktop-amd64.manifest`,
+  relevé le 15/09/2026) ; on ne s'appuie pas dessus pour 19 caractères. Lecteur
+  comparé à Pillow sur 400 JPEG réels du poste de travail : 400 concordants.
+
 ## Ce qui reste à trancher avant le prototype
 
 1. **Avec quoi pilote-t-on ?** Clé Bluetooth (manette, télécommande), adaptateur
