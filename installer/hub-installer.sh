@@ -417,32 +417,9 @@ etape_kodi() {
   fi
 }
 
-# ── 6. Assistant vocal (s'il est livré) ───────────────────────────────────────
-etape_voix() {
-  etape "6. Assistant vocal"
-  local voix="$DEPOT/voix"
-  if [ ! -f "$voix/hub-voix.py" ]; then
-    deja "aucun service vocal dans le dépôt ($voix) — étape sautée"
-    return 0
-  fi
-  poser "$voix/hub-voix.py" /usr/local/bin/hub-voix 0755 || return 1
-  if [ -f "$voix/hub-voix.service" ]; then
-    # Unité UTILISATEUR : le service vit dans la session, avec l'audio de PipeWire
-    # de l'utilisateur. /usr/local/lib/systemd/user est le pendant local de
-    # /usr/lib/systemd/user, comme /usr/local/bin l'est de /usr/bin.
-    poser "$voix/hub-voix.service" /usr/local/lib/systemd/user/hub-voix.service 0644 || return 1
-    if [ "$(systemctl --global is-enabled hub-voix.service 2>/dev/null)" = enabled ]; then
-      deja "hub-voix.service activé pour les sessions"
-    else
-      faire systemctl --global enable hub-voix.service || return 1
-      ok "hub-voix.service activé à l'ouverture des sessions"
-    fi
-  fi
-}
-
-# ── 7. Démarrage automatique sur le HUB ───────────────────────────────────────
+# ── 6. Démarrage automatique sur le HUB ───────────────────────────────────────
 etape_demarrage() {
-  etape "7. Démarrage automatique sur le HUB"
+  etape "6. Démarrage automatique sur le HUB"
   # Basculer le démarrage sur une session dont une pièce manque, c'est allumer la TV
   # sur un écran noir sans clavier pour réparer. On ne le fait que sur un parcours
   # sans échec.
@@ -505,12 +482,56 @@ etape_demarrage() {
   fi
 }
 
+# ── 7. Commande vocale (si elle est livrée) ──────────────────────────────────
+etape_voix() {
+  etape "7. Commande vocale (si elle est livrée)"
+  local voix="$DEPOT/voix" opt=/opt/hub-voix f
+  if [ ! -f "$voix/hub-voix.py" ] || [ ! -f "$voix/hub-voix.service" ]; then
+    deja "aucun service vocal complet dans le dépôt ($voix) — étape sautée"
+    return 0
+  fi
+  # La disposition est celle qu'attend l'unité livrée (ExecStart dans /opt/hub-voix,
+  # venv à côté) : l'installateur s'y plie plutôt que de la réécrire, pour qu'un
+  # seul endroit décide où vit le service.
+  installer_paquets -- python3-venv pipewire-bin curl unzip || return 1
+  for f in hub-voix.py hub_voix_logique.py; do
+    poser "$voix/$f" "$opt/$f" 0755 || return 1
+  done
+  # Vosk n'est pas empaqueté par Ubuntu : un venv isolé, plutôt qu'un pip lancé en
+  # root sur le Python du système, que la prochaine mise à jour d'apt casserait.
+  if [ -x "$opt/venv/bin/python" ] && "$opt/venv/bin/python" -c 'import vosk' 2>/dev/null; then
+    deja "$opt/venv (vosk)"
+  else
+    faire python3 -m venv "$opt/venv" &&
+    faire "$opt/venv/bin/pip" install -q vosk || return 1
+    ok "$opt/venv (vosk)"
+  fi
+  if [ -f "$voix/telecharger-modele.sh" ]; then
+    # Le script vérifie les empreintes et saute ce qui est déjà là : rejouable.
+    faire sh "$voix/telecharger-modele.sh" "$opt/modeles" || return 1
+    ok "modèles Vosk dans $opt/modeles"
+  else
+    alerte "telecharger-modele.sh absent : modèles Vosk à poser à la main dans $opt/modeles"
+  fi
+  # Unité UTILISATEUR (micro de PipeWire, socket du menu dans $XDG_RUNTIME_DIR) ;
+  # /etc/systemd/user la rend disponible à toute session, activée par --global.
+  poser "$voix/hub-voix.service" /etc/systemd/user/hub-voix.service 0644 || return 1
+  if [ "$(systemctl --global is-enabled hub-voix.service 2>/dev/null)" = enabled ]; then
+    deja "hub-voix.service activé pour les sessions"
+  else
+    faire systemctl --global enable hub-voix.service || return 1
+    ok "hub-voix.service activé à l'ouverture des sessions"
+  fi
+}
+
 etape_mesure
 etape_session
 etape_accueil
 etape_kodi
-etape_voix
 etape_demarrage
+# La voix vient après la bascule du démarrage : elle télécharge (pip, modèles) et un
+# réseau capricieux ne doit pas priver le salon de son HUB. Son échec reste compté.
+etape_voix
 
 # ── Fin ───────────────────────────────────────────────────────────────────────
 etape "Ce qui reste à faire à la main"
