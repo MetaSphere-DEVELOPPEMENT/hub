@@ -9,6 +9,11 @@
 
 set -u
 
+# Le fond et l'accent du profil, posés AVANT de fermer la session HUB : dconf est
+# commun aux deux sessions, et appliqués après, le bureau s'ouvrirait une seconde avec
+# l'ancien fond. Sauf apparence d'origine choisie dans le menu ; jamais bloquant.
+[ -e "$HOME/.config/hub/habillage-desactive" ] || /usr/local/bin/hub-theme bureau >/dev/null 2>&1
+
 if ! busctl call org.freedesktop.Accounts "/org/freedesktop/Accounts/User$(id -u)" \
      org.freedesktop.Accounts.User SetSession s ubuntu; then
   # Sans ce choix, la déconnexion rouvrirait le HUB : on reste plutôt dans le menu.

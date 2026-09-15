@@ -13,8 +13,18 @@ sortie=$(/usr/local/bin/hub-menu)
 choix=$(printf '%s\n' "$sortie" | sed -n 1p)
 fichier=$(printf '%s\n' "$sortie" | sed -n 2p)
 
+# Habiller Kodi, le bureau ou les jeux aux couleurs du profil, sauf si l'utilisateur a
+# choisi l'apparence d'origine dans le menu. Jamais bloquant : un thème raté ne doit
+# pas priver de TV, d'où l'absence de « && » et la sortie jetée.
+habiller() {
+  [ -e "$HOME/.config/hub/habillage-desactive" ] || /usr/local/bin/hub-theme "$1" >/dev/null 2>&1
+}
+
 case "$choix" in
   tv)
+    # Avant Kodi, jamais pendant : Kodi réécrit ses réglages en quittant (hub-theme
+    # refuse d'ailleurs, code 3, s'il tourne déjà).
+    habiller tv
     # Kodi dans la session kiosque, en client Wayland : le compositeur le met en
     # plein écran. Quitter Kodi rend la main à cette boucle.
     if [ -n "$fichier" ]; then
@@ -26,7 +36,10 @@ case "$choix" in
     fi
     ;;
   gaming)
-    # Pas encore configuré : la source du streaming n'est pas décidée.
+    # Pas encore configuré : la source du streaming n'est pas décidée. Quand un client
+    # existera, il lira l'accent du profil dans cet environnement (Moonlight-qt).
+    habiller jeux
+    [ -f "$HOME/.config/hub/jeux.env" ] && { set -a; . "$HOME/.config/hub/jeux.env"; set +a; }
     ;;
   bureau)
     # Le bureau GNOME ne se lance pas à l'intérieur d'une session kiosque. On

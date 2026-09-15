@@ -5,5 +5,9 @@
 # que soit la façon d'en sortir (déconnexion, redémarrage, coupure), la machine doit
 # revenir au HUB.
 
+# Le thème « auto » (clair le jour, sombre le soir) se réévalue à l'heure où le bureau
+# s'ouvre. En arrière-plan : remettre le HUB par défaut ne doit pas attendre le fond.
+[ -e "$HOME/.config/hub/habillage-desactive" ] || /usr/local/bin/hub-theme bureau >/dev/null 2>&1 &
+
 exec busctl call org.freedesktop.Accounts "/org/freedesktop/Accounts/User$(id -u)" \
   org.freedesktop.Accounts.User SetSession s gnome-kiosk-script-wayland
