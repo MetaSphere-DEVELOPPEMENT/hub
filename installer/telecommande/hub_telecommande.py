@@ -34,16 +34,19 @@ import importlib.util
 import ipaddress
 import json
 import logging
+import math
 import os
 import re
 import secrets
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import threading
 import time
 import urllib.request
+import zlib
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -537,11 +540,108 @@ def charger_page(chemin=None):
         "style-src " + " ".join(empreinte_csp(s) for s in styles),
         "connect-src 'self'",
         "img-src 'self' data:",
+        # Le manifeste relève de manifest-src, qui retombe sinon sur default-src 'none'.
+        "manifest-src 'self'",
         "base-uri 'none'",
         "form-action 'none'",
         "frame-ancestors 'none'",
     ])
     return html.encode("utf-8"), csp
+
+
+# ── « Comme une app » : manifeste et icônes ─────────────────────────────────
+# Couleurs du HUB (page.html : --encre, --tv). Le manifeste et les méta de la page
+# doivent dire la même chose, sinon la barre d'état change de teinte au lancement.
+ENCRE = (6, 7, 12)
+TURQUOISE = (62, 224, 208)
+
+MANIFESTE = {
+    "name": "HUB · Télécommande",
+    "short_name": "HUB",
+    "description": "Télécommande du HUB sur le réseau de la maison",
+    "lang": "fr",
+    "dir": "ltr",
+    # Chemins relatifs à l'origine : le même manifeste sert http://ip:8790 et
+    # https://ip:8791, deux « apps » distinctes pour le téléphone.
+    "id": "/",
+    "start_url": "/",
+    "scope": "/",
+    "display": "standalone",
+    "orientation": "portrait",
+    "background_color": "#06070c",
+    "theme_color": "#06070c",
+    "icons": [
+        {"src": "/icone-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+        {"src": "/icone-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+        # L'icône est pleine page et le carré tient dans le cercle sûr (80 %) : la même
+        # image supporte le découpage d'Android (rond, goutte, carré arrondi).
+        {"src": "/icone-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
+    ],
+}
+
+# Tailles servies : 192 et 512 (exigées par Chrome pour l'installation), 180
+# (apple-touch-icon, taille native de l'iPhone), 32 (onglet).
+ICONES = {"/icone-192.png": 192, "/icone-512.png": 512, "/apple-touch-icon.png": 180,
+          "/icone-32.png": 32}
+
+
+def _png(largeur, hauteur, lignes_rgb):
+    def bloc(nature, donnees):
+        return (struct.pack(">I", len(donnees)) + nature + donnees
+                + struct.pack(">I", zlib.crc32(nature + donnees)))
+    entete = struct.pack(">IIBBBBB", largeur, hauteur, 8, 2, 0, 0, 0)
+    return (b"\x89PNG\r\n\x1a\n" + bloc(b"IHDR", entete)
+            + bloc(b"IDAT", zlib.compress(bytes(lignes_rgb), 9)) + bloc(b"IEND", b""))
+
+
+def icone_png(taille):
+    """L'icône du HUB : un carré arrondi turquoise, lumineux, sur l'encre.
+
+    Dessinée ici plutôt que livrée en fichiers : pas de binaire dans le dépôt, pas de
+    Pillow, et une couleur changée dans ce fichier change toutes les tailles. Chaque
+    pixel vient de la distance signée au carré arrondi : bord anti-crénelé, halo en
+    exponentielle décroissante, dégradé plus clair en haut comme une touche éclairée.
+    """
+    clair = (196, 255, 248)
+    cote = 0.46 * taille
+    demi, rayon, halo = cote / 2, 0.11 * taille, 0.07 * taille
+    interieur, centre = demi - rayon, taille / 2
+    lignes = bytearray()
+    for y in range(taille):
+        py = y + 0.5 - centre
+        ay = abs(py) - interieur
+        lignes.append(0)  # filtre PNG « aucun »
+        k = 0.55 * (1 - min(1.0, max(0.0, (py + demi) / cote))) ** 2
+        plein = [v + (c - v) * k for v, c in zip(TURQUOISE, clair)]
+        for x in range(taille):
+            ax = abs(x + 0.5 - centre) - interieur
+            d = math.hypot(max(ax, 0), max(ay, 0)) + min(max(ax, ay), 0) - rayon
+            fond = ENCRE
+            if d > 0:
+                g = 0.5 * math.exp(-d / halo)
+                fond = [e + (v - e) * g for e, v in zip(ENCRE, TURQUOISE)]
+            couverture = min(1.0, max(0.0, 0.5 - d))
+            lignes.extend(round(f + (p - f) * couverture) for f, p in zip(fond, plein))
+    return _png(taille, taille, lignes)
+
+
+class Ressources:
+    """Icônes calculées à la première demande, puis gardées : 1 s de calcul pour la
+    grande, qu'on ne paie ni au démarrage ni deux fois."""
+
+    def __init__(self):
+        self._verrou = threading.Lock()
+        self._cache = {}
+        self.manifeste = json.dumps(MANIFESTE, ensure_ascii=False).encode("utf-8")
+
+    def icone(self, chemin):
+        taille = ICONES.get(chemin)
+        if taille is None:
+            return None
+        with self._verrou:
+            if taille not in self._cache:
+                self._cache[taille] = icone_png(taille)
+            return self._cache[taille]
 
 
 def adresse_locale():
@@ -583,6 +683,7 @@ class Service:
         self.jetons = Jetons(chemins["jetons"], horloge=horloge)
         self.routeur = routeur or Routeur(chemins["socket"])
         self.page, self.csp = charger_page(page)
+        self.ressources = Ressources()
         self.url = None
         self.hotes_admis = frozenset()
         self.appairage_le = None
@@ -703,6 +804,11 @@ def _gestionnaire(service):
             chemin = self._chemin()
             if chemin == "/":
                 return self._repondre(200, service.page, "text/html; charset=utf-8")
+            if chemin == "/manifest.webmanifest":
+                return self._repondre(200, service.ressources.manifeste,
+                                      "application/manifest+json; charset=utf-8")
+            if chemin in ICONES:
+                return self._repondre(200, service.ressources.icone(chemin), "image/png")
             if chemin == "/api/etat":
                 if not self._jeton():
                     return self._json(401, {"erreur": "jeton"})
