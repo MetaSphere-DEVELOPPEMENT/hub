@@ -1235,6 +1235,8 @@ function rendreSection(garderFocus = true) {
           options("animations", [["completes", t("animations.completes")], ["reduites", t("animations.reduites")]], p.animations, v => { p.animations = v; })),
         rangee(t("taille"), t("taille.detail"),
           options("echelle", [[.9, "S"], [1, "M"], [1.1, "L"], [1.2, "XL"]], s.echelle, v => { s.echelle = Number(v); }), false, true),
+        rangee(t("habillage"), t("habillage.detail"),
+          options("habillage", [[true, t("oui")], [false, t("habillage.origine")]], s.habillage !== false, v => { s.habillage = v === true || v === "true"; }), false, true),
         rangee(t("zone"), null,
           options("marge", [[2, "2 %"], [5, "5 %"], [8, "8 %"]], s.marge, v => { s.marge = Number(v); }), false, true));
       break;

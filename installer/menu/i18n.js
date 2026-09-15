@@ -95,6 +95,9 @@ const TEXTES = {
     "taille": "Taille de l'interface",
     "taille.detail": "Pour lire de plus loin, ou compenser une TV qui rogne les bords.",
     "zone": "Marge de sécurité TV",
+    "habillage": "Ubuntu et Kodi aux couleurs du HUB",
+    "habillage.detail": "Le bureau (fond, couleur d'accent, thème) et Kodi suivent le profil actif.",
+    "habillage.origine": "Apparence d'origine",
 
     "fond.aurore": "Aurore",
     "fond.nebuleuse": "Nébuleuse",
@@ -303,6 +306,9 @@ const TEXTES = {
     "taille": "Interface size",
     "taille.detail": "Read from further away, or make up for a TV that crops the edges.",
     "zone": "TV safe area",
+    "habillage": "Ubuntu and Kodi in HUB colours",
+    "habillage.detail": "The desktop (wallpaper, accent colour, theme) and Kodi follow the active profile.",
+    "habillage.origine": "Original look",
 
     "fond.aurore": "Aurora",
     "fond.nebuleuse": "Nebula",
