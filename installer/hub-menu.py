@@ -76,6 +76,7 @@ def chemins():
         "deja-ouvert": execution / "menu-deja-ouvert",
         "minuteur": execution / "minuteur-fin",
         "telecommande": execution / "telecommande.json",
+        "lecture": execution / "lecture.json",
     }
 
 
@@ -571,6 +572,50 @@ def etat_telecommande(c):
     return {k: donnees.get(k) for k in garder}
 
 
+# ── Enceinte réseau : ce qui joue ─────────────────────────────────────────
+SOURCES_LECTURE = ("spotify", "airplay", "ecran")
+
+
+def etat_lecture(c):
+    """Ce que hub-enceinte publie quand Spotify, AirPlay ou une recopie d'écran joue ;
+    None sinon (il supprime le fichier). Le fichier est relu à chaque seconde : on ne
+    transmet à la page que des champs connus, bornés, et une pochette qui vient du
+    dossier d'exécution — jamais une adresse arbitraire qu'une page locale chargerait."""
+    donnees = lire_json(c.get("lecture") or Path(c["execution"]) / "lecture.json")
+    if not isinstance(donnees, dict) or donnees.get("source") not in SOURCES_LECTURE \
+            or donnees.get("etat") not in ("lecture", "pause"):
+        return None
+    etat = {"source": donnees["source"], "etat": donnees["etat"], "ecran": donnees.get("ecran") is True}
+    for champ in ("titre", "artiste", "album", "appareil"):
+        valeur = donnees.get(champ)
+        etat[champ] = valeur[:200] if isinstance(valeur, str) and valeur.strip() else None
+    pochette, etat["pochette"] = donnees.get("pochette"), None
+    dossier_pochettes = (Path(c["execution"]) / "pochettes").resolve()
+    if isinstance(pochette, str) and pochette.startswith("file://"):
+        fichier = Path(urllib.parse.unquote(pochette[7:]))
+        if fichier.resolve().parent == dossier_pochettes and fichier.is_file():
+            etat["pochette"] = fichier.resolve().as_uri()
+    return etat
+
+
+def reglage_enceinte(donnees):
+    enceinte = ((donnees or {}).get("systeme") or {}).get("enceinte") if isinstance(donnees, dict) else None
+    return enceinte if isinstance(enceinte, dict) else {}
+
+
+def appliquer_enceinte(avant, donnees, executer=subprocess.Popen):
+    """Réglages → Enceinte réseau : seul hub-enceinte sait quelle unité relancer. On ne le
+    réveille que si ce réglage a changé, pas à chaque changement de thème ou de profil."""
+    apres = reglage_enceinte(donnees)
+    if apres == reglage_enceinte(avant):
+        return False
+    try:
+        executer(["hub-enceinte", "appliquer"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError:
+        return False
+    return True
+
+
 # ── Habillage d'Ubuntu et de Kodi ─────────────────────────────────────────
 def marqueur_habillage():
     return dossier("XDG_CONFIG_HOME", Path.home() / ".config") / "hub" / "habillage-desactive"
@@ -765,6 +810,7 @@ def lancer():
 
         def do_activate(self):
             fenetre = Gtk.ApplicationWindow(application=self, title="HUB")
+            self.fenetre = fenetre
             page = page_du_menu()
             fenetre.set_child(self.vue_web(page) if WebKit and page else self.vue_simple())
             fenetre.fullscreen()
@@ -789,6 +835,7 @@ def lancer():
                 "photos": photos(),
                 "avatars": avatars(),
                 "telecommande": etat_telecommande(c),
+                "lecture": etat_lecture(c),
                 "minuteurFin": minuteur_en_cours(c),
                 "reprises": reprises_kodi(Path.home() / ".kodi"),
                 "services": services_disponibles(),
@@ -826,6 +873,11 @@ def lancer():
             self.telecommande = initial["telecommande"]
             self.suivre_si_en_cours()
             GLib.timeout_add_seconds(2, self.surveiller_telecommande)
+            self.lecture = initial["lecture"]
+            self.reglages_enceinte = initial["reglages"]
+            # Chaque seconde : un bandeau « en cours de lecture » en retard de deux
+            # secondes sur le téléphone se remarque.
+            GLib.timeout_add_seconds(1, self.surveiller_lecture)
             return vue
 
         def suivre_si_en_cours(self):
@@ -851,6 +903,18 @@ def lancer():
             if etat != self.telecommande:
                 self.telecommande = etat
                 self.vers_page({"type": "telecommande", "etat": etat})
+            return True
+
+        def surveiller_lecture(self):
+            etat = etat_lecture(c)
+            if etat != self.lecture:
+                recopie_finie = bool(self.lecture and self.lecture.get("ecran")) and not (etat and etat.get("ecran"))
+                self.lecture = etat
+                self.vers_page({"type": "lecture", "etat": etat})
+                if recopie_finie:
+                    # La fenêtre d'UxPlay vient de se fermer : le menu reprend le clavier
+                    # au lieu de le laisser au compositeur.
+                    self.fenetre.present()
             return True
 
         def vers_page(self, message):
@@ -887,6 +951,8 @@ def lancer():
                 try:
                     if enregistrer_reglages(c, message.get("donnees")):
                         appliquer_habillage(message["donnees"])
+                        appliquer_enceinte(getattr(self, "reglages_enceinte", None), message["donnees"])
+                        self.reglages_enceinte = message["donnees"]
                 except OSError as erreur:
                     print(f"hub-menu : réglages non enregistrés ({erreur})", file=sys.stderr)
             elif genre == "meteo":
