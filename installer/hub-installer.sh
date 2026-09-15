@@ -935,6 +935,37 @@ etape_allumage() {
   activer_wake_on_lan
 }
 
+# ── 15. Télécommande de la TV par HDMI-CEC ─────────────────────────────────────
+# Le M720q n'a pas de CEC : tout ceci ne sert qu'avec l'adaptateur USB Pulse-Eight
+# (installer/cec/README.md). Posé quand même sans lui : le service attend l'adaptateur
+# sans rien coûter, et le brancher plus tard suffit.
+etape_cec() {
+  etape "15. Télécommande de la TV (HDMI-CEC)"
+  local cec="$DEPOT/cec" lib=/usr/local/lib/hub f n
+  if [ ! -f "$cec/hub-cec.py" ] || [ ! -f "$cec/hub-cec.service" ]; then
+    deja "aucune télécommande CEC dans le dépôt ($cec) — étape sautée"
+    return 0
+  fi
+  # cec-utils (cec-client) et libcec7 : universe, 7.1.1 sur Ubuntu 26.04.
+  installer_paquets -- cec-utils || return 1
+  for f in hub-cec.py hub_cec_logique.py README.md; do
+    poser "$cec/$f" "$lib/cec/$f" "$([ "$f" = hub-cec.py ] && echo 0755 || echo 0644)" || return 1
+  done
+  # Le service reconnaît Kodi, le bureau et hub-web avec la logique de la voix.
+  if [ -f "$DEPOT/voix/hub_voix_logique.py" ]; then
+    poser "$DEPOT/voix/hub_voix_logique.py" "$lib/voix/hub_voix_logique.py" 0644 || return 1
+  fi
+  poser "$cec/70-hub-cec.rules" /etc/udev/rules/70-hub-cec.rules 0644 || return 1
+  # Mode « relais » : Kodi ne doit pas ouvrir l'adaptateur que tient hub-cec. Posé
+  # seulement s'il n'existe pas : un choix fait dans les réglages de Kodi est gardé.
+  for n in 1001 1002; do
+    f="$MAISON/.kodi/userdata/peripheral_data/cec_2548_$n.xml"
+    if [ -f "$f" ]; then deja "$f (gardé tel quel)"; else poser "$cec/kodi-cec-desactive.xml" "$f" 0644 "$UTILISATEUR" || return 1; fi
+  done
+  poser "$cec/hub-cec.service" /usr/local/lib/systemd/user/hub-cec.service 0644 || return 1
+  activer_unite_globale hub-cec.service || return 1
+}
+
 # ── 14. Enceinte réseau : Spotify Connect, AirPlay, recopie d'écran ─────────
 # Versions FIGÉES. librespot n'est empaqueté ni par Ubuntu ni par le projet (sources
 # seules) : on prend le binaire du .deb raspotify, vérifié par son empreinte, sans
@@ -1051,11 +1082,14 @@ etape_voix
 etape_navigateur
 # L'enceinte télécharge librespot : après la bascule, comme la voix et Chrome.
 etape_enceinte
+# La télécommande CEC : un paquet de 1 Mo, sans effet tant que l'adaptateur manque.
+etape_cec
 
 # ── Fin ───────────────────────────────────────────────────────────────────────
 etape "Ce qui reste à faire à la main"
 cat <<'RESTE'
-  [ ] trancher avec quoi on pilote : clé Bluetooth, adaptateur USB-CEC, clavier
+  [ ] télécommande de la TV : acheter l'adaptateur Pulse-Eight USB-CEC, le brancher,
+      puis la liste « À éprouver » de installer/cec/README.md
   [ ] trancher d'où vient le streaming de jeu, puis relancer pour le mode Gaming
   [ ] relancer audit/audit.sh une fois la TV branchée, pour les trois mesures
       qui n'existent qu'à ce moment-là
