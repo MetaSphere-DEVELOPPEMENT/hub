@@ -1,0 +1,434 @@
+#!/usr/bin/env python3
+"""Temps d'écran du HUB : compter, prévenir, ramener au menu — /usr/local/bin/hub-temps-ecran
+
+POURQUOI HORS DU MENU. Le menu se ferme dès qu'un mode démarre : il ne peut ni
+compter les deux heures de Kodi, ni couper à 21 h. Le décompte vit donc autour du
+mode lui-même. gnome-kiosk-script lance Kodi (ou le streaming) À TRAVERS ce
+programme, qui l'attend comme le ferait le script, ajoute le temps écoulé toutes les
+quinze secondes, prévient cinq minutes avant la fin, puis ferme le mode : la boucle
+de session rouvre alors le menu, comme après un « Quitter » normal. Le bureau
+Ubuntu est une autre session : il y est lancé en autostart et, à l'échéance, ferme
+la session, ce qui ramène aussi au HUB.
+
+    hub-temps-ecran lancer tv -- kodi --windowing=wayland
+    hub-temps-ecran bureau                      (autostart de la session Ubuntu)
+    hub-temps-ecran etat                        (JSON pour le menu)
+    hub-temps-ecran avertir bientot 5 [mode]    (essai de l'avertissement)
+
+L'ÉTAT. ~/.local/state/hub/temps-ecran.json, par profil puis par jour :
+    {"version": 1, "profils": {"lea": {"2026-09-15": {"secondes": 3600,
+      "modes": {"tv": 3600}, "bonus": 900, "horsPlageJusqua": 1789500000}}}}
+Écrit à côté puis renommé, sous un verrou flock : le menu (prolongation accordée) et
+un suivi peuvent écrire au même moment sans qu'aucun des deux ne perde l'autre.
+
+LES RÈGLES sont dans ~/.config/hub/reglages.json, profil par profil, écrites par le
+menu : "tempsEcran": {"limites": [lun, mar, …, dim] en minutes ou null,
+"debut": "07:00" ou null, "fin": "21:00" ou null}. Une prolongation (code parent)
+ajoute au quota du jour ET autorise l'écran hors plage pendant sa durée : accorder
+30 minutes à 21 h 10 donne bien 30 minutes.
+
+L'AVERTISSEMENT par-dessus un mode plein écran, dans une session kiosque Wayland,
+n'a pas de moyen universel ; on prend le plus sûr pour chaque mode :
+  - TV : la notification de Kodi lui-même (JSON-RPC GUI.ShowNotification sur
+    localhost:9090, déjà ouvert pour « Continuer à regarder ») — c'est Kodi qui la
+    dessine, elle est forcément au-dessus. À l'échéance, Application.Quit laisse
+    Kodi enregistrer le point de reprise avant de rendre la main.
+  - Bureau : notify-send, la session Ubuntu a le démon de notifications de GNOME Shell.
+  - Jeux et le reste : une fenêtre GTK plein écran, dix secondes. gnome-kiosk n'a
+    PAS de démon de notifications (notify-send n'y afficherait rien) ; il empile en
+    revanche chaque nouvelle fenêtre au premier plan. Repli de tous les autres cas.
+"""
+
+import fcntl
+import json
+import math
+import os
+import signal
+import subprocess
+import sys
+import time
+from datetime import datetime, timedelta
+from pathlib import Path
+
+VERSION_ETAT = 1
+JOURS_GARDES = 35
+PAS_S = 15
+AVANT_FIN_S = 5 * 60
+# Code de sortie quand le mode n'a pas été lancé faute de temps : le script de
+# session revient simplement au menu.
+CODE_TEMPS_ECOULE = 75
+PORT_KODI = 9090
+
+
+def chemins():
+    maison = Path.home()
+    return {
+        "etat": Path(os.environ.get("XDG_STATE_HOME") or maison / ".local/state") / "hub" / "temps-ecran.json",
+        "reglages": Path(os.environ.get("XDG_CONFIG_HOME") or maison / ".config") / "hub" / "reglages.json",
+    }
+
+
+# ── Règles ────────────────────────────────────────────────────────────────
+def minutes_du_jour(texte):
+    try:
+        heures, minutes = (int(x) for x in str(texte).split(":"))
+    except (ValueError, TypeError):
+        return None
+    return heures * 60 + minutes if 0 <= heures < 24 and 0 <= minutes < 60 else None
+
+
+def regles_du_profil(reglages, profil_id):
+    if not isinstance(reglages, dict) or not isinstance(reglages.get("profils"), list):
+        return None
+    for p in reglages["profils"]:
+        if isinstance(p, dict) and p.get("id") == profil_id:
+            regles = p.get("tempsEcran")
+            return regles if isinstance(regles, dict) else None
+    return None
+
+
+def limite_du_jour(regles, moment):
+    limites = (regles or {}).get("limites")
+    if not isinstance(limites, list) or len(limites) != 7:
+        return None
+    valeur = limites[moment.weekday()]
+    return valeur if isinstance(valeur, (int, float)) and not isinstance(valeur, bool) and valeur >= 0 else None
+
+
+def restant(regles, jour, maintenant):
+    """Secondes d'écran encore permises maintenant ; None si rien ne limite ce profil."""
+    if not isinstance(regles, dict):
+        return None
+    jour = jour if isinstance(jour, dict) else {}
+    moment = datetime.fromtimestamp(maintenant)
+    bornes = []
+
+    limite = limite_du_jour(regles, moment)
+    if limite is not None:
+        bornes.append(limite * 60 + jour.get("bonus", 0) - jour.get("secondes", 0))
+
+    debut, fin = minutes_du_jour(regles.get("debut")), minutes_du_jour(regles.get("fin"))
+    if debut is not None or fin is not None:
+        minuit = moment.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+        dans_plage = (debut is None or maintenant >= minuit + debut * 60) and (fin is None or maintenant < minuit + fin * 60)
+        if not dans_plage:
+            plage = 0
+        elif fin is None:
+            plage = math.inf
+        else:
+            plage = minuit + fin * 60 - maintenant
+        plage = max(plage, jour.get("horsPlageJusqua", 0) - maintenant)
+        if plage != math.inf:
+            bornes.append(plage)
+
+    if not bornes:
+        return None
+    return max(0, int(min(bornes)))
+
+
+# ── État ──────────────────────────────────────────────────────────────────
+def cle_jour(maintenant):
+    return datetime.fromtimestamp(maintenant).strftime("%Y-%m-%d")
+
+
+def etat_vide():
+    return {"version": VERSION_ETAT, "profils": {}}
+
+
+def lire_etat(chemin):
+    try:
+        etat = json.loads(Path(chemin).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return etat_vide()
+    if not isinstance(etat, dict) or not isinstance(etat.get("profils"), dict):
+        return etat_vide()
+    return etat
+
+
+def jour_de(etat, profil, maintenant):
+    etat.setdefault("version", VERSION_ETAT)
+    jours = etat.setdefault("profils", {}).setdefault(str(profil), {})
+    return jours.setdefault(cle_jour(maintenant), {"secondes": 0})
+
+
+def ajouter(etat, profil, mode, secondes, maintenant):
+    jour = jour_de(etat, profil, maintenant)
+    secondes = int(round(secondes))
+    jour["secondes"] = jour.get("secondes", 0) + secondes
+    modes = jour.setdefault("modes", {})
+    modes[mode] = modes.get(mode, 0) + secondes
+    return jour
+
+
+def prolonger(etat, profil, minutes, maintenant):
+    jour = jour_de(etat, profil, maintenant)
+    jour["bonus"] = jour.get("bonus", 0) + int(minutes) * 60
+    # Deux prolongations d'affilée s'enchaînent au lieu de se chevaucher.
+    jour["horsPlageJusqua"] = int(max(jour.get("horsPlageJusqua", 0), maintenant) + int(minutes) * 60)
+    return jour
+
+
+def historique(etat, profil, maintenant, jours=7):
+    donnees = (etat.get("profils") or {}).get(str(profil)) or {}
+    aujourdhui = datetime.fromtimestamp(maintenant)
+    resultat = []
+    for i in range(jours - 1, -1, -1):
+        cle = (aujourdhui - timedelta(days=i)).strftime("%Y-%m-%d")
+        resultat.append({"jour": cle, "secondes": int((donnees.get(cle) or {}).get("secondes", 0))})
+    return resultat
+
+
+def menage(etat, maintenant):
+    limite = (datetime.fromtimestamp(maintenant) - timedelta(days=JOURS_GARDES)).strftime("%Y-%m-%d")
+    for profil, jours in list((etat.get("profils") or {}).items()):
+        for cle in [c for c in jours if c < limite]:
+            del jours[cle]
+        if not jours:
+            del etat["profils"][profil]
+
+
+def modifier_etat(chemin, modification, maintenant=None):
+    """Lire, modifier, réécrire sous verrou. Écrit à côté puis renomme : une coupure de
+    courant au milieu laisse l'ancien fichier entier, jamais un JSON tronqué."""
+    chemin = Path(chemin)
+    chemin.parent.mkdir(parents=True, exist_ok=True)
+    with open(chemin.with_name(chemin.name + ".verrou"), "a") as verrou:
+        fcntl.flock(verrou, fcntl.LOCK_EX)
+        etat = lire_etat(chemin)
+        resultat = modification(etat)
+        menage(etat, maintenant or time.time())
+        provisoire = chemin.with_name(f"{chemin.name}.{os.getpid()}.tmp")
+        with open(provisoire, "w", encoding="utf-8") as f:
+            json.dump(etat, f, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(provisoire, chemin)
+    return resultat
+
+
+def resume(etat, maintenant, jours=7):
+    """Ce que le menu affiche : les sept derniers jours de chaque profil."""
+    garder = {(datetime.fromtimestamp(maintenant) - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(jours)}
+    return {
+        "aujourdhui": cle_jour(maintenant),
+        "profils": {p: {k: v for k, v in j.items() if k in garder} for p, j in (etat.get("profils") or {}).items()},
+    }
+
+
+# ── Avertir ───────────────────────────────────────────────────────────────
+TEXTES = {
+    "fr": {
+        "bientot": "Plus que {m} min d'écran aujourd'hui",
+        "bientot.detail": "Le HUB reviendra au menu à la fin du temps permis.",
+        "fin": "Temps d'écran terminé",
+        "fin.detail": "Retour au menu. Un parent peut accorder un peu plus de temps.",
+    },
+    "en": {
+        "bientot": "{m} min of screen time left today",
+        "bientot.detail": "The HUB will go back to the menu when time is up.",
+        "fin": "Screen time is up",
+        "fin.detail": "Back to the menu. A parent can grant a little more time.",
+    },
+}
+
+
+def textes(nature, minutes, langue):
+    d = TEXTES.get(langue) or TEXTES["fr"]
+    return d[nature].replace("{m}", str(minutes)), d[f"{nature}.detail"]
+
+
+def kodi_jsonrpc(methode, parametres=None, delai=2):
+    import socket
+    requete = json.dumps({"jsonrpc": "2.0", "id": 1, "method": methode, "params": parametres or {}}).encode()
+    with socket.create_connection(("127.0.0.1", PORT_KODI), timeout=delai) as s:
+        s.sendall(requete)
+        return s.recv(4096)
+
+
+def avertir(nature, minutes, mode, langue, executer=subprocess.Popen, kodi=kodi_jsonrpc):
+    """Jamais bloquant, jamais fatal : un avertissement raté ne doit pas empêcher la coupure."""
+    titre, detail = textes(nature, minutes, langue)
+    if mode == "tv":
+        try:
+            kodi("GUI.ShowNotification", {"title": titre, "message": detail, "displaytime": 15000})
+            return "kodi"
+        except OSError:
+            pass
+    if mode == "bureau":
+        try:
+            executer(["notify-send", "--urgency=critical", "--app-name=HUB", titre, detail],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return "notify-send"
+        except OSError:
+            pass
+    try:
+        executer([sys.executable, str(Path(__file__).resolve()), "fenetre", titre, detail],
+                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        return "fenetre"
+    except OSError:
+        return None
+
+
+def fenetre(titre, detail, duree_s=10):
+    import gi
+    gi.require_version("Gtk", "4.0")
+    from gi.repository import GLib, Gtk
+
+    app = Gtk.Application(application_id="fr.boudine.HubTempsEcran")
+
+    def activer(application):
+        f = Gtk.ApplicationWindow(application=application, title="HUB")
+        fournisseur = Gtk.CssProvider()
+        fournisseur.load_from_data(b"window{background:rgba(6,7,12,.92);color:#fff}"
+                                   b".titre{font-size:48px;font-weight:700}.detail{font-size:26px;opacity:.8}")
+        Gtk.StyleContext.add_provider_for_display(f.get_display(), fournisseur, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        boite = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=24, halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
+        for texte, classe in ((titre, "titre"), (detail, "detail")):
+            etiquette = Gtk.Label(label=texte)
+            etiquette.add_css_class(classe)
+            boite.append(etiquette)
+        f.set_child(boite)
+        touches = Gtk.EventControllerKey()
+        touches.connect("key-pressed", lambda *_: (application.quit(), True)[1])
+        f.add_controller(touches)
+        f.fullscreen()
+        f.present()
+        GLib.timeout_add_seconds(duree_s, application.quit)
+
+    app.connect("activate", activer)
+    app.run(None)
+
+
+# ── Suivre un mode ────────────────────────────────────────────────────────
+def terminer(processus, mode, kodi=kodi_jsonrpc, attente=10):
+    """Rendre la main au menu. Kodi d'abord poliment (il enregistre où on en était),
+    puis le groupe de processus : un jeu lancé par un script ne doit pas survivre."""
+    if mode == "tv":
+        try:
+            kodi("Application.Quit")
+            processus.wait(timeout=attente)
+            return
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    if mode == "bureau":
+        subprocess.run(["gnome-session-quit", "--logout", "--no-prompt"], capture_output=True)
+        return
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(processus.pid, sig)
+            processus.wait(timeout=attente)
+            return
+        except ProcessLookupError:
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
+class SansProcessus:
+    """Le bureau n'a pas de processus à attendre : sa session entière est le mode."""
+    pid = None
+
+    def wait(self, timeout=None):
+        time.sleep(timeout)
+        raise subprocess.TimeoutExpired("bureau", timeout)
+
+
+def lire_reglages(chemin):
+    try:
+        return json.loads(Path(chemin).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def profil_et_regles(c):
+    reglages = lire_reglages(c["reglages"])
+    profil = reglages.get("profilActif") if isinstance(reglages, dict) else None
+    profil = profil if isinstance(profil, str) else "inconnu"
+    langue = "fr"
+    for p in (reglages or {}).get("profils") or []:
+        if isinstance(p, dict) and p.get("id") == profil and p.get("langue") in TEXTES:
+            langue = p["langue"]
+    return profil, regles_du_profil(reglages, profil), langue
+
+
+def suivre(mode, c, demarrer, horloge=time.time, pas=PAS_S, avertir=avertir, terminer=terminer):
+    profil, regles, langue = profil_et_regles(c)
+    maintenant = horloge()
+    jour = jour_de(lire_etat(c["etat"]), profil, maintenant)
+    if restant(regles, jour, maintenant) == 0:
+        avertir("fin", 0, mode, langue)
+        return CODE_TEMPS_ECOULE
+
+    processus = demarrer()
+    dernier = horloge()
+    averti = False
+    while True:
+        try:
+            code = processus.wait(timeout=pas)
+            fini = True
+        except subprocess.TimeoutExpired:
+            code, fini = None, False
+        maintenant = horloge()
+        # Plafonné : une mise en veille ou un changement d'heure ne compte pas des heures.
+        ecoule = min(max(0, maintenant - dernier), pas * 2)
+        dernier = maintenant
+        jour = modifier_etat(c["etat"], lambda e: ajouter(e, profil, mode, ecoule, maintenant), maintenant)
+        if fini:
+            return code
+        # Relu à chaque pas : le menu peut avoir changé les règles (bureau, deux sessions).
+        profil_relu, regles, langue = profil_et_regles(c)
+        if profil_relu != profil:
+            regles = None
+        reste = restant(regles, jour, maintenant)
+        if reste is None:
+            averti = False
+            continue
+        if reste <= 0:
+            avertir("fin", 0, mode, langue)
+            terminer(processus, mode)
+            return 0
+        if reste <= AVANT_FIN_S and not averti:
+            averti = True
+            avertir("bientot", max(1, math.ceil(reste / 60)), mode, langue)
+        elif reste > AVANT_FIN_S:
+            # Une prolongation accordée entre-temps : on préviendra de nouveau.
+            averti = False
+
+
+# ── Ligne de commande ─────────────────────────────────────────────────────
+def analyser(arguments):
+    if len(arguments) >= 4 and arguments[0] == "lancer" and arguments[2] == "--":
+        return ("lancer", arguments[1], arguments[3:])
+    if arguments == ["bureau"]:
+        return ("bureau", "bureau", None)
+    return None
+
+
+def main(arguments):
+    c = chemins()
+    if arguments[:1] == ["etat"]:
+        print(json.dumps(resume(lire_etat(c["etat"]), time.time())))
+        return 0
+    if arguments[:1] == ["fenetre"] and len(arguments) >= 3:
+        fenetre(arguments[1], arguments[2])
+        return 0
+    if arguments[:1] == ["avertir"] and len(arguments) >= 3:
+        _, _, langue = profil_et_regles(c)
+        print(avertir(arguments[1], int(arguments[2]), arguments[3] if len(arguments) > 3 else "jeux", langue))
+        return 0
+    commande = analyser(arguments)
+    if not commande:
+        print(__doc__.split("\n\n")[1], file=sys.stderr)
+        return 2
+    genre, mode, programme = commande
+    if genre == "bureau":
+        return suivre("bureau", c, demarrer=SansProcessus)
+    try:
+        return suivre(mode, c, demarrer=lambda: subprocess.Popen(programme, start_new_session=True))
+    except OSError as erreur:
+        print(f"hub-temps-ecran : {erreur}", file=sys.stderr)
+        return 127
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
