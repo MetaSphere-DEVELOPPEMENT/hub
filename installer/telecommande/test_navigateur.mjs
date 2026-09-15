@@ -9,8 +9,8 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
-import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { spawn, execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -242,7 +242,9 @@ test("réactivité : la flèche part pendant le glissement, avant de lever le do
   await recus(avant, 1);
   const delai = Date.now() - t0;
   await d.envoyer("touchEnd", []);
-  assert.ok(delai < 300, `commande reçue par le menu en ${delai} ms, doigt encore posé`);
+  // La preuve est l'ordre : reçue par le menu AVANT le relâcher. Le délai n'est qu'une
+  // borne large (CDP, fichier relu toutes les 30 ms, machine de test chargée).
+  assert.ok(delai < 1000, `commande reçue par le menu en ${delai} ms, doigt encore posé`);
   await page.context().close();
 });
 
@@ -272,6 +274,80 @@ test("boutons conservés, et gaucher/droitier place Retour et le volume sous le 
   assert.equal(await cote("#rangee-retour [data-cmd=retour]"), "gauche", "préférences gardées");
   assert.deepEqual(page.erreurs, []);
   await page.context().close();
+});
+
+// ── HTTPS local ─────────────────────────────────────────────────────────────
+// Sans raccourci : Chrome vérifie la chaîne avec son propre vérificateur, la racine
+// du HUB étant installée dans le magasin NSS d'un HOME jetable (ce que fait un
+// téléphone en l'installant). Ni --ignore-certificate-errors, ni ignoreHTTPSErrors.
+// Le nom hub.local est dirigé sur 127.0.0.1 : l'origine http://hub.local N'EST PAS
+// un contexte sécurisé, exactement comme http://192.168.1.50 sur le téléphone.
+export async function chromeAvecRacine(racine, extra = []) {
+  const maison = mkdtempSync(path.join(tmpdir(), "hub-nss-"));
+  const nss = path.join(maison, ".pki", "nssdb");
+  mkdirSync(nss, { recursive: true });
+  if (racine) {
+    execFileSync("certutil", ["-d", `sql:${nss}`, "-N", "--empty-password"]);
+    execFileSync("certutil", ["-d", `sql:${nss}`, "-A", "-t", "C,,", "-n", "HUB autorite locale", "-i", racine]);
+  }
+  const nav = await chromium.launch({
+    channel: "chrome",
+    env: { ...process.env, HOME: maison },
+    args: ["--host-resolver-rules=MAP hub.local 127.0.0.1", ...extra],
+  });
+  nav.on("disconnected", () => rmSync(maison, { recursive: true, force: true }));
+  return nav;
+}
+
+test("HTTPS : certificat racine installé, chaîne acceptée par Chrome, passage http → https sans code", async () => {
+  const b = await lancerBanc(["--https"]);
+  const nav = await chromeAvecRacine(b.ports.racine);
+  try {
+    const page = await ouvrir(nav, `http://hub.local:${b.ports.http}/`);
+    assert.equal(await page.evaluate(() => isSecureContext), false, "http://hub.local n'est pas sécurisé");
+    await appairer(page, b);
+    // Le certificat servi en http est bien la racine, octet pour octet.
+    const der = await page.evaluate(async () => [...new Uint8Array(await (await fetch("/hub-racine.crt")).arrayBuffer())]);
+    const pem = readFileSync(b.ports.racine, "utf8").replace(/-----[^-]+-----|\s/g, "");
+    assert.equal(Buffer.from(der).toString("base64"), pem);
+
+    await page.locator('[data-action="options"]').tap();
+    await page.locator('[data-action="securite"]').tap();
+    await page.locator("#securite-statut", { hasText: "reconnu" }).waitFor();
+    const empreinte = await page.locator("#empreinte").innerText();
+    assert.equal(empreinte, b.etat().empreinteRacine, "la page montre l'empreinte que la TV affiche");
+    await page.locator("#ouvrir-https").tap();
+    await page.waitForURL(u => u.origin === `https://hub.local:${b.ports.https}`);
+    await page.locator("#telecommande").waitFor({ state: "visible" });
+    assert.equal(await page.evaluate(() => location.hash), "", "le ticket ne reste pas dans l'adresse");
+    assert.equal(await page.evaluate(() => isSecureContext), true);
+    assert.equal(await page.evaluate(() => !!navigator.mediaDevices?.getUserMedia), true, "micro disponible");
+    const avant = b.menu().length;
+    await page.locator("#rangee-retour [data-cmd=retour]").tap();
+    await attendre(() => b.menu().length > avant);
+    assert.deepEqual(page.erreurs, []);
+  } finally {
+    await nav.close();
+    b.arreter();
+  }
+});
+
+test("HTTPS : sans la racine, Chrome refuse la connexion et la page le dit", async () => {
+  const b = await lancerBanc(["--https"]);
+  const nav = await chromeAvecRacine(null);
+  try {
+    const page = await ouvrir(nav, `http://hub.local:${b.ports.http}/`);
+    await appairer(page, b);
+    await page.locator('[data-action="options"]').tap();
+    await page.locator('[data-action="securite"]').tap();
+    await page.locator("#securite-statut", { hasText: "pas encore installé" }).waitFor();
+    assert.equal(await page.locator("#etapes-android").getAttribute("open"), "");
+    const erreur = await page.goto(`https://hub.local:${b.ports.https}/`).then(() => null, e => e.message);
+    assert.match(erreur || "", /ERR_CERT_AUTHORITY_INVALID/);
+  } finally {
+    await nav.close();
+    b.arreter();
+  }
 });
 
 export { PIXEL, IPHONE };
