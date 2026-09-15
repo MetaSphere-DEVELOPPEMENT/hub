@@ -487,6 +487,10 @@ etape_telecommande() {
     faire ln -sfn "$lib/telecommande/hub_telecommande.py" /usr/local/bin/hub-telecommande || return 1
     ok "/usr/local/bin/hub-telecommande"
   fi
+  # Le HTTPS local (dictée) fabrique son autorité avec openssl, présent sur toute
+  # Ubuntu ; sans lui la télécommande reste en http, sans micro.
+  command -v openssl >/dev/null ||
+    alerte "openssl absent : télécommande en http seul, dictée depuis le téléphone indisponible"
   poser "$tel/hub-telecommande.service" /usr/local/lib/systemd/user/hub-telecommande.service 0644 || return 1
   activer_unite_globale hub-telecommande.service || return 1
 
@@ -498,14 +502,18 @@ etape_telecommande() {
     iface=$(ip -4 route show default 2>/dev/null | awk '{print $5; exit}')
     reseau=$(ip -4 -o addr show dev "${iface:-lo}" 2>/dev/null | awk '{print $4; exit}' |
              python3 -c 'import ipaddress,sys; print(ipaddress.ip_interface(sys.stdin.read().strip()).network)' 2>/dev/null)
-    if [ -z "$reseau" ]; then
-      alerte "ufw actif mais réseau local introuvable : port 8790 non ouvert, la télécommande sera bloquée"
-    elif LC_ALL=C ufw status 2>/dev/null | grep -Eq "^8790/tcp[[:space:]]+ALLOW[[:space:]]+$reseau\b"; then
-      deja "ufw : 8790/tcp ouvert à $reseau"
-    else
-      faire ufw allow from "$reseau" to any port 8790 proto tcp || return 1
-      ok "ufw : 8790/tcp ouvert à $reseau seulement"
-    fi
+    # 8790 : la page http (QR code) ; 8791 : son double HTTPS, pour la dictée.
+    local port
+    for port in 8790 8791; do
+      if [ -z "$reseau" ]; then
+        alerte "ufw actif mais réseau local introuvable : port $port non ouvert, la télécommande sera bloquée"
+      elif LC_ALL=C ufw status 2>/dev/null | grep -Eq "^$port/tcp[[:space:]]+ALLOW[[:space:]]+$reseau\b"; then
+        deja "ufw : $port/tcp ouvert à $reseau"
+      else
+        faire ufw allow from "$reseau" to any port "$port" proto tcp || return 1
+        ok "ufw : $port/tcp ouvert à $reseau seulement"
+      fi
+    done
   fi
 }
 
