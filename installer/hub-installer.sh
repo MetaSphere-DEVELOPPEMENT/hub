@@ -822,6 +822,111 @@ etape_navigateur() {
   fi
 }
 
+# ── 12. Temps d'écran ─────────────────────────────────────────────────────────
+etape_temps_ecran() {
+  etape "12. Temps d'écran par profil"
+  if [ ! -f "$DEPOT/hub-temps-ecran" ]; then
+    deja "hub-temps-ecran absent du dépôt — étape sautée"
+    return 0
+  fi
+  # gnome-kiosk-script lance les modes à travers lui ; s'il manque, les modes se lancent
+  # sans décompte. libnotify-bin : l'avertissement dans la session Ubuntu (notify-send).
+  installer_paquets -- libnotify-bin || return 1
+  poser "$DEPOT/hub-temps-ecran" /usr/local/bin/hub-temps-ecran 0755 || return 1
+  # Le bureau est une autre session : il y est compté par un autostart (OnlyShowIn=ubuntu).
+  poser "$DEPOT/hub-temps-ecran-bureau.desktop" /etc/xdg/autostart/hub-temps-ecran-bureau.desktop 0644 || return 1
+  if [ -d "$MAISON/.local/state/hub" ]; then
+    deja "$MAISON/.local/state/hub/ (temps-ecran.json)"
+  else
+    faire runuser -u "$UTILISATEUR" -- mkdir -p "$MAISON/.local/state/hub" || return 1
+    ok "$MAISON/.local/state/hub/ (temps-ecran.json y sera tenu)"
+  fi
+}
+
+# ── 13. Allumage programmé et Wake-on-LAN ─────────────────────────────────────
+# Wake-on-LAN sur les cartes Ethernet physiques. Deux réglages parce qu'aucun ne suffit
+# seul : ethtool agit tout de suite mais s'oublie au redémarrage, NetworkManager le
+# remet à chaque connexion (802-3-ethernet.wake-on-lan).
+activer_wake_on_lan() {
+  local carte nom mac trouve=0 uuid type
+  for carte in /sys/class/net/*; do
+    [ "$(cat "$carte/type" 2>/dev/null)" = 1 ] && [ -e "$carte/device" ] && [ ! -e "$carte/wireless" ] || continue
+    nom=${carte##*/}; mac=$(cat "$carte/address" 2>/dev/null); trouve=1
+    if ! ethtool "$nom" 2>/dev/null | grep -q '^[[:space:]]*Supports Wake-on:.*g'; then
+      alerte "$nom ne se réveille pas par paquet magique (ethtool : Supports Wake-on sans « g »)"
+      continue
+    fi
+    if ethtool "$nom" 2>/dev/null | grep -q '^[[:space:]]*Wake-on:.*g'; then
+      deja "$nom : Wake-on-LAN actif"
+    else
+      faire ethtool -s "$nom" wol g || return 1
+      ok "$nom : Wake-on-LAN actif"
+    fi
+    ok "$nom : adresse MAC $mac — à enregistrer dans l'application Wake-on-LAN du téléphone"
+  done
+  [ "$trouve" = 1 ] || alerte "aucune carte Ethernet : pas d'allumage à distance (le wifi ne le permet pas)"
+  command -v nmcli >/dev/null || { alerte "nmcli absent : Wake-on-LAN à réactiver après chaque redémarrage"; return 0; }
+  while IFS=: read -r uuid type; do
+    [ "$type" = 802-3-ethernet ] || continue
+    if nmcli -g 802-3-ethernet.wake-on-lan connection show "$uuid" 2>/dev/null | grep -q magic; then
+      deja "NetworkManager : Wake-on-LAN gardé pour la connexion $uuid"
+    else
+      faire nmcli connection modify "$uuid" 802-3-ethernet.wake-on-lan magic || return 1
+      ok "NetworkManager : Wake-on-LAN gardé pour la connexion $uuid"
+    fi
+  done < <(nmcli -g UUID,TYPE connection show 2>/dev/null)
+  alerte "BIOS (F1) : « Wake on LAN » activé et « Enhanced Power Saving Mode » désactivé, sinon la carte dort à l'arrêt"
+}
+
+etape_allumage() {
+  etape "13. Allumage programmé et Wake-on-LAN"
+  local al="$DEPOT/allumage"
+  if [ ! -f "$al/hub-allumage" ] || [ ! -f "$al/hub-allumage.service" ]; then
+    deja "aucun allumage programmé dans le dépôt ($al) — étape sautée"
+    return 0
+  fi
+  command -v rtcwake >/dev/null || installer_paquets -- util-linux || return 1
+  poser "$al/hub-allumage" /usr/local/bin/hub-allumage 0755 || return 1
+  poser "$al/hub-allumage.service" /etc/systemd/system/hub-allumage.service 0644 || return 1
+  poser "$al/hub-allumage-demarrage.service" /etc/systemd/system/hub-allumage-demarrage.service 0644 || return 1
+  poser "$al/50-hub-allumage.rules" /etc/polkit-1/rules.d/50-hub-allumage.rules 0644 || return 1
+  if [ "$POUR_DE_VRAI" != 1 ] ||
+     [ "$(systemctl show -p NeedDaemonReload --value hub-allumage.service 2>/dev/null)" = yes ] ||
+     [ "$(systemctl show -p LoadState --value hub-allumage-demarrage.service 2>/dev/null)" != loaded ]; then
+    faire systemctl daemon-reload || return 1
+  fi
+  # Le groupe que la règle polkit autorise ; le même que pour la mise à jour.
+  if getent group hub >/dev/null; then deja "groupe hub"; else faire groupadd hub || return 1; ok "groupe hub"; fi
+  if id -nG "$UTILISATEUR" 2>/dev/null | tr ' ' '\n' | grep -qx hub; then
+    deja "$UTILISATEUR dans le groupe hub"
+  else
+    faire usermod -aG hub "$UTILISATEUR" || return 1
+    ok "$UTILISATEUR dans le groupe hub (effectif à la prochaine session)"
+  fi
+  local env_voulu="HUB_UTILISATEUR=$UTILISATEUR"
+  if [ "$(cat /etc/hub/allumage.env 2>/dev/null)" = "$env_voulu" ]; then
+    deja "/etc/hub/allumage.env"
+  elif [ "$POUR_DE_VRAI" = 1 ]; then
+    install -d -m 0755 /etc/hub && printf '%s\n' "$env_voulu" >/etc/hub/allumage.env && chmod 0644 /etc/hub/allumage.env ||
+      { echec "écriture de /etc/hub/allumage.env"; return 1; }
+    ok "/etc/hub/allumage.env ($env_voulu)"
+  else
+    faire "écrire $env_voulu dans /etc/hub/allumage.env"
+  fi
+  if [ -d /var/lib/hub ]; then deja "/var/lib/hub/"; else faire install -d -m 0755 /var/lib/hub || return 1; ok "/var/lib/hub/"; fi
+  # Pas de démarrage maintenant : le programme se réarme au prochain démarrage, et le
+  # menu le relance à chaque changement d'horaire.
+  if [ "$(systemctl is-enabled hub-allumage-demarrage.service 2>/dev/null)" = enabled ]; then
+    deja "hub-allumage-demarrage.service activé"
+  else
+    faire systemctl enable hub-allumage-demarrage.service || return 1
+    ok "hub-allumage-demarrage.service activé (réveil détecté et réarmé à chaque démarrage)"
+  fi
+  [ -e /sys/class/rtc/rtc0/wakealarm ] ||
+    alerte "pas d'alarme d'horloge (/sys/class/rtc/rtc0/wakealarm) : l'allumage programmé ne pourra pas marcher ici"
+  activer_wake_on_lan
+}
+
 etape_mesure
 etape_session
 etape_accueil
@@ -830,6 +935,9 @@ etape_telecommande
 etape_demarrage
 etape_habillage
 etape_mise_a_jour
+# Sans téléchargement lourd : avant la voix et Chrome.
+etape_temps_ecran
+etape_allumage
 # La voix vient après la bascule du démarrage : elle télécharge (pip, modèles) et un
 # réseau capricieux ne doit pas priver le salon de son HUB. Son échec reste compté.
 etape_voix
@@ -844,6 +952,8 @@ cat <<'RESTE'
   [ ] relancer audit/audit.sh une fois la TV branchée, pour les trois mesures
       qui n'existent qu'à ce moment-là
   [ ] régler l'audio de Kodi après mesure (ARCHITECTURE.md, section Audio)
+  [ ] BIOS : Automatic Power On (réveil programmé), Wake on LAN, Enhanced Power Saving
+      Mode désactivé ; éprouver avec sudo rtcwake -m off -s 120 (installer/allumage/README.md)
   [ ] vérifier le décodage matériel de Chrome : vainfo, puis chrome://gpu (hub-web --essai)
 RESTE
 printf '\n'
