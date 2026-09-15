@@ -1,0 +1,11 @@
+# Adaptateur USB-CEC Pulse-Eight — /etc/udev/rules/70-hub-cec.rules
+#
+# uaccess : logind donne le port à l'utilisateur de la session active, sans l'ajouter
+# au groupe dialout (qui ouvrirait tous les ports série, et ne prendrait effet
+# qu'après une reconnexion). Le numéro 70 place la règle avant 73-seat-late.rules, qui
+# applique les étiquettes uaccess.
+#
+# ID_MM_DEVICE_IGNORE : ModemManager sonde les /dev/ttyACM* en leur envoyant des
+# commandes de modem ; il ne doit pas toucher l'adaptateur pendant que libcec lui parle.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2548", ATTRS{idProduct}=="1001", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2548", ATTRS{idProduct}=="1002", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"

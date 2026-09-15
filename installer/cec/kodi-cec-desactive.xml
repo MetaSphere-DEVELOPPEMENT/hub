@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Posé par le HUB dans ~/.kodi/userdata/peripheral_data/cec_2548_100x.xml.
+     Mode « relais » : c'est hub-cec qui tient l'adaptateur et transmet les touches à
+     Kodi. Si Kodi l'ouvrait aussi, il échouerait (verrou de libcec) et afficherait
+     une erreur à chaque lancement. Nom et format tirés de Kodi 21.3
+     (xbmc/peripherals/devices/Peripheral.cpp : « peripheral_data/{bus}_{vendeur}_{produit}.xml »,
+     éléments <setting id value>). Les réglages absents gardent leur valeur par défaut. -->
+<settings>
+    <setting id="enabled" value="0" />
+</settings>

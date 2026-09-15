@@ -1,0 +1,55 @@
+# Trace de cec-client (-t r -d 13) : télécommande d'une TV Sony, adaptateur en adresse logique 1.
+#
+# RECONSTITUÉE, PAS ENREGISTRÉE : le M720q n'a pas encore d'adaptateur. Chaque ligne suit
+# à l'octet près les formats de libcec 7.1.1 :
+#   - préfixe et horodatage : cec-client.cpp, CecLogMessage (« %s[%16lld]\t%s ») ;
+#   - trame reçue : CECTypeUtils.h, ToString(cec_command) (« >> %1x%1x » puis « :%02x ») ;
+#   - trame émise : CECProcessor.cpp, LogOutput (« << %02x ») ;
+#   - « waiting for input » (ligne 1426), « opening a connection… », « autodetect » : cec-client.cpp, main ;
+#   - « connection opened » : CECProcessor.cpp (ligne 190).
+# Le contenu CEC est celui de la norme : 0f:87:08:00:46 = identifiant constructeur Sony
+# (0x080046) diffusé par la TV ; 01:44:xx / 01:45 = User Control Pressed / Released de la
+# TV (0) vers l'enregistreur 1 ; touches de cec_user_control_code (cectypes.h).
+# À remplacer par une vraie capture dès que l'adaptateur est branché :
+#   cec-client -t r -o HUB -d 13 | tee sony-bravia-reelle.log
+#
+# Les lignes « # » et vides sont ignorées par le simulateur.
+No device type given. Using 'recording device'
+CEC Parser created - libCEC version 7.1.1
+no serial port given. trying autodetect:
+ path:     /sys/devices/pci0000:00/0000:00:14.0/usb1/1-2
+ com port: /dev/ttyACM0
+
+opening a connection to the CEC adapter...
+NOTICE:  [             102]	connection opened
+TRAFFIC: [             140]	<< 1f:84:10:00:01
+TRAFFIC: [             310]	>> 0f:87:08:00:46
+waiting for input
+# Bas, bas, OK : appuis francs, relâchés
+TRAFFIC: [            2000]	>> 01:44:02
+TRAFFIC: [            2150]	>> 01:45
+TRAFFIC: [            2600]	>> 01:44:02
+TRAFFIC: [            2740]	>> 01:45
+TRAFFIC: [            3200]	>> 01:44:00
+TRAFFIC: [            3330]	>> 01:45
+# Retour, appui court (EXIT, 0x0D : la touche BACK des Sony)
+TRAFFIC: [            4000]	>> 01:44:0d
+TRAFFIC: [            4160]	>> 01:45
+# Droite tenue : la TV répète la trame toutes les ~500 ms
+TRAFFIC: [            5000]	>> 01:44:04
+TRAFFIC: [            5500]	>> 01:44:04
+TRAFFIC: [            6000]	>> 01:44:04
+TRAFFIC: [            6100]	>> 01:45
+# Retour tenu 2 s : accueil
+TRAFFIC: [            7000]	>> 01:44:0d
+TRAFFIC: [            7500]	>> 01:44:0d
+TRAFFIC: [            8000]	>> 01:44:0d
+TRAFFIC: [            8500]	>> 01:44:0d
+TRAFFIC: [            9000]	>> 01:45
+# Une touche que le HUB ne connaît pas (rouge, F2) : ignorée
+TRAFFIC: [            9500]	>> 01:44:72
+TRAFFIC: [            9600]	>> 01:45
+# Interrogation d'une adresse par la TV (trame sans opcode) : ignorée
+TRAFFIC: [            9800]	>> 01
+# La TV part en veille
+TRAFFIC: [           10000]	>> 0f:36

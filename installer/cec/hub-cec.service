@@ -1,0 +1,28 @@
+# Télécommande de la TV (HDMI-CEC) — /usr/local/lib/systemd/user/hub-cec.service
+#
+# Service UTILISATEUR, comme la voix : il parle au socket du menu ($XDG_RUNTIME_DIR),
+# lit ~/.config/hub/reglages.json et doit voir les processus Kodi de l'utilisateur.
+# L'accès à l'adaptateur (/dev/ttyACM*) vient de la règle udev 70-hub-cec.rules
+# (uaccess : l'utilisateur assis devant la machine), pas du groupe dialout.
+#
+# Attaché à graphical-session.target : il vit avec la session, kiosque ou bureau.
+
+[Unit]
+Description=Télécommande de la TV par HDMI-CEC pour le HUB
+Documentation=file:///usr/local/lib/hub/cec/README.md
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/lib/hub/cec/hub-cec.py
+Restart=on-failure
+RestartSec=5
+# 78 : cec-client absent (paquet cec-utils). Relancer n'y changera rien.
+RestartPreventExitStatus=78
+# À l'arrêt de la machine, le service met la TV en veille : il lui faut le temps
+# d'envoyer l'ordre (1 s) et de fermer cec-client proprement.
+TimeoutStopSec=10
+
+[Install]
+WantedBy=graphical-session.target
