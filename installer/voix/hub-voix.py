@@ -67,6 +67,11 @@ def chemin_socket():
     return Path(runtime) / "hub" / "menu.sock"
 
 
+def chemin_pid_web():
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    return Path(runtime) / "hub" / "web.pid"
+
+
 def chemin_reglages():
     config = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
     return Path(config) / "hub" / "reglages.json"
@@ -132,9 +137,12 @@ class Actions:
         est_retour = evenement == "retour"
         cible = L.cible(evenement, menu_ouvert=False,
                         kodi=est_retour and bool(L.processus(L.NOMS_KODI)),
-                        bureau=est_retour and bool(L.processus(L.NOMS_BUREAU)))
+                        bureau=est_retour and bool(L.processus(L.NOMS_BUREAU)),
+                        web=est_retour and L.web_en_cours(chemin_pid_web()))
         if cible and self.simuler:
             journal.info("(simulé) %s → %s", evenement, cible)
+        elif cible == "web":
+            fermer_web()
         elif cible == "kodi":
             quitter_kodi()
         elif cible == "bureau":
@@ -149,6 +157,16 @@ def lancer(commande):
                               stderr=subprocess.DEVNULL).returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
+
+
+def fermer_web():
+    """hub-web ferme lui-même son navigateur : c'est lui qui sait le faire proprement."""
+    programme = shutil.which("hub-web") or "/usr/local/bin/hub-web"
+    if lancer([programme, "--fermer"]):
+        journal.info("retour : service web fermé (hub-web --fermer)")
+        return True
+    journal.warning("retour : hub-web --fermer a échoué")
+    return False
 
 
 def quitter_kodi():
