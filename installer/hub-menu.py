@@ -624,6 +624,78 @@ def etat_mise_a_jour(chemin=ETAT_MISE_A_JOUR):
     return donnees if isinstance(donnees, dict) and isinstance(donnees.get("etape"), str) else None
 
 
+# ── Temps d'écran et allumage ─────────────────────────────────────────────
+def programme_voisin(nom):
+    """hub-temps-ecran et hub-allumage sont des programmes à part (l'un tourne autour des
+    modes, l'autre en root) ; le menu réutilise leur logique au lieu de la recopier.
+    Installés à côté de hub-menu dans /usr/local/bin ; dans le dépôt, à côté aussi ou
+    dans leur dossier."""
+    import importlib.machinery
+    import importlib.util
+    ici = Path(__file__).resolve().parent
+    for chemin in (ici / nom, ici / "allumage" / nom):
+        if chemin.is_file():
+            chargeur = importlib.machinery.SourceFileLoader(nom.replace("-", "_"), str(chemin))
+            module = importlib.util.module_from_spec(importlib.util.spec_from_loader(chargeur.name, chargeur))
+            try:
+                chargeur.exec_module(module)
+            except (OSError, SyntaxError):
+                return None
+            return module
+    return None
+
+
+def temps_ecran(maintenant=None):
+    te = programme_voisin("hub-temps-ecran")
+    if not te:
+        return None
+    return te.resume(te.lire_etat(te.chemins()["etat"]), maintenant or time.time())
+
+
+def prolonger_temps(profil, minutes, maintenant=None):
+    """Accordé par un code parent vérifié dans la page (verrou familial, comme les
+    profils) ; ici on borne seulement ce qui peut s'écrire."""
+    if not isinstance(profil, str) or not 0 < len(profil) <= 64 or minutes not in (15, 30, 60) or isinstance(minutes, bool):
+        return None
+    te = programme_voisin("hub-temps-ecran")
+    if not te:
+        return None
+    maintenant = maintenant or time.time()
+    chemin = te.chemins()["etat"]
+    te.modifier_etat(chemin, lambda e: te.prolonger(e, profil, minutes, maintenant), maintenant)
+    return te.resume(te.lire_etat(chemin), maintenant)
+
+
+ETAT_ALLUMAGE = Path("/var/lib/hub/allumage.json")
+SIGNAL_REVEIL = Path("/run/hub-allumage/reveil")
+
+
+def reveil_programme(signal=SIGNAL_REVEIL, deja_ouvert=False):
+    """Allumé par le réveil programmé : le premier menu ouvre le mode ambiant."""
+    return not deja_ouvert and Path(signal).is_file()
+
+
+def etat_allumage(chemin=ETAT_ALLUMAGE):
+    al = programme_voisin("hub-allumage")
+    etat = lire_json(chemin)
+    etat = etat if isinstance(etat, dict) else {}
+    return {
+        "reveil": etat.get("reveil"),
+        "extinction": etat.get("extinction"),
+        "erreur": etat.get("erreur"),
+        "ethernet": al.cartes_ethernet() if al else [],
+    }
+
+
+def appliquer_allumage(executer=subprocess.run):
+    # Même modèle que la mise à jour : service root, démarrable par le groupe hub seul.
+    try:
+        r = executer(["systemctl", "start", "--no-block", "hub-allumage.service"], capture_output=True, text=True)
+    except OSError:
+        return False
+    return r.returncode == 0
+
+
 # ── Messages ──────────────────────────────────────────────────────────────
 def message_voix(datagramme):
     """Traduit un datagramme de hub-voix en message pour la page, ou None."""
@@ -722,6 +794,9 @@ def lancer():
                 "services": services_disponibles(),
                 # Le choix du profil se fait à l'allumage, pas à chaque retour de Kodi.
                 "retour": deja_ouvert,
+                "tempsEcran": temps_ecran(),
+                "allumage": etat_allumage(),
+                "reveilProgramme": reveil_programme(deja_ouvert=deja_ouvert),
             }
             cache = lire_json(c["meteo"])
             if cache and "donnees" in cache:
@@ -846,6 +921,23 @@ def lancer():
                 self.en_fond(lambda: {"type": "avatars", "liste": avatars()})
             elif genre == "infos":
                 self.en_fond(lambda: {"type": "infos", **infos()})
+            elif genre == "temps-ecran":
+                self.en_fond(lambda: {"type": "temps-ecran", "etat": temps_ecran()})
+            elif genre == "temps-prolonger":
+                profil, minutes = message.get("profil"), message.get("minutes")
+                self.en_fond(lambda: {"type": "temps-ecran", "etat": prolonger_temps(profil, minutes) or temps_ecran()})
+            elif genre == "cadre":
+                album = message.get("album") if isinstance(message.get("album"), str) else None
+                self.en_fond(lambda: cadre(album, message.get("souvenirs") is True))
+            elif genre == "allumage-appliquer":
+                def armer():
+                    lance = appliquer_allumage()
+                    # Le service tourne en quelques dixièmes de seconde : on relit après.
+                    time.sleep(2)
+                    return {"type": "allumage", "lance": lance, **etat_allumage()}
+                self.en_fond(armer)
+            elif genre == "allumage-etat":
+                self.en_fond(lambda: {"type": "allumage", **etat_allumage()})
 
         # La voix ──────────────────────────────────────────────────────────
         def ecouter_voix(self):
