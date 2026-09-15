@@ -10,7 +10,7 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { spawn, execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, mkdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -344,6 +344,75 @@ test("HTTPS : sans la racine, Chrome refuse la connexion et la page le dit", asy
     assert.equal(await page.locator("#etapes-android").getAttribute("open"), "");
     const erreur = await page.goto(`https://hub.local:${b.ports.https}/`).then(() => null, e => e.message);
     assert.match(erreur || "", /ERR_CERT_AUTHORITY_INVALID/);
+  } finally {
+    await nav.close();
+    b.arreter();
+  }
+});
+
+// ── Dictée ──────────────────────────────────────────────────────────────────
+// Le micro de Chrome est remplacé par un fichier son (option de Chrome pour les
+// tests), et la page tourne en https vérifié, comme sur le téléphone. Avec
+// HUB_VOIX_PYTHON, HUB_VOIX_MODELES et HUB_TEST_DICTEE_WAV (« Télé. » enregistré),
+// c'est le vrai Vosk qui reconnaît ; sinon le banc répond « télé » à tout son assez
+// fort, et le test prouve la capture, le format et le chemin jusqu'au menu.
+function sonDeSecours() {
+  const taux = 48000, duree = 3, n = taux * duree;
+  const b = Buffer.alloc(44 + n * 2);
+  b.write("RIFF", 0); b.writeUInt32LE(36 + n * 2, 4); b.write("WAVE", 8); b.write("fmt ", 12);
+  b.writeUInt32LE(16, 16); b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22); b.writeUInt32LE(taux, 24);
+  b.writeUInt32LE(taux * 2, 28); b.writeUInt16LE(2, 32); b.writeUInt16LE(16, 34); b.write("data", 36);
+  b.writeUInt32LE(n * 2, 40);
+  for (let i = 0; i < n; i++) b.writeInt16LE(Math.round(12000 * Math.sin(2 * Math.PI * 220 * i / taux)), 44 + i * 2);
+  const f = path.join(mkdtempSync(path.join(tmpdir(), "hub-son-")), "son.wav");
+  writeFileSync(f, b);
+  return f;
+}
+
+test("dictée : maintenir, parler, relâcher → commande reconnue → datagrammes au menu", async () => {
+  const vrai = process.env.HUB_VOIX_PYTHON && process.env.HUB_VOIX_MODELES && process.env.HUB_TEST_DICTEE_WAV;
+  const son = vrai ? process.env.HUB_TEST_DICTEE_WAV : sonDeSecours();
+  const b = await lancerBanc(["--https"]);
+  const nav = await chromeAvecRacine(b.ports.racine, [
+    "--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream", `--use-file-for-fake-audio-capture=${son}`,
+  ]);
+  try {
+    const page = await ouvrir(nav, `https://hub.local:${b.ports.https}/`);
+    await appairer(page, b);
+    const micro = await page.locator("#micro").boundingBox();
+    const cdp = await page.context().newCDPSession(page);
+    const point = [{ x: micro.x + micro.width / 2, y: micro.y + micro.height / 2, id: 0 }];
+    const avant = b.menu().length;
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: point });
+    await page.locator("#micro.ecoute").waitFor();
+    await new Promise(ok => setTimeout(ok, 2900));
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    const recu = await attendre(() => { const r = b.menu().slice(avant); return r.includes("voix:repos") && r; }, 40000);
+    assert.match(recu[0], /^voix:entendu:(télé ?)+$/, recu.join(" | "));
+    assert.deepEqual(recu.slice(1), ["tv", "voix:repos"]);
+    await page.locator("#message", { hasText: "→ TV" }).waitFor();
+    if (!vrai) {
+      const d = JSON.parse(readFileSync(path.join(b.dossier, "dictee.json"), "utf8"));
+      assert.ok(d.secondes > 2 && d.secondes < 4, `durée envoyée ${d.secondes} s`);
+    }
+    assert.equal(await page.locator("#micro").getAttribute("class"), "touche micro");
+    assert.deepEqual(page.erreurs, []);
+    console.log(`# dictée prouvée avec ${vrai ? "le vrai Vosk" : "le reconnaisseur par énergie (Vosk non fourni)"}`);
+  } finally {
+    await nav.close();
+    b.arreter();
+  }
+});
+
+test("dictée : en http (non sécurisé), le micro ouvre la marche à suivre au lieu d'échouer", async () => {
+  const b = await lancerBanc(["--https"]);
+  const nav = await chromeAvecRacine(null);
+  try {
+    const page = await ouvrir(nav, `http://hub.local:${b.ports.http}/`);
+    await appairer(page, b);
+    await page.locator("#micro").tap();
+    await page.locator("#securite").waitFor({ state: "visible" });
+    assert.equal(b.menu().length, 0);
   } finally {
     await nav.close();
     b.arreter();

@@ -31,6 +31,7 @@ import fcntl
 import hashlib
 import hmac
 import importlib.util
+import io
 import ipaddress
 import json
 import logging
@@ -38,6 +39,7 @@ import math
 import os
 import re
 import secrets
+import select
 import shutil
 import signal
 import socket
@@ -49,6 +51,7 @@ import tempfile
 import threading
 import time
 import urllib.request
+import wave
 import zlib
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -151,6 +154,185 @@ def _processus(noms):
 
 NOMS_KODI = frozenset(VOIX.NOMS_KODI) if VOIX else frozenset({"kodi", "kodi.bin"})
 NOMS_BUREAU = frozenset(VOIX.NOMS_BUREAU) if VOIX else frozenset({"gnome-shell"})
+
+
+# ── Dictée : la reconnaissance de hub-voix, dans un processus à part ──────────
+# POURQUOI « MAINTENIR POUR PARLER » ET VOSK SUR LE HUB, PLUTÔT QUE LA RECONNAISSANCE
+# DU NAVIGATEUR (Web Speech API).
+# - Même chemin sur Android et iPhone : la page capture le son (Web Audio), le HUB
+#   reconnaît. La Web Speech API envoie la voix aux serveurs de Google (Chrome) ou
+#   d'Apple (Safari), et sur iPhone elle est capricieuse dans une app d'écran d'accueil.
+# - Hors ligne et fidèle au HUB : même modèle, même grammaire restreinte et même
+#   analyse que la commande vocale du salon (installer/voix), donc les mêmes phrases.
+# - Les deux exigent de toute façon le contexte sécurisé (le micro) : HTTPS local.
+#
+# POURQUOI UN PROCESSUS À PART. Vosk vit dans le venv de hub-voix (/opt/hub-voix/venv),
+# pas dans le Python du système qui fait tourner ce service ; et un modèle de 150 Mo
+# en mémoire n'a rien à faire dans le service réseau quand personne ne dicte. Le
+# travailleur est ce même fichier lancé par le Python du venv, qui importe hub-voix.py
+# (sa classe Reconnaisseur) ; il est démarré à la première dictée et arrêté après
+# 5 minutes sans.
+TAUX_DICTEE = 16000
+DUREE_MAX_DICTEE_S = 10
+TAILLE_MAX_DICTEE = TAUX_DICTEE * 2 * DUREE_MAX_DICTEE_S + 4096
+DUREE_MIN_DICTEE_S = 0.25
+INACTIVITE_DICTEE_S = 300
+# Le premier appel charge le modèle : ~1 s sur la machine de développement, bien plus
+# sur un HUB occupé à décoder une vidéo.
+DELAI_DICTEE_S = 30
+
+
+class DicteeIndisponible(Exception):
+    pass
+
+
+def _fichier_voix(nom):
+    for dossier in (os.environ.get("HUB_VOIX_DOSSIER"), ICI.parent / "voix", "/usr/local/lib/hub/voix",
+                    "/opt/hub-voix"):
+        if dossier and (Path(dossier) / nom).is_file():
+            return Path(dossier) / nom
+    return None
+
+
+def _python_voix():
+    for candidat in (os.environ.get("HUB_VOIX_PYTHON"), "/opt/hub-voix/venv/bin/python"):
+        if candidat and os.access(candidat, os.X_OK):
+            return candidat
+    return sys.executable
+
+
+def pcm_de_wav(octets):
+    """PCM 16 kHz mono 16 bits d'un WAV, ou ValueError. La page n'envoie que ce format :
+    rien à convertir, donc ni ffmpeg ni décodeur de conteneur exposé au réseau."""
+    try:
+        with wave.open(io.BytesIO(octets), "rb") as w:
+            if (w.getframerate(), w.getnchannels(), w.getsampwidth(), w.getcomptype()) != \
+                    (TAUX_DICTEE, 1, 2, "NONE"):
+                raise ValueError("format")
+            pcm = w.readframes(w.getnframes())
+    except (wave.Error, EOFError) as erreur:
+        raise ValueError(str(erreur)) from None
+    if len(pcm) % 2:
+        raise ValueError("format")
+    return pcm
+
+
+class Dicteur:
+    def __init__(self, python=None, script=None, modeles=None, horloge=time.monotonic):
+        self.python = python or _python_voix()
+        self.script = script or _fichier_voix("hub-voix.py")
+        self.modeles = modeles or os.environ.get("HUB_VOIX_MODELES")
+        self.horloge = horloge
+        self._verrou = threading.Lock()
+        self._processus = None
+        self._dernier = 0.0
+
+    def _lancer(self):
+        if not self.script:
+            raise DicteeIndisponible("hub-voix-absent")
+        commande = [self.python, str(ICI / "hub_telecommande.py"), "--travailleur-dictee", str(self.script)]
+        if self.modeles:
+            commande += ["--modeles", str(self.modeles)]
+        try:
+            self._processus = subprocess.Popen(commande, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        except OSError as erreur:
+            raise DicteeIndisponible(f"lancement : {erreur}") from None
+        journal.info("dictée : reconnaisseur lancé (%s)", self.python)
+
+    def _arreter(self):
+        p, self._processus = self._processus, None
+        if p is None:
+            return
+        try:
+            p.stdin.close()
+            p.wait(timeout=2)
+        except (OSError, subprocess.TimeoutExpired):
+            p.kill()
+
+    def reconnaitre(self, pcm, langue):
+        with self._verrou:
+            self._dernier = self.horloge()
+            if self._processus is None or self._processus.poll() is not None:
+                self._processus = None
+                self._lancer()
+            p = self._processus
+            try:
+                p.stdin.write(json.dumps({"langue": langue, "octets": len(pcm)}).encode() + b"\n" + pcm)
+                p.stdin.flush()
+                pret, _, _ = select.select([p.stdout], [], [], DELAI_DICTEE_S)
+                ligne = p.stdout.readline() if pret else b""
+            except OSError:
+                ligne = b""
+            if not ligne:
+                # Mort ou muet : on le remplace à la prochaine dictée plutôt que de
+                # laisser un travailleur coincé répondre au mauvais appel.
+                self._arreter()
+                raise DicteeIndisponible("reconnaisseur-muet")
+            reponse = json.loads(ligne)
+            if "erreur" in reponse:
+                if reponse["erreur"] == "vosk-absent":
+                    self._arreter()
+                raise DicteeIndisponible(reponse["erreur"])
+            return reponse.get("texte") or ""
+
+    def entretien(self):
+        with self._verrou:
+            if self._processus and self.horloge() - self._dernier > INACTIVITE_DICTEE_S:
+                journal.info("dictée : reconnaisseur arrêté (inactif)")
+                self._arreter()
+
+    def arreter(self):
+        with self._verrou:
+            self._arreter()
+
+
+def travailleur_dictee(script, modeles=None):
+    """Boucle du processus reconnaisseur : une ligne JSON {langue, octets} suivie des
+    octets PCM, une ligne JSON {texte} ou {erreur} en réponse."""
+    entree, sortie = sys.stdin.buffer, sys.stdout.buffer
+
+    def repondre(valeur):
+        sortie.write(json.dumps(valeur, ensure_ascii=False).encode("utf-8") + b"\n")
+        sortie.flush()
+
+    erreur, voix, reconnaisseur = None, None, None
+    try:
+        spec = importlib.util.spec_from_file_location("hub_voix", script)
+        voix = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(voix)
+        reconnaisseur = voix.Reconnaisseur(modeles or voix.DOSSIER_MODELES)
+    except ImportError:
+        erreur = "vosk-absent"
+    except Exception as e:  # noqa: BLE001
+        erreur = f"hub-voix : {e}"
+    while True:
+        ligne = entree.readline()
+        if not ligne:
+            return 0
+        try:
+            demande = json.loads(ligne)
+            pcm = entree.read(int(demande["octets"]))
+        except (ValueError, KeyError, TypeError):
+            return 1  # flux désynchronisé : le service relancera un travailleur propre
+        if erreur:
+            repondre({"erreur": erreur})
+            continue
+        langue = demande.get("langue") if demande.get("langue") in voix.L.LANGUES else voix.L.LANGUE_PAR_DEFAUT
+        if not reconnaisseur.disponible(langue):
+            repondre({"erreur": "modele-absent"})
+            continue
+        reconnaisseur.choisir(langue)
+        textes = []
+        # Par blocs de 0,2 s, exactement comme le micro du salon : même découpage des
+        # phrases, donc mêmes résultats que hub-voix.py --fichier.
+        for debut in range(0, len(pcm), voix.BLOC):
+            texte = reconnaisseur.accepter(pcm[debut:debut + voix.BLOC])
+            if texte:
+                textes.append(texte)
+        fin = reconnaisseur.terminer()
+        if fin:
+            textes.append(fin)
+        repondre({"texte": " ".join(textes)})
 
 
 # ── Fichiers ────────────────────────────────────────────────────────────────
@@ -920,8 +1102,9 @@ def nom_du_telephone(nom, agent):
 
 # ── Le service ──────────────────────────────────────────────────────────────
 class Service:
-    def __init__(self, chemins, routeur=None, horloge=time.time, page=None, tls=None):
+    def __init__(self, chemins, routeur=None, horloge=time.time, page=None, tls=None, dicteur=None):
         self.chemins = chemins
+        self.dicteur = dicteur or Dicteur()
         self.horloge = horloge
         # None : HTTPS désactivé. Sinon une AutoriteLocale, prête ou non (tls_pret).
         self.tls = tls
@@ -985,6 +1168,26 @@ class Service:
             except OSError as erreur:
                 journal.error("état non écrit (%s) : la TV n'affichera pas le code", erreur)
 
+    def traiter_dictee(self, texte, langue):
+        """Le texte reconnu devient une commande, routée comme un appui ; le menu
+        affiche ce qui a été entendu, comme pour la voix du salon."""
+        entendu = " ".join(m for m in (texte or "").split() if m != "[unk]")
+        commande = VOIX.analyser(texte or "", langue)[1] if VOIX else None
+        socket_menu = Path(self.chemins["socket"])
+        menu = socket_menu.is_socket()
+        if menu and entendu:
+            borne = entendu.encode("utf-8")[:200].decode("utf-8", errors="ignore")
+            _envoyer_menu(socket_menu, "voix:entendu:" + borne)
+        if commande not in COMMANDES:
+            if menu:
+                _envoyer_menu(socket_menu, "voix:incompris")
+                _envoyer_menu(socket_menu, "voix:repos")
+            return {"ok": False, "cible": None, "raison": "incompris", "texte": entendu, "commande": None}
+        resultat = self.routeur.executer(commande)
+        if menu:
+            _envoyer_menu(socket_menu, "voix:repos")
+        return {**resultat, "texte": entendu, "commande": commande}
+
     def effacer_etat(self):
         # Un QR code vers un service arrêté enverrait le téléphone dans le vide.
         Path(self.chemins["etat"]).unlink(missing_ok=True)
@@ -1047,7 +1250,9 @@ def _gestionnaire(service):
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("Cross-Origin-Opener-Policy", "same-origin")
             self.send_header("Cross-Origin-Resource-Policy", getattr(self, "corp", "same-origin"))
-            self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+            # Le micro pour cette origine seule (la dictée) ; ni caméra (la photo passe par
+            # le sélecteur de fichiers du système, pas par getUserMedia) ni position.
+            self.send_header("Permissions-Policy", "camera=(), microphone=(self), geolocation=()")
             self.send_header("Cache-Control", "no-store")
             super().end_headers()
 
@@ -1224,6 +1429,8 @@ def _gestionnaire(service):
                 return self._oublier()
             if chemin == "/api/transfert":
                 return self._transfert()
+            if chemin == "/api/dictee":
+                return self._dictee()
             self._json(404, {"erreur": "introuvable"})
 
         def _appairer(self):
@@ -1255,6 +1462,34 @@ def _gestionnaire(service):
             service.ecrire_etat()
             journal.info("appairage : %s (%s) depuis %s", nom, ident, ip)
             self._json(200, {"jeton": jeton, "id": ident, "nom": nom})
+
+        def _dictee(self):
+            if not self._jeton():
+                return self._json(401, {"erreur": "jeton"})
+            # audio/wav n'est pas un type « simple » : même garde CORS que le JSON.
+            if self._type() != "audio/wav":
+                return self._json(415, {"erreur": "type"})
+            longueur = self._longueur(TAILLE_MAX_DICTEE)
+            if longueur is None:
+                return
+            octets = self.rfile.read(longueur)
+            try:
+                pcm = pcm_de_wav(octets)
+            except ValueError:
+                return self._json(400, {"erreur": "format"})
+            if len(pcm) < DUREE_MIN_DICTEE_S * TAUX_DICTEE * 2:
+                return self._json(400, {"erreur": "trop-court"})
+            if VOIX is None:
+                return self._json(503, {"erreur": "voix-indisponible", "raison": "hub_voix_logique-absent"})
+            langue = VOIX.lire_reglages(service.chemins["reglages"])[1]
+            try:
+                texte = service.dicteur.reconnaitre(pcm, langue)
+            except DicteeIndisponible as erreur:
+                journal.warning("dictée impossible : %s", erreur)
+                return self._json(503, {"erreur": "voix-indisponible", "raison": str(erreur)})
+            resultat = service.traiter_dictee(texte, langue)
+            journal.info("dictée : « %s » → %s", resultat["texte"], resultat["commande"])
+            self._json(200, resultat)
 
         def _transfert(self):
             if not self._jeton():
@@ -1403,8 +1638,12 @@ def main(argv=None):
     parser.add_argument("--lister", action="store_true", help="téléphones appairés")
     parser.add_argument("--revoquer", metavar="ID", help="retirer un téléphone")
     parser.add_argument("--revoquer-tout", action="store_true", help="retirer tous les téléphones")
+    parser.add_argument("--travailleur-dictee", metavar="HUB_VOIX_PY", help=argparse.SUPPRESS)
+    parser.add_argument("--modeles", help=argparse.SUPPRESS)
     parser.add_argument("-v", "--verbeux", action="store_true")
     args = parser.parse_args(argv)
+    if args.travailleur_dictee:
+        return travailleur_dictee(args.travailleur_dictee, args.modeles)
     logging.basicConfig(level=logging.DEBUG if args.verbeux else logging.INFO,
                         format="%(levelname)s %(message)s", stream=sys.stderr)
     chemins = chemins_par_defaut()
@@ -1464,6 +1703,7 @@ def main(argv=None):
         prochain_certificat = time.monotonic() + 3600
         while not arret.wait(5):
             service.appairage.verifier_expiration()
+            service.dicteur.entretien()
             # Un HUB peut tourner des mois sans redémarrer : le certificat se renouvelle
             # 30 jours avant son terme, en rouvrant l'écoute avec le nouveau.
             if service.tls_pret and time.monotonic() > prochain_certificat:
@@ -1480,6 +1720,7 @@ def main(argv=None):
             serveur.shutdown()
             serveur.server_close()
     service.effacer_etat()
+    service.dicteur.arreter()
     return 0
 
 

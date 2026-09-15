@@ -13,6 +13,7 @@ rien d'autre. Ce n'est pas installé sur le HUB.
 """
 
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -21,6 +22,35 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import hub_telecommande as T  # noqa: E402
+
+
+class DicteurParEnergie:
+    """Sans Vosk sur la machine : « télé » si le son reçu contient de la voix (énergie
+    au-dessus du bruit), rien sinon. Suffit à prouver que la page a capturé, rééchan-
+    tillonné et envoyé un vrai son ; la reconnaissance elle-même est testée à part
+    (test_telecommande.py, TravailleurDictee, avec le vrai modèle)."""
+
+    def __init__(self, dossier):
+        self.dossier = dossier
+
+    def reconnaitre(self, pcm, langue):
+        echantillons = memoryview(pcm).cast("h")
+        energie = max((abs(x) for x in echantillons), default=0)
+        (self.dossier / "dictee.json").write_text(json.dumps(
+            {"secondes": len(echantillons) / 16000, "crete": energie, "langue": langue}))
+        return "télé" if energie > 3000 else ""
+
+    def entretien(self):
+        pass
+
+    def arreter(self):
+        pass
+
+
+def choisir_dicteur(dossier):
+    if os.environ.get("HUB_VOIX_PYTHON") and os.environ.get("HUB_VOIX_MODELES"):
+        return T.Dicteur(script=Path(__file__).resolve().parent.parent / "voix" / "hub-voix.py")
+    return DicteurParEnergie(dossier)
 
 
 def main():
@@ -57,7 +87,7 @@ def main():
 
     routeur = T.Routeur(chemins["socket"], executer=executer, processus=lambda _n: [], kodi_http=None)
     tls = T.AutoriteLocale(chemins["tls"]) if "--https" in options else None
-    service = T.Service(chemins, routeur=routeur, tls=tls)
+    service = T.Service(chemins, routeur=routeur, tls=tls, dicteur=choisir_dicteur(dossier))
     serveurs = T.demarrer_ecoutes(service, "127.0.0.1", 0, 0 if tls else None, sondage=0.05)
     ports = {"http": serveurs[0].server_address[1]}
     if len(serveurs) > 1:

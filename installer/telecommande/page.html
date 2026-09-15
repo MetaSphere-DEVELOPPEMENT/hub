@@ -340,6 +340,20 @@ dialog h2 { font-size: 18px; margin: 4px 4px 14px; }
 .fichier { position: relative; }
 .fichier input { position: absolute; inset: 0; opacity: 0; width: 100%; cursor: pointer; }
 
+/* ── Dictée ──────────────────────────────────────────────────────────────── */
+.micro {
+  width: 100%; min-height: 60px; touch-action: none;
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+}
+.micro svg { color: rgb(var(--tv)); }
+.micro.ecoute {
+  background: rgb(var(--arret) / .20); border-color: rgb(var(--arret) / .55); transform: scale(.98);
+  animation: ecoute 1.1s ease-in-out infinite;
+}
+.micro.ecoute svg { color: rgb(var(--arret)); }
+.micro.analyse { opacity: .7; }
+@keyframes ecoute { 50% { box-shadow: 0 0 0 8px rgb(var(--arret) / .12); } }
+
 /* ── Connexion sécurisée ─────────────────────────────────────────────────── */
 .explication { margin: 0 4px 12px; color: var(--texte-doux); line-height: 1.5; font-size: 15px; }
 .statut-securite {
@@ -500,6 +514,11 @@ details.plateforme ol { margin: 8px 0 0; padding-left: 20px; }
     </button>
   </div>
 
+  <button class="touche micro" id="micro" aria-label="Maintenir pour dicter une commande">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2.5" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
+    <span id="micro-libelle">Maintenir pour parler</span>
+  </button>
+
   <div class="volume" id="rangee-volume" role="group" aria-label="Volume">
     <button class="touche" data-cmd="volume:-" data-repete aria-label="Baisser le volume">−</button>
     <div class="jauge" aria-live="polite">
@@ -511,7 +530,7 @@ details.plateforme ol { margin: 8px 0 0; padding-left: 20px; }
   </div>
 
   <form class="texte" id="form-texte" autocomplete="off">
-    <input id="texte" maxlength="300" placeholder="Envoyer du texte (recherche Kodi)" enterkeyhint="send" aria-label="Texte à envoyer">
+    <input id="texte" maxlength="300" placeholder="Texte pour Kodi (ou micro du clavier)" enterkeyhint="send" aria-label="Texte à envoyer">
     <button type="submit" aria-label="Envoyer le texte">
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
     </button>
@@ -1106,6 +1125,189 @@ addEventListener("beforeinstallprompt", e => {
   if (!$("encart").hidden) $("installer").hidden = false;
 });
 addEventListener("appinstalled", () => { $("encart").hidden = true; invitationInstallation = null; });
+
+// ── Dictée ─────────────────────────────────────────────────────────────────
+// On maintient, on dit « télé » ou « à droite », on relâche. Le son part au HUB, qui
+// le reconnaît hors ligne avec le modèle de la commande vocale du salon.
+//
+// Capture en PCM par Web Audio plutôt que MediaRecorder : Chrome enregistre en
+// WebM/Opus et Safari en MP4/AAC, que le HUB devrait décoder (ffmpeg). Ici la page
+// rend directement le format du reconnaisseur : WAV 16 kHz mono 16 bits.
+// ScriptProcessorNode est ancien, mais présent partout ; un AudioWorklet exigerait
+// un module JS servi à part, hors de la CSP par empreinte.
+const DICTEE = {
+  taux: 16000,
+  minimum: 350,       // ms : en dessous, c'est un appui manqué, pas une phrase
+  maximum: 8000,      // ms : une commande tient en 2 s ; au-delà, le bouton est coincé
+  garderMicro: 30000, // ms : le micro reste ouvert entre deux dictées rapprochées
+};
+const NOMS_COMMANDES = {
+  tv: "TV", gaming: "Jeux", bureau: "Bureau", eteindre: "Éteindre", reglages: "Réglages", aide: "Aide",
+  meteo: "Météo", profils: "Profils", retour: "Retour", gauche: "Gauche", droite: "Droite", haut: "Haut",
+  bas: "Bas", ok: "OK", "theme:clair": "Thème clair", "theme:sombre": "Thème sombre",
+};
+let audio = null, enregistrement = null, micTenu = false, analyseEnCours = false, minuterieMicro = null;
+
+function etatMicro(etat) {
+  const b = $("micro");
+  b.classList.toggle("ecoute", etat === "ecoute");
+  b.classList.toggle("analyse", etat === "analyse");
+  $("micro-libelle").textContent = { ecoute: "Parlez… relâchez pour envoyer", analyse: "Reconnaissance…" }[etat]
+    || "Maintenir pour parler";
+}
+
+async function ouvrirMicro() {
+  if (!audio) audio = { ctx: new (window.AudioContext || window.webkitAudioContext)(), flux: null };
+  clearTimeout(minuterieMicro);
+  // resume() lancé tout de suite, dans le geste : Safari n'accepte le son qu'ainsi.
+  const reprise = audio.ctx.resume();
+  if (!audio.flux || audio.flux.getAudioTracks().every(p => p.readyState === "ended")) {
+    audio.flux = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+  }
+  await reprise;
+}
+
+function fermerMicroPlusTard() {
+  clearTimeout(minuterieMicro);
+  // Le témoin d'enregistrement du téléphone ne doit pas rester allumé pour rien.
+  minuterieMicro = setTimeout(() => {
+    audio?.flux?.getTracks().forEach(p => p.stop());
+    if (audio) audio.flux = null;
+  }, DICTEE.garderMicro);
+}
+
+async function commencerDictee() {
+  if (analyseEnCours || enregistrement) return;
+  if (!isSecureContext || !navigator.mediaDevices?.getUserMedia) { ouvrirSecurite(); return; }
+  micTenu = true;
+  etatMicro("ecoute");
+  vibrer(15);
+  try {
+    await ouvrirMicro();
+  } catch (e) {
+    micTenu = false;
+    etatMicro();
+    message(e?.name === "NotAllowedError"
+      ? "Micro refusé : autorisez-le pour ce site dans les réglages du navigateur"
+      : "Micro indisponible sur ce téléphone");
+    return;
+  }
+  if (!micTenu) {
+    // Relâché pendant la demande d'autorisation : rien à envoyer.
+    etatMicro();
+    fermerMicroPlusTard();
+    message("Micro prêt : maintenez le bouton pendant que vous parlez");
+    return;
+  }
+  const { ctx, flux } = audio;
+  const source = ctx.createMediaStreamSource(flux);
+  const noeud = ctx.createScriptProcessor(4096, 1, 1);
+  const morceaux = [];
+  noeud.onaudioprocess = ev => morceaux.push(new Float32Array(ev.inputBuffer.getChannelData(0)));
+  source.connect(noeud);
+  noeud.connect(ctx.destination);  // sans sortie branchée, Chrome n'appelle pas onaudioprocess (tampon muet)
+  enregistrement = { source, noeud, morceaux, taux: ctx.sampleRate, debut: performance.now(),
+                     limite: setTimeout(finirDictee, DICTEE.maximum) };
+}
+
+function reechantillonner(morceaux, de, vers) {
+  const total = morceaux.reduce((n, m) => n + m.length, 0);
+  const entree = new Float32Array(total);
+  let position = 0;
+  for (const m of morceaux) { entree.set(m, position); position += m.length; }
+  if (de === vers) return entree;
+  const rapport = de / vers;
+  const sortie = new Float32Array(Math.floor(total / rapport));
+  for (let i = 0; i < sortie.length; i++) {
+    if (rapport > 1) {
+      // Moyenne de la fenêtre : un filtre passe-bas grossier mais suffisant contre le
+      // repliement de 48 kHz vers 16 kHz, pour de la parole.
+      const debut = Math.floor(i * rapport), fin = Math.min(total, Math.floor((i + 1) * rapport));
+      let somme = 0;
+      for (let j = debut; j < fin; j++) somme += entree[j];
+      sortie[i] = somme / Math.max(1, fin - debut);
+    } else {
+      const x = i * rapport, j = Math.floor(x), f = x - j;
+      sortie[i] = entree[j] * (1 - f) + (entree[Math.min(j + 1, total - 1)] || 0) * f;
+    }
+  }
+  return sortie;
+}
+
+function encoderWav(echantillons, taux) {
+  const tampon = new ArrayBuffer(44 + echantillons.length * 2);
+  const v = new DataView(tampon);
+  const texte = (o, t) => { for (let i = 0; i < t.length; i++) v.setUint8(o + i, t.charCodeAt(i)); };
+  texte(0, "RIFF"); v.setUint32(4, 36 + echantillons.length * 2, true); texte(8, "WAVE");
+  texte(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, taux, true); v.setUint32(28, taux * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  texte(36, "data"); v.setUint32(40, echantillons.length * 2, true);
+  for (let i = 0; i < echantillons.length; i++) {
+    const x = Math.max(-1, Math.min(1, echantillons[i]));
+    v.setInt16(44 + i * 2, x < 0 ? x * 0x8000 : x * 0x7fff, true);
+  }
+  return tampon;
+}
+
+async function finirDictee() {
+  micTenu = false;
+  const e = enregistrement;
+  enregistrement = null;
+  if (!e) return;
+  clearTimeout(e.limite);
+  e.noeud.onaudioprocess = null;
+  e.source.disconnect();
+  e.noeud.disconnect();
+  fermerMicroPlusTard();
+  if (performance.now() - e.debut < DICTEE.minimum) {
+    etatMicro();
+    message("Maintenez le bouton pendant que vous parlez");
+    return;
+  }
+  analyseEnCours = true;
+  etatMicro("analyse");
+  try {
+    const corps = encoderWav(reechantillonner(e.morceaux, e.taux, DICTEE.taux), DICTEE.taux);
+    const { statut, donnees } = await api("/api/dictee", corps, "audio/wav");
+    marquerEnLigne(true);
+    if (statut === 200 && donnees?.commande) {
+      vibrer([12, 40, 12]);
+      const effet = !donnees.ok && donnees.raison ? ` — ${RAISONS[donnees.raison] || "sans effet"}` : "";
+      message(`« ${donnees.texte} » → ${NOMS_COMMANDES[donnees.commande] || donnees.commande}${effet}`, 3200);
+    } else if (statut === 200) {
+      message(donnees?.texte ? `Pas compris : « ${donnees.texte} »` : "Rien entendu : parlez plus près du téléphone", 3200);
+    } else if (statut === 503) {
+      message("Commande vocale non installée sur le HUB", 3200);
+    } else {
+      message("Dictée refusée par le HUB");
+    }
+  } catch (err) {
+    if (!(err instanceof JetonRefuse)) { marquerEnLigne(false); message("HUB injoignable"); }
+  } finally {
+    analyseEnCours = false;
+    etatMicro();
+  }
+}
+
+{
+  const b = $("micro");
+  b.addEventListener("pointerdown", e => {
+    if (!e.isPrimary) return;
+    e.preventDefault();
+    try { b.setPointerCapture(e.pointerId); } catch { /* déjà relâché */ }
+    commencerDictee();
+  });
+  for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) {
+    b.addEventListener(type, () => { if (micTenu) finirDictee(); });
+  }
+  // Clavier et lecteur d'écran : maintenir Espace ou Entrée.
+  b.addEventListener("keydown", e => {
+    if ((e.key === " " || e.key === "Enter") && !e.repeat) { e.preventDefault(); commencerDictee(); }
+  });
+  b.addEventListener("keyup", e => { if (e.key === " " || e.key === "Enter") finirDictee(); });
+}
 
 // ── Connexion sécurisée ────────────────────────────────────────────────────
 let infoCertificat = null;
