@@ -207,6 +207,31 @@ La première version de l'installateur visait exactement cela.
   musicale n'a rien à faire sur le HUB. Tout add-on binaire ajouté plus tard par apt
   reposera la question une fois — c'est le comportement voulu par Kodi.
 
+### Preuves du 15 septembre 2026
+
+Ubuntu 26.04.1 installée à neuf par autoinstall sur `vm/disque-hub-2.qcow2`
+(`vm/lancer-vm.sh --installer --disque disque-hub-2.qcow2`), dépôt copié, puis
+`sudo installer/hub-installer.sh --pour-de-vrai` : code 0, relance sans rien refaire.
+Captures et journaux dans `vm/preuves-2026-09-15/` (hors git).
+
+- [x] redémarrage → menu HUB, sans écran d'Ubuntu par-dessus (01)
+- [x] Entrée sur TV → Kodi au premier lancement, **sans** « Disabled add-ons » (04)
+- [x] F12 puis Accueil dans Kodi → retour au menu (05, 07)
+- [x] Bureau → bureau Ubuntu sans écran d'accueil → déconnexion → HUB (08–10)
+- [x] JSON-RPC de Kodi : `JSONRPC.Ping` → `pong` sur 127.0.0.1:9090, rien sur les autres adresses
+- [x] session kiosque : `graphical-session.target` atteint, `hub-voix` et
+      `hub-telecommande` actifs ; `telecommande.json` écrit, QR code affiché (13)
+- [x] mise à jour : `systemctl start hub-mise-a-jour.service` lancé **par l'utilisateur,
+      sans sudo** (règle polkit) depuis un dépôt nu local → clone, tests, installateur
+      relancé en root sans terminal, état `terminee`, VERSION mise à jour
+- [x] Plymouth : thème hub dans l'initramfs, écran HUB au démarrage (17)
+- [x] habillage : Kodi teal / violet / orange et bureau Yaru-purple / Yaru-yellow avec
+      fond SVG, selon la couleur du profil (18–21)
+- [x] un échec est vu : `dracut --regenerate-all` en erreur → ✗, code 1, démarrage
+      non basculé ; corrigé depuis (update-initramfs)
+- [ ] le menu n'a affiché ni l'état de la mise à jour ni redémarré (16) ; le bouton
+      « Rechercher » n'est pas atteignable aux flèches (15)
+
 ### Ce que la VM ne prouve pas
 
 Le rendu réel (UHD 630, HDMI, fréquence), l'audio, le démarrage à froid du M720q, et
