@@ -9,13 +9,17 @@ import assert from "node:assert/strict";
 import { chromium } from "playwright-core";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
+import { createHash } from "node:crypto";
 
 const ici = path.dirname(fileURLToPath(import.meta.url));
 const PAGE = pathToFileURL(path.join(ici, "../../installer/menu/index.html")).href;
 
 let navigateur, page;
 
-before(async () => { navigateur = await chromium.launch(); });
+// Le Chrome du système suffit ; HUB_NAVIGATEUR=chromium prend celui de Playwright s'il est installé.
+before(async () => {
+  navigateur = await chromium.launch(process.env.HUB_NAVIGATEUR === "chromium" ? {} : { channel: "chrome" });
+});
 after(async () => { await navigateur?.close(); });
 
 async function ouvrir(initial = {}) {
@@ -231,6 +235,96 @@ test("sans reprise, la ligne n'existe pas et l'intro ne joue qu'à l'allumage", 
   await page.close();
   await ouvrir({});
   assert.ok(await page.isVisible("#intro"));
+});
+
+const PIN_1234 = { sel: "abc", empreinte: createHash("sha256").update("abc:1234").digest("hex") };
+const deuxProfils = extra => ({
+  profilActif: "samuel",
+  profils: [{ id: "samuel", nom: "Samuel", pin: PIN_1234, ...extra }, { id: "alix", nom: "Alix", modes: { tv: true, gaming: true, bureau: false } }],
+  systeme: { meteo: { active: false } },
+});
+
+test("code PIN : le SHA-256 du menu est le vrai SHA-256", async () => {
+  await ouvrir({ retour: true });
+  for (const texte of ["", "abc:1234", "é".repeat(80)]) {
+    assert.equal(await page.evaluate(t => window.hubSha256(t), texte), createHash("sha256").update(texte).digest("hex"));
+  }
+});
+
+test("code PIN : au démarrage, l'accueil reste fermé sans le bon code", async () => {
+  await page?.close();
+  page = await navigateur.newPage({ viewport: { width: 1920, height: 1080 } });
+  await page.route(/open-meteo\.com/, route => route.abort());
+  await page.addInitScript(r => { window.__messages = []; window.webkit = { messageHandlers: { hub: { postMessage: m => window.__messages.push(JSON.parse(m)) } } }; window.HUB_INITIAL = { reglages: r }; }, deuxProfils());
+  await page.goto(PAGE + "?sans-intro");
+  await page.waitForFunction(() => document.querySelector("#code.ouvert"));
+  assert.match(await page.textContent("#code-titre"), /Samuel/);
+  await page.keyboard.type("0000");
+  await page.waitForFunction(() => /incorrect/.test(document.querySelector("#code-detail").textContent));
+  await touche("Escape");
+  assert.deepEqual(await calques(), ["profils"], "annuler mène au choix du profil, pas à l'accueil");
+  await touche("Escape");
+  await page.waitForFunction(() => document.querySelector("#code.ouvert"));
+  await touche("1");
+  assert.deepEqual(await messages("choix"), []);
+  await page.keyboard.type("234");
+  await page.waitForFunction(() => !document.querySelector(".calque.ouvert"));
+  assert.ok(!(await page.evaluate(() => document.body.classList.contains("verrouille"))));
+  await touche("3");
+  await attendreChoix();
+});
+
+test("code PIN : cinq erreurs bloquent la saisie", async () => {
+  await ouvrir({ retour: true, reglages: deuxProfils() });
+  await page.evaluate(() => { window.hub.recevoir({ type: "commande", nom: "profils" }); });
+  await page.click('[data-cle="profil-alix"]');
+  await page.click('[data-cle="profil-samuel"]');
+  for (let i = 0; i < 5; i++) { await page.keyboard.type("9999"); await page.waitForTimeout(260); }
+  await page.waitForFunction(() => /Réessaie dans/.test(document.querySelector("#code-detail").textContent));
+  await page.keyboard.type("1234");
+  await page.waitForTimeout(300);
+  assert.ok(await page.isVisible("#code"), "même le bon code est refusé pendant le blocage");
+});
+
+test("code PIN : le définir dans l'éditeur l'enregistre haché, jamais en clair", async () => {
+  await ouvrir({ retour: true });
+  await touche("p");
+  await page.click('[data-action="gerer-profils"]');
+  await page.click('[data-cle="profil-samuel"]');
+  await page.click('[data-cle="code-definir"]');
+  await page.keyboard.type("2580");
+  await page.waitForFunction(() => /seconde fois/.test(document.querySelector("#code-detail").textContent));
+  await page.keyboard.type("2580");
+  await page.waitForFunction(() => !document.querySelector("#code.ouvert"));
+  await page.click('[data-cle="reglagesProteges-true"]');
+  await page.click('[data-action="enregistrer-profil"]');
+  await attendreReglages(d => !!d.profils[0].pin);
+  const profil = (await messages("reglages")).at(-1).donnees.profils[0];
+  assert.ok(!JSON.stringify(profil).includes("2580"));
+  assert.equal(profil.pin.empreinte, createHash("sha256").update(`${profil.pin.sel}:2580`).digest("hex"));
+  assert.equal(profil.reglagesProteges, true);
+});
+
+test("réglages protégés : R demande le code du profil", async () => {
+  await ouvrir({ retour: true, reglages: deuxProfils({ reglagesProteges: true }) });
+  await touche("r");
+  assert.deepEqual(await calques(), ["code"]);
+  await page.keyboard.type("1234");
+  await page.waitForFunction(() => document.querySelector("#reglages.ouvert"));
+});
+
+test("profil restreint : Bureau masqué et refusé, profils non gérables", async () => {
+  const r = deuxProfils();
+  r.profilActif = "alix";
+  await ouvrir({ retour: true, reglages: r });
+  assert.ok(!(await page.isVisible('[data-mode="bureau"]')));
+  await touche("3");
+  await page.waitForTimeout(700);
+  assert.deepEqual(await messages("choix"), []);
+  assert.match(await page.textContent("#annonce"), /pas autorisé/);
+  await touche("p");
+  assert.ok(!(await page.isVisible('[data-action="gerer-profils"]')));
+  assert.ok(!(await page.isVisible('[data-cle="profil-ajout"]')));
 });
 
 test("météo reçue de hub-menu : puce, alerte pluie et panneau détaillé", async () => {

@@ -818,3 +818,32 @@ body.sans-animation *, body.sans-animation *::before, body.sans-animation *::aft
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition-duration: .01s !important; }
 }
+
+/* ── Profils : portée, restrictions, code ────────────────────────────────── */
+.portee { display: flex; align-items: center; gap: .7rem; margin: -.8rem 0 .4rem; font-size: .95rem; color: var(--texte-doux); }
+.portee .avatar { width: 1.8rem; height: 1.8rem; font-size: .8rem; }
+.portee-hub { margin-left: .7rem; padding: .15rem .55rem; border-radius: 99rem; font-size: .72rem; font-weight: 600; letter-spacing: .04em; vertical-align: .15rem; color: var(--texte-doux); background: var(--verre); box-shadow: inset 0 0 0 1px var(--liseré); }
+.cadenas { display: inline-grid; place-items: center; margin-left: .45rem; vertical-align: -.1rem; }
+.cadenas svg { width: 1em; height: 1em; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; opacity: .8; }
+.nom-tuile { display: flex; align-items: center; }
+
+.dialogue.editeur { width: min(64rem, 94vw); text-align: left; }
+.editeur-colonnes { display: grid; grid-template-columns: 1fr 1fr; gap: 2.4rem; }
+.editeur-identite { text-align: center; }
+.editeur-identite .etiquette-champ { text-align: left; }
+.editeur-securite { padding-left: 2.4rem; box-shadow: inset 1px 0 0 var(--liseré); }
+.editeur-securite .etiquette-champ:first-child { margin-top: .2rem; }
+.options.gauche { justify-content: flex-start; }
+.option[disabled] { opacity: .55; }
+.ligne-protection { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 1rem; font-size: 1rem; }
+
+.code-dialogue { width: 26rem; }
+.code-dialogue .editeur-apercu { margin: 0 auto 1rem; width: 5rem; height: 5rem; font-size: 2.2rem; }
+.points { display: flex; justify-content: center; gap: 1.2rem; margin: 1.6rem 0 1.4rem; }
+.points i { width: 1.1rem; height: 1.1rem; border-radius: 50%; box-shadow: inset 0 0 0 2px var(--texte-pale); transition: background .2s, box-shadow .2s, transform .35s var(--ressort); }
+.points i.plein { background: rgb(var(--accent)); box-shadow: 0 0 1rem rgb(var(--accent) / .7); transform: scale(1.15); }
+.pave { display: grid; grid-template-columns: repeat(3, 1fr); gap: .7rem; }
+.touche-code { height: 3.8rem; border-radius: 1rem; font-size: 1.6rem; font-weight: 600; text-align: center; background: var(--verre); box-shadow: inset 0 0 0 1px var(--liseré); transition: transform .3s var(--ressort), background .2s, box-shadow .2s; }
+.touche-code.focus { background: rgb(var(--accent) / .28); box-shadow: inset 0 0 0 2px rgb(var(--accent)); transform: scale(1.08); }
+
+body.verrouille .centre, body.verrouille .pied .aides { filter: blur(18px); opacity: .35; pointer-events: none; }

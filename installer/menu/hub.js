@@ -44,6 +44,15 @@ const DEFAUTS_PROFIL = {
   horloge: "24",
   animations: "completes",
   dernier: "tv",
+  photo: null,
+  // null : le profil suit le réglage commun du HUB.
+  sons: null,
+  veille: null,
+  meteo: null,
+  pin: null,
+  modes: { tv: true, gaming: true, bureau: true },
+  reglagesProteges: false,
+  verrouVeille: false,
 };
 const DEFAUTS = {
   version: 1,
@@ -130,6 +139,11 @@ let reglages = (() => {
 })();
 
 function profil() { return reglages.profils.find(p => p.id === reglages.profilActif); }
+function meteoProfil() { return profil().meteo || reglages.systeme.meteo; }
+function sonsActifs() { return profil().sons ?? reglages.systeme.sons; }
+function veilleMinutes() { return profil().veille ?? reglages.systeme.veille; }
+function modeAutorise(mode, p = profil()) { return p.modes?.[mode] !== false; }
+function estRestreint(p = profil()) { return ["tv", "gaming", "bureau"].some(m => !modeAutorise(m, p)); }
 
 let minuterieSauvegarde;
 function sauver() {
@@ -158,7 +172,7 @@ function appliquerTextes() {
 // Synthétisés : aucun fichier, et un volume discret, pensé pour un salon.
 let audio;
 function son(nature) {
-  if (!reglages.systeme.sons) return;
+  if (!sonsActifs()) return;
   try {
     audio ||= new AudioContext();
     const notes = { deplacer: [[1320, .035]], ok: [[880, .06], [1320, .09]], retour: [[660, .05], [440, .08]], erreur: [[220, .09], [196, .12]] }[nature];
@@ -429,7 +443,7 @@ function indexHeureCourante() {
 }
 
 function alerteMeteo() {
-  if (!meteo?.hourly || !reglages.systeme.meteo.active) return null;
+  if (!meteo?.hourly || !meteoProfil().active) return null;
   const debut = indexHeureCourante() + 1;
   for (let i = debut; i < debut + 6 && i < meteo.hourly.time.length; i++) {
     if ((meteo.hourly.precipitation_probability?.[i] ?? 0) >= 60) {
@@ -440,7 +454,7 @@ function alerteMeteo() {
 }
 
 function afficherMeteo() {
-  const actif = reglages.systeme.meteo.active && meteo?.current;
+  const actif = meteoProfil().active && meteo?.current;
   $("puce-meteo").hidden = !actif;
   $("ambiant-meteo").innerHTML = "";
   if (!actif) return;
@@ -448,8 +462,8 @@ function afficherMeteo() {
   const nuit = c.is_day === 0;
   $("meteo-picto-puce").innerHTML = pictoMeteo(c.weather_code, nuit);
   $("meteo-temp-puce").textContent = `${Math.round(c.temperature_2m)}°`;
-  $("meteo-ville-puce").textContent = reglages.systeme.meteo.ville;
-  $("ambiant-meteo").innerHTML = `${pictoMeteo(c.weather_code, nuit)}<span>${Math.round(c.temperature_2m)}° · ${libelleMeteo(c.weather_code)} · ${reglages.systeme.meteo.ville}</span>`;
+  $("meteo-ville-puce").textContent = meteoProfil().ville;
+  $("ambiant-meteo").innerHTML = `${pictoMeteo(c.weather_code, nuit)}<span>${Math.round(c.temperature_2m)}° · ${libelleMeteo(c.weather_code)} · ${meteoProfil().ville}</span>`;
   if (pile.at(-1) === "meteo") rendreMeteo();
   horloge();
 }
@@ -466,7 +480,7 @@ function recevoirMeteo(donnees, releveLe, horsLigne) {
 const URL_METEO = "https://api.open-meteo.com/v1/forecast?current=temperature_2m,apparent_temperature,weather_code,is_day,wind_speed_10m,relative_humidity_2m&hourly=temperature_2m,weather_code,precipitation_probability,is_day&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,precipitation_probability_max&timezone=auto&forecast_days=7";
 
 async function chargerMeteo() {
-  const { active, lat, lon } = reglages.systeme.meteo;
+  const { active, lat, lon } = meteoProfil();
   if (!active) return afficherMeteo();
   if (PONT) return envoyer({ type: "meteo", lat, lon });
   try {
@@ -498,7 +512,7 @@ function rendreMeteo() {
     el("div", { class: "grande-temp" }, `${Math.round(c.temperature_2m)}°`),
     el("div", {},
       el("div", { class: "etat" }, libelleMeteo(c.weather_code)),
-      el("div", { class: "lieu" }, `${reglages.systeme.meteo.ville} · ${releve}`),
+      el("div", { class: "lieu" }, `${meteoProfil().ville} · ${releve}`),
       alerteMeteo() && el("div", { class: "lieu", style: "color:rgb(90 170 255)" }, alerteMeteo())),
     boutons));
 
@@ -566,7 +580,7 @@ function montrerVilles(resultats) {
     liste.append(el("button", {
       class: "option", "data-nav": true, "data-cle": `ville-${v.id}`,
       onclick: () => {
-        reglages.systeme.meteo = { ...reglages.systeme.meteo, ville: v.name, lat: v.latitude, lon: v.longitude };
+        profil().meteo = { ...meteoProfil(), ville: v.name, lat: v.latitude, lon: v.longitude };
         sauver();
         chargerMeteo();
         rendreSection();
@@ -683,6 +697,8 @@ function ouvrirCalque(id, focusPremier = true) {
 }
 function fermerCalque() {
   if (pile.length === 1) return;
+  // Profil verrouillé : on ne revient pas à l'accueil sans son code.
+  if (verrouAccueil && pile.length === 2 && pile[1] !== "code" && pile[1] !== "profils") return exigerDeverrouillage();
   const id = pile.pop();
   $(id).classList.remove("ouvert");
   if (id === "profils") document.body.classList.remove("gestion");
@@ -691,6 +707,7 @@ function fermerCalque() {
   const precedent = focusParCalque[pile.at(-1)];
   definirFocus(liste.includes(precedent) ? precedent : liste[0], true);
   son("retour");
+  if (verrouAccueil && pile.length === 1 && id !== "code") setTimeout(exigerDeverrouillage, 0);
 }
 function fermerTout() { while (pile.length > 1) fermerCalque(); }
 
@@ -708,6 +725,7 @@ function annoncer(texte) {
 
 function lancer(carte) {
   if (verrou) return;
+  if (!modeAutorise(carte.dataset.mode)) { son("erreur"); return annoncer(t("mode.interdit")); }
   if (carte.dataset.indisponible) {
     son("erreur");
     annoncer(t(carte.dataset.indisponible));
@@ -737,7 +755,7 @@ cartes.forEach(c => c.addEventListener("click", () => {
 
 // ── Continuer à regarder ──────────────────────────────────────────────────
 function rendreReprises() {
-  const liste = INITIAL.reprises || [];
+  const liste = modeAutorise("tv") ? INITIAL.reprises || [] : [];
   document.body.classList.toggle("avec-reprises", liste.length > 0);
   $("reprises").hidden = !liste.length;
   const zone = $("reprises-liste");
@@ -774,7 +792,14 @@ function lancerReprise(tuile, reprise) {
 const ACTIONS = {
   profils: () => { rendreProfils(); ouvrirCalque("profils"); },
   "gerer-profils": () => { document.body.classList.toggle("gestion"); rendreProfils(); },
-  reglages: (section) => { if (typeof section === "string") sectionCourante = section; rendreReglages(); ouvrirCalque("reglages"); },
+  reglages: (section) => {
+    if (profil().pin && profil().reglagesProteges && !deverrouilles.has(profil().id)) {
+      return demanderCode(profil(), () => ACTIONS.reglages(section), { detail: t("code.reglages") });
+    }
+    if (typeof section === "string") sectionCourante = section;
+    rendreReglages();
+    ouvrirCalque("reglages");
+  },
   meteo: () => { rendreMeteo(); ouvrirCalque("meteo"); chargerMeteo(); },
   aide: () => { rendreAide(); ouvrirCalque("aide"); },
   arret: () => ouvrirCalque("arret"),
@@ -805,7 +830,7 @@ function tuileProfil(p) {
       if (document.body.classList.contains("gestion")) return ouvrirEditeur(p);
       choisirProfil(p.id);
     },
-  }, avatar(p), p.nom);
+  }, avatar(p), el("span", { class: "nom-tuile" }, p.nom, p.pin && el("span", { class: "cadenas", html: ICONE_CADENAS })));
   return tuile;
 }
 
@@ -814,7 +839,8 @@ function rendreProfils() {
   const cle = courant?.dataset.cle;
   liste.innerHTML = "";
   for (const p of reglages.profils) liste.append(tuileProfil(p));
-  if (reglages.profils.length < 6) {
+  document.querySelector('[data-action="gerer-profils"]').hidden = estRestreint();
+  if (reglages.profils.length < 6 && !estRestreint()) {
     liste.append(el("button", { class: "tuile-profil ajout", "data-nav": true, "data-cle": "profil-ajout", onclick: () => ouvrirEditeur(null) },
       el("span", { class: "avatar" }, "+"), t("profils.ajouter")));
   }
@@ -824,6 +850,13 @@ function rendreProfils() {
 }
 
 function choisirProfil(id) {
+  const cible = reglages.profils.find(p => p.id === id);
+  if (!cible) return;
+  if (cible.pin && !deverrouilles.has(id)) return demanderCode(cible, () => choisirProfil(id));
+  // Changer de profil referme les autres : revenir à un profil protégé redemande son code.
+  deverrouilles = new Set(cible.pin ? [id] : []);
+  verrouAccueil = false;
+  document.body.classList.remove("verrouille");
   reglages.profilActif = id;
   sauver();
   document.body.classList.remove("gestion");
@@ -835,6 +868,8 @@ function choisirProfil(id) {
 }
 
 function ouvrirEditeur(p) {
+  if (estRestreint() && (!p || p.id !== profil().id)) { son("erreur"); return annoncer(t("profils.restreint")); }
+  if (p?.pin && !deverrouilles.has(p.id)) return demanderCode(p, () => ouvrirEditeur(p));
   brouillon = p ? { ...p } : { ...DEFAUTS_PROFIL, id: `p${Date.now().toString(36)}`, nom: "", couleur: Object.keys(COULEURS_PROFIL)[reglages.profils.length % 7], nouveau: true };
   rendreEditeur();
   ouvrirCalque("editeur-profil");
@@ -845,7 +880,8 @@ function rendreEditeur() {
   habillerAvatar($("editeur-apercu"), brouillon);
   $("editeur-titre").textContent = brouillon.nouveau ? t("profils.nouveau") : t("profils.modifier");
   $("editeur-nom").textContent = brouillon.nom || "…";
-  $("editeur-supprimer").hidden = !!brouillon.nouveau;
+  $("editeur-supprimer").hidden = !!brouillon.nouveau || estRestreint();
+  rendreSecurite();
   const nuancier = $("nuancier");
   const cle = courant?.dataset.cle;
   nuancier.innerHTML = "";
@@ -892,6 +928,207 @@ function supprimerProfil() {
   rendreProfils();
   appliquerTout();
   if (pile.includes("reglages")) rendreSection();
+}
+
+function rendreSecurite() {
+  const restreint = estRestreint();
+  const modes = $("editeur-modes");
+  modes.innerHTML = "";
+  for (const [mode, cle] of [["tv", "mode.tv"], ["gaming", "mode.jeux"], ["bureau", "mode.bureau"]]) {
+    const actif = brouillon.modes?.[mode] !== false;
+    modes.append(el("button", {
+      class: `option${actif ? " choisie" : ""}`, "data-nav": !restreint, "data-cle": `mode-${mode}`, disabled: restreint,
+      onclick: () => {
+        const suivant = { tv: true, gaming: true, bureau: true, ...brouillon.modes, [mode]: !actif };
+        if (!Object.values(suivant).some(Boolean)) { son("erreur"); return; }
+        brouillon.modes = suivant;
+        rendreEditeur();
+      },
+    }, `${actif ? "✓ " : ""}${t(cle)}`));
+  }
+  $("editeur-restreint").hidden = !restreint;
+
+  const code = $("editeur-code");
+  code.innerHTML = "";
+  if (!brouillon.pin) {
+    code.append(el("button", { class: "option", "data-nav": true, "data-cle": "code-definir", onclick: () => definirCode(brouillon, pin => { brouillon.pin = pin; rendreEditeur(); }) }, t("code.definir")));
+  } else {
+    code.append(
+      el("button", { class: "option choisie", "data-nav": true, "data-cle": "code-changer", onclick: () => definirCode(brouillon, pin => { brouillon.pin = pin; rendreEditeur(); }) }, t("code.changer")),
+      !restreint && el("button", { class: "option", "data-nav": true, "data-cle": "code-retirer", onclick: () => { brouillon.pin = null; brouillon.reglagesProteges = false; brouillon.verrouVeille = false; rendreEditeur(); } }, t("code.retirer")));
+  }
+
+  const protections = $("editeur-protections");
+  protections.innerHTML = "";
+  if (brouillon.pin) {
+    const bascule = (champ, libelle) => el("div", { class: "ligne-protection" }, el("span", {}, t(libelle)),
+      el("div", { class: "options" }, [[true, t("oui")], [false, t("non")]].map(([v, l]) => el("button", {
+        class: `option${!!brouillon[champ] === v ? " choisie" : ""}`, "data-nav": true, "data-cle": `${champ}-${v}`,
+        onclick: () => { brouillon[champ] = v; rendreEditeur(); },
+      }, l))));
+    protections.append(bascule("reglagesProteges", "profils.proteger"), bascule("verrouVeille", "profils.verrou.veille"));
+  }
+}
+
+// ── Code PIN ──────────────────────────────────────────────────────────────
+// Un verrou familial, pas un coffre-fort : il empêche d'ouvrir le profil ou les
+// réglages d'un autre, il ne chiffre rien. Le code n'est jamais stocké en clair.
+const ICONE_CADENAS = '<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>';
+let deverrouilles = new Set();
+let verrouAccueil = false;
+let demande = null;
+const echecsCode = {};
+
+function sha256(texte) {
+  const k = [], h = [];
+  let n = 2, trouves = 0;
+  const frac = x => (x - Math.floor(x)) * 4294967296 | 0;
+  while (trouves < 64) {
+    let premier = true;
+    for (let d = 2; d * d <= n; d++) if (n % d === 0) { premier = false; break; }
+    if (premier) { if (trouves < 8) h[trouves] = frac(n ** (1 / 2)); k[trouves++] = frac(n ** (1 / 3)); }
+    n++;
+  }
+  const octets = [...new TextEncoder().encode(texte)];
+  const longueur = octets.length * 8;
+  octets.push(0x80);
+  while (octets.length % 64 !== 56) octets.push(0);
+  for (let i = 7; i >= 0; i--) octets.push(i > 3 ? 0 : (longueur >>> (i * 8)) & 0xff);
+  const rot = (x, r) => (x >>> r) | (x << (32 - r));
+  for (let bloc = 0; bloc < octets.length; bloc += 64) {
+    const w = [];
+    for (let i = 0; i < 16; i++) w[i] = octets[bloc + i * 4] << 24 | octets[bloc + i * 4 + 1] << 16 | octets[bloc + i * 4 + 2] << 8 | octets[bloc + i * 4 + 3];
+    for (let i = 16; i < 64; i++) {
+      const s1 = rot(w[i - 2], 17) ^ rot(w[i - 2], 19) ^ (w[i - 2] >>> 10);
+      const s0 = rot(w[i - 15], 7) ^ rot(w[i - 15], 18) ^ (w[i - 15] >>> 3);
+      w[i] = (w[i - 16] + s0 + w[i - 7] + s1) | 0;
+    }
+    let [a, b, c, d, e, f, g, hh] = h;
+    for (let i = 0; i < 64; i++) {
+      const t1 = (hh + (rot(e, 6) ^ rot(e, 11) ^ rot(e, 25)) + ((e & f) ^ (~e & g)) + k[i] + w[i]) | 0;
+      const t2 = ((rot(a, 2) ^ rot(a, 13) ^ rot(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) | 0;
+      hh = g; g = f; f = e; e = (d + t1) | 0; d = c; c = b; b = a; a = (t1 + t2) | 0;
+    }
+    [a, b, c, d, e, f, g, hh].forEach((v, i) => { h[i] = (h[i] + v) | 0; });
+  }
+  return h.map(v => (v >>> 0).toString(16).padStart(8, "0")).join("");
+}
+window.hubSha256 = sha256;
+
+function empreinteCode(code, sel) { return sha256(`${sel}:${code}`); }
+function nouveauSel() { return [...crypto.getRandomValues(new Uint8Array(8))].map(o => o.toString(16).padStart(2, "0")).join(""); }
+
+function ouvrirPave(p, titre, detail) {
+  $("code-titre").textContent = titre;
+  $("code-detail").textContent = detail;
+  habillerAvatar($("code-avatar"), p);
+  const pave = $("code-pave");
+  pave.innerHTML = "";
+  for (const ch of ["1", "2", "3", "4", "5", "6", "7", "8", "9", "⌫", "0", "✕"]) {
+    pave.append(el("button", {
+      class: "touche-code", "data-nav": true, "data-cle": `chiffre-${ch}`,
+      onclick: () => ch === "⌫" ? effacerChiffre() : ch === "✕" ? annulerCode() : taperChiffre(ch),
+    }, ch));
+  }
+  majPoints();
+  ouvrirCalque("code");
+  definirFocus(pave.querySelector('[data-cle="chiffre-5"]'), true);
+}
+
+function demanderCode(p, reussite, { detail = null, annuler = null } = {}) {
+  demande = { p, mode: "verifier", saisie: "", reussite, annuler };
+  ouvrirPave(p, t("code.titre", { nom: p.nom }), detail || t("code.saisir"));
+}
+function definirCode(p, reussite) {
+  demande = { p, mode: "nouveau", saisie: "", reussite };
+  ouvrirPave(p, p.nom || t("profils.nouveau"), t("code.nouveau"));
+}
+
+function majPoints() {
+  [...$("code-points").children].forEach((point, i) => point.classList.toggle("plein", i < (demande?.saisie.length || 0)));
+}
+function taperChiffre(ch) {
+  if (!demande) return;
+  const blocage = echecsCode[demande.p.id];
+  if (blocage?.jusqua > Date.now()) {
+    son("erreur");
+    $("code-detail").textContent = t("code.bloque", { s: Math.ceil((blocage.jusqua - Date.now()) / 1000) });
+    return;
+  }
+  if (demande.saisie.length >= 4) return;
+  demande.saisie += ch;
+  son("deplacer");
+  majPoints();
+  if (demande.saisie.length === 4) setTimeout(validerCode, 180);
+}
+function effacerChiffre() {
+  if (!demande) return;
+  demande.saisie = demande.saisie.slice(0, -1);
+  majPoints();
+}
+function refuserCode(message) {
+  son("erreur");
+  $("code-points").animate([{ translate: "0" }, { translate: "-1rem" }, { translate: "1rem" }, { translate: "-.5rem" }, { translate: "0" }], { duration: 380 });
+  $("code-detail").textContent = message;
+  demande.saisie = "";
+  majPoints();
+}
+function validerCode() {
+  if (!demande) return;
+  const { p, mode, saisie } = demande;
+  if (mode === "verifier") {
+    if (p.pin && empreinteCode(saisie, p.pin.sel) === p.pin.empreinte) {
+      delete echecsCode[p.id];
+      deverrouilles.add(p.id);
+      if (p.id === profil().id) { verrouAccueil = false; document.body.classList.remove("verrouille"); }
+      const { reussite } = demande;
+      demande = null;
+      son("ok");
+      fermerCalque();
+      reussite?.();
+      return;
+    }
+    const echec = echecsCode[p.id] ||= { n: 0, jusqua: 0 };
+    echec.n += 1;
+    if (echec.n >= 5) { echec.n = 0; echec.jusqua = Date.now() + 30000; return refuserCode(t("code.bloque", { s: 30 })); }
+    return refuserCode(t("code.faux"));
+  }
+  if (mode === "nouveau") {
+    demande.premier = saisie;
+    demande.mode = "confirmer";
+    demande.saisie = "";
+    majPoints();
+    $("code-detail").textContent = t("code.confirmer");
+    return;
+  }
+  if (saisie !== demande.premier) {
+    demande.mode = "nouveau";
+    return refuserCode(t("code.different"));
+  }
+  const sel = nouveauSel();
+  const { reussite } = demande;
+  demande = null;
+  deverrouilles.add(p.id);
+  fermerCalque();
+  annoncer(t("code.defini"));
+  reussite?.({ sel, empreinte: empreinteCode(saisie, sel) });
+}
+function annulerCode() {
+  const annuler = demande?.annuler;
+  demande = null;
+  fermerCalque();
+  annuler?.();
+}
+
+function verrouillerAccueil() {
+  if (!profil().pin) return;
+  deverrouilles.delete(profil().id);
+  verrouAccueil = true;
+  document.body.classList.add("verrouille");
+}
+function exigerDeverrouillage() {
+  if (!verrouAccueil || pile.at(-1) === "code") return;
+  demanderCode(profil(), null, { annuler: () => setTimeout(() => { if (verrouAccueil) ACTIONS.profils(); }, 0) });
 }
 
 // ── Clavier à l'écran ─────────────────────────────────────────────────────
@@ -959,9 +1196,9 @@ function rendreReglages() {
   if (!infosMachine) envoyer({ type: "infos" });
 }
 
-function rangee(titre, aide, controle, large = false) {
+function rangee(titre, aide, controle, large = false, commun = false) {
   return el("div", { class: `rangee${large ? " large" : ""}` },
-    el("div", {}, el("div", { class: "titre" }, titre), aide && el("div", { class: "aide" }, aide)),
+    el("div", {}, el("div", { class: "titre" }, titre, commun && el("span", { class: "portee-hub" }, t("portee.hub"))), aide && el("div", { class: "aide" }, aide)),
     controle);
 }
 function options(cle, liste, valeur, changer) {
@@ -979,6 +1216,10 @@ function rendreSection(garderFocus = true) {
   document.querySelectorAll("#sommaire .entree").forEach(e => e.classList.toggle("courante", e.dataset.section === sectionCourante));
   const p = profil(), s = reglages.systeme;
   zone.append(el("h3", {}, t(`section.${sectionCourante}`)));
+  // Dire à qui s'applique ce qu'on règle : chaque profil garde ses propres choix.
+  if (["apparence", "fond", "langue", "voix", "meteo", "veille"].includes(sectionCourante)) {
+    zone.append(el("div", { class: "portee" }, avatar(p), t("portee.profil", { nom: p.nom })));
+  }
 
   switch (sectionCourante) {
     case "apparence":
@@ -988,9 +1229,9 @@ function rendreSection(garderFocus = true) {
         rangee(t("animations"), null,
           options("animations", [["completes", t("animations.completes")], ["reduites", t("animations.reduites")]], p.animations, v => { p.animations = v; })),
         rangee(t("taille"), t("taille.detail"),
-          options("echelle", [[.9, "S"], [1, "M"], [1.1, "L"], [1.2, "XL"]], s.echelle, v => { s.echelle = Number(v); })),
+          options("echelle", [[.9, "S"], [1, "M"], [1.1, "L"], [1.2, "XL"]], s.echelle, v => { s.echelle = Number(v); }), false, true),
         rangee(t("zone"), null,
-          options("marge", [[2, "2 %"], [5, "5 %"], [8, "8 %"]], s.marge, v => { s.marge = Number(v); })));
+          options("marge", [[2, "2 %"], [5, "5 %"], [8, "8 %"]], s.marge, v => { s.marge = Number(v); }), false, true));
       break;
 
     case "fond": {
@@ -1012,10 +1253,14 @@ function rendreSection(garderFocus = true) {
     }
 
     case "profils":
+      if (estRestreint()) {
+        zone.append(el("div", { class: "aide" }, t("profils.restreint")));
+        break;
+      }
       for (const x of reglages.profils) {
         const couleur = COULEURS_PROFIL[x.couleur] || COULEURS_PROFIL.turquoise;
         zone.append(rangee(
-          el("span", { style: "display:flex;align-items:center;gap:.9rem" }, avatar(x), x.nom, x.id === reglages.profilActif ? " ✓" : ""),
+          el("span", { style: "display:flex;align-items:center;gap:.9rem" }, avatar(x), x.nom, x.pin && el("span", { class: "cadenas", html: ICONE_CADENAS }), x.id === reglages.profilActif ? " ✓" : ""),
           null,
           el("div", { class: "options" },
             x.id !== reglages.profilActif && el("button", { class: "option", "data-nav": true, "data-cle": `utiliser-${x.id}`, onclick: () => { choisirProfil(x.id); } }, "✓"),
@@ -1024,7 +1269,7 @@ function rendreSection(garderFocus = true) {
       zone.append(
         el("div", { class: "options", style: "justify-content:flex-start" },
           el("button", { class: "option", "data-nav": true, "data-cle": "ajouter-profil", onclick: () => ouvrirEditeur(null) }, `+ ${t("profils.ajouter")}`)),
-        rangee(t("profils.demarrage"), null, options("demander", [[true, t("oui")], [false, t("non")]], s.demanderProfil, v => { s.demanderProfil = v === true || v === "true"; })));
+        rangee(t("profils.demarrage"), null, options("demander", [[true, t("oui")], [false, t("non")]], s.demanderProfil, v => { s.demanderProfil = v === true || v === "true"; }), false, true));
       break;
 
     case "langue":
@@ -1036,14 +1281,14 @@ function rendreSection(garderFocus = true) {
     case "voix":
       zone.append(
         rangee(t("voix"), `${t("voix.detail")}${etatVoix.micro === false ? " — " + t("voix.micro.absent") : ""}`,
-          options("voix", [[true, t("voix.active")], [false, t("voix.inactive")]], s.voix, v => { s.voix = v === true || v === "true"; })),
-        rangee(t("sons"), null, options("sons", [[true, t("oui")], [false, t("non")]], s.sons, v => { s.sons = v === true || v === "true"; })));
+          options("voix", [[true, t("voix.active")], [false, t("voix.inactive")]], s.voix, v => { s.voix = v === true || v === "true"; }), false, true),
+        rangee(t("sons"), null, options("sons", [[true, t("oui")], [false, t("non")]], sonsActifs(), v => { p.sons = v === true || v === "true"; })));
       break;
 
     case "meteo":
       zone.append(
-        rangee(t("meteo.afficher"), null, options("meteo", [[true, t("oui")], [false, t("non")]], s.meteo.active, v => { s.meteo.active = v === true || v === "true"; chargerMeteo(); })),
-        rangee(t("meteo.ville"), s.meteo.ville, el("div", { class: "options" },
+        rangee(t("meteo.afficher"), null, options("meteo", [[true, t("oui")], [false, t("non")]], meteoProfil().active, v => { p.meteo = { ...meteoProfil(), active: v === true || v === "true" }; chargerMeteo(); })),
+        rangee(t("meteo.ville"), meteoProfil().ville, el("div", { class: "options" },
           el("button", { class: "option", "data-nav": true, "data-cle": "chercher-ville", onclick: chercherVille }, t("meteo.chercher")))));
       break;
 
@@ -1051,13 +1296,13 @@ function rendreSection(garderFocus = true) {
       const reste = minuteurFin ? Math.max(0, Math.round((minuteurFin - Date.now()) / 60000)) : 0;
       zone.append(
         rangee(t("veille"), t("veille.detail"),
-          options("veille", [[0, t("veille.jamais")], [5, "5 min"], [10, "10 min"], [30, "30 min"]], s.veille, v => { s.veille = Number(v); })),
+          options("veille", [[0, t("veille.jamais")], [5, "5 min"], [10, "10 min"], [30, "30 min"]], veilleMinutes(), v => { p.veille = Number(v); })),
         rangee(t("minuteur"), minuteurFin ? `${t("minuteur.actif")} ${reste} min` : t("minuteur.detail"),
           el("div", { class: "options" }, [[0, t("minuteur.aucun")], [15, "15 min"], [30, "30 min"], [60, "1 h"], [90, "1 h 30"]].map(([v, libelle]) =>
             el("button", {
               class: `option${(v === 0 && !minuteurFin) ? " choisie" : ""}`, "data-nav": true, "data-cle": `minuteur-${v}`,
               onclick: () => programmerMinuteur(v),
-            }, libelle)))));
+            }, libelle))), false, true));
       break;
     }
 
@@ -1165,7 +1410,15 @@ function recevoirVoix(etat, texte) {
 function commande(nom) {
   reveiller();
   if (verrou) return;
+  if (pile.at(-1) === "code") {
+    if (nom === "retour") return annulerCode();
+    if (["gauche", "droite", "haut", "bas"].includes(nom)) return deplacer(nom);
+    if (nom === "ok") return courant?.click();
+    return;
+  }
+  if (verrouAccueil) return exigerDeverrouillage();
   const modes = { tv: 0, gaming: 1, bureau: 2 };
+  if (nom in modes && !modeAutorise(nom)) { son("erreur"); return annoncer(t("mode.interdit")); }
   if (nom in modes) {
     fermerTout();
     definirFocus(cartes[modes[nom]], true);
@@ -1190,16 +1443,18 @@ function reveiller() {
   derniereAction = Date.now();
   if (!document.body.classList.contains("ambiant")) return false;
   document.body.classList.remove("ambiant");
+  if (verrouAccueil) setTimeout(exigerDeverrouillage, 0);
   return true;
 }
 function entrerAmbiant() {
   if (document.body.classList.contains("ambiant") || verrou) return;
   fermerTout();
+  if (profil().verrouVeille) verrouillerAccueil();
   document.body.classList.add("ambiant");
   relancerFond();
 }
 setInterval(() => {
-  const minutes = reglages.systeme.veille;
+  const minutes = veilleMinutes();
   if (minutes && Date.now() - derniereAction > minutes * 60000) entrerAmbiant();
   // L'horloge du mode ambiant glisse doucement : aucune image fixe ne marque l'écran.
   if (document.body.classList.contains("ambiant")) {
@@ -1215,6 +1470,16 @@ addEventListener("keydown", e => {
   if (reveiller()) { e.preventDefault(); return; }
   if (verrou) return;
   const haut = pile.at(-1);
+
+  if (haut === "code") {
+    if (/^[0-9]$/.test(e.key)) { e.preventDefault(); return taperChiffre(e.key); }
+    if (e.key === "Backspace") { e.preventDefault(); return effacerChiffre(); }
+    if (e.key === "Escape") { e.preventDefault(); return annulerCode(); }
+    if (DIRECTIONS[e.key]) { e.preventDefault(); return deplacer(DIRECTIONS[e.key]); }
+    if (e.key === "Enter") { e.preventDefault(); return courant?.click(); }
+    return;
+  }
+  if (verrouAccueil && haut === "accueil") { e.preventDefault(); return exigerDeverrouillage(); }
 
   if (haut === "clavier") {
     if (DIRECTIONS[e.key]) { e.preventDefault(); return deplacer(DIRECTIONS[e.key]); }
@@ -1244,10 +1509,12 @@ addEventListener("keydown", e => {
     e: () => { fermerTout(); ACTIONS.arret(); },
     a: entrerAmbiant,
     t: () => {
+      if (profil().pin && profil().reglagesProteges && !deverrouilles.has(profil().id)) return ACTIONS.reglages("apparence");
       profil().theme = themeEffectif() === "clair" ? "sombre" : "clair";
       sauver(); appliquerTout(); annoncer(`${t("theme")} : ${t("theme." + profil().theme)}`);
     },
     l: () => {
+      if (profil().pin && profil().reglagesProteges && !deverrouilles.has(profil().id)) return ACTIONS.reglages("langue");
       const i = LANGUES.findIndex(l => l.code === profil().langue);
       profil().langue = LANGUES[(i + 1) % LANGUES.length].code;
       sauver(); appliquerTout(); annoncer(LANGUES[(i + 1) % LANGUES.length].nom);
@@ -1314,6 +1581,8 @@ window.hub = {
 // ── Démarrage ─────────────────────────────────────────────────────────────
 function appliquerTout() {
   appliquerApparence();
+  for (const carte of cartes) carte.hidden = !modeAutorise(carte.dataset.mode);
+  rendreReprises();
   appliquerTextes();
   horloge();
   afficherMeteo();
@@ -1344,7 +1613,11 @@ definirFocus(carteDepart, true);
 if (INITIAL.meteo) recevoirMeteo(INITIAL.meteo.donnees, INITIAL.meteo.releveLe, INITIAL.meteo.horsLigne);
 chargerMeteo();
 
-if (reglages.systeme.demanderProfil && reglages.profils.length > 1 && !INITIAL.retour) ACTIONS.profils();
+if (!INITIAL.retour) {
+  if (profil().pin) verrouillerAccueil();
+  if (reglages.systeme.demanderProfil && reglages.profils.length > 1) ACTIONS.profils();
+  else if (verrouAccueil) setTimeout(exigerDeverrouillage, parametres.has("sans-intro") ? 0 : 1800);
+}
 
 // Mise au point : ?ecran=reglages&section=fond, ?ecran=meteo, ?theme=clair…
 if (parametres.get("theme")) { profil().theme = parametres.get("theme"); appliquerTout(); }
