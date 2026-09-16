@@ -1618,17 +1618,25 @@ function contenuMiseAJour() {
   } else if (e?.etape === "terminee") {
     texte = t("maj.terminee", { v: e.version || "" });
   } else if (e?.etape === "echec") {
-    texte = t(e.retour ? "maj.echec.retour" : `maj.echec.${e.raison || "installation"}`);
+    // Une raison que ce menu ne connaît pas (hub-mise-a-jour plus récent) : le message
+    // générique plutôt que la clé de traduction brute.
+    const raison = `maj.echec.${e.raison || "installation"}`;
+    texte = t(e.retour ? "maj.echec.retour" : raison in TEXTES.fr ? raison : "maj.echec.installation");
   } else if (maj.enCours) {
     texte = t("maj.recherche");
   } else if (v?.erreur) {
     texte = t(v.erreur === "configuration" ? "maj.sans.source" : "maj.injoignable");
   } else if (v) {
-    texte = v.disponible ? t("maj.disponible", { v: v.distant }) : t("maj.a.jour");
+    // verifiable absent (ancien hub-mise-a-jour) : installable, comme avant.
+    texte = !v.disponible ? t("maj.a.jour") : v.verifiable === false ? t("maj.non.verifiable", { v: v.distant }) : t("maj.disponible", { v: v.distant });
+  }
+  // Qui a signé la version en cours d'installation : dit discrètement, pas une étape de plus.
+  if (typeof e?.signataire === "string" && e.signataire && ["tests", "installation", "terminee"].includes(e.etape)) {
+    texte = `${texte} (${t("maj.signee", { s: e.signataire })})`;
   }
   if (!actif && !maj.enCours) {
     boutons.push(el("button", { class: "option", "data-nav": true, "data-cle": "maj-verifier", onclick: () => { maj.enCours = true; maj.etat = null; envoyer({ type: "maj-verifier" }); rendreSection(); } }, t("maj.rechercher")));
-    if (v?.disponible && e?.etape !== "terminee") {
+    if (v?.disponible && v.verifiable !== false && e?.etape !== "terminee") {
       boutons.push(el("button", { class: "option choisie", "data-nav": true, "data-cle": "maj-appliquer", onclick: () => { maj.etat = { etape: "verification" }; maj.suivie = true; envoyer({ type: "maj-appliquer" }); rendreSection(); } }, t("maj.installer")));
     }
   }
