@@ -13,11 +13,12 @@ réparer un soir de panne : pas de pip, pas de framework, un seul fichier Python
 une page, une unité systemd.
 
 LA SÉCURITÉ, EN BREF (détails dans README.md). Rien n'est accepté sans jeton ; un
-jeton ne s'obtient qu'avec le code affiché sur la TV, donc en étant dans la pièce.
-Le code change à chaque démarrage, après chaque usage, toutes les 5 minutes et après
-trop d'échecs ; 5 essais par minute par adresse. Les commandes sont une liste
-blanche, la page est la seule chose servie, et l'en-tête Host est vérifié contre le
-rebinding DNS.
+jeton ne s'obtient qu'avec le code affiché sur la TV, donc en étant dans la pièce, et
+seulement pendant que l'écran d'appairage est ouvert. Le code change à chaque
+démarrage, après chaque usage, toutes les 5 minutes et à la fermeture de l'écran ;
+5 essais par minute par adresse, et un délai croissant après chaque code faux, toutes
+adresses confondues. Les commandes sont une liste blanche, la page est la seule chose
+servie, et l'en-tête Host est vérifié contre le rebinding DNS.
 
 OÙ VONT LES COMMANDES. Menu ouvert : au socket du menu, exactement comme la voix.
 Menu fermé : à Kodi (navigation, texte, quitter) s'il tourne, sinon à la session
@@ -44,6 +45,7 @@ import shutil
 import signal
 import socket
 import ssl
+import stat
 import struct
 import subprocess
 import sys
@@ -70,9 +72,38 @@ PORT_HTTPS = 8791
 
 DUREE_CODE_S = 5 * 60
 ESSAIS_PAR_MINUTE = 5
-# Au-delà, toutes adresses confondues, le code change : cinq essais par adresse ne
-# protègent rien contre quelqu'un qui en utilise cinquante.
+# Cinq essais par adresse ne protègent rien contre un appareil qui en prend deux cents
+# sur le réseau (audit du 17/09/2026 : ~50 % de chances en 9 h). La vraie limite est
+# donc globale : après ECHECS_LIBRES codes faux, toutes adresses confondues, chaque
+# essai suivant attend 2, 4, 8… jusqu'à DELAI_MAX_S secondes. Au plus une douzaine
+# d'essais par fenêtre d'appairage de 5 minutes, soit ~1 chance sur 80 000 ; une faute
+# de frappe en famille ne coûte, elle, que quelques secondes.
+ECHECS_LIBRES = 3
+DELAI_MAX_S = 60
+# Une série d'échecs s'oublie après un quart d'heure calme : l'invité maladroit d'hier
+# ne ralentit pas l'appairage d'aujourd'hui.
+OUBLI_ECHECS_S = 15 * 60
+# Renouveler le code change peu aux chances d'un attaquant, mais un code qui a subi
+# vingt essais n'a plus rien à faire à l'écran.
 ECHECS_AVANT_RENOUVELLEMENT = 20
+# L'appairage n'est accepté que pendant une fenêtre ouverte par le menu (l'écran
+# « Télécommande » affiché) ou par `hub-telecommande --appairage` : le reste du temps,
+# un code deviné ne sert à rien. Le menu (re)touche le fichier tant que l'écran est
+# affiché ; oublié, le fichier ne vaut plus rien au bout de ce délai.
+FENETRE_APPAIRAGE_S = 5 * 60
+# Au-delà de ce nombre de photos ou de cette taille (celles écrites par ce service
+# seulement), on refuse : un téléphone appairé ne doit pas pouvoir remplir le disque.
+# Une photo de profil pèse 60 à 150 Ko : 50 photos, c'est des années de profils.
+PHOTOS_MAX = 50
+PHOTOS_TAILLE_MAX = 50 * 1024 * 1024
+# Et jamais quand il resterait moins que ceci : Kodi, les journaux et les mises à jour
+# ont besoin du disque plus que la dixième photo de profil.
+ESPACE_LIBRE_MIN = 512 * 1024 * 1024
+# Des fils de connexion bornés : sans plafond, un appareil qui ouvre des milliers de
+# connexions muettes fait créer autant de fils (mémoire, puis plus rien ne répond).
+# 8 par adresse : un téléphone en ouvre 2 ou 3 à la fois (page, sonde, icônes).
+MAX_CONNEXIONS = 32
+MAX_CONNEXIONS_PAR_IP = 8
 TAILLE_MAX_CORPS = 2048
 # Une photo recadrée à 512 px en JPEG 0,88 pèse 60 à 150 Ko : 2 Mio laisse de la marge
 # à un navigateur qui compresse mal, sans laisser remplir le disque par rafales.
@@ -83,7 +114,7 @@ TAILLE_MAX_NOM = 40
 # de dernier usage ne sert qu'à reconnaître un vieux téléphone à révoquer.
 PRECISION_VU_S = 3600
 
-OK, MAUVAIS, TROP = "ok", "mauvais", "trop"
+OK, MAUVAIS, TROP, FERME = "ok", "mauvais", "trop", "ferme"
 
 # Les noms du protocole du socket du menu (hub-menu.py, COMMANDES), recopiés et non
 # importés : importer hub-menu.py tirerait sa logique entière dans un service réseau.
@@ -342,6 +373,8 @@ def chemins_par_defaut():
     config = Path(os.environ.get("XDG_CONFIG_HOME") or maison / ".config") / "hub"
     return {
         "etat": execution / "telecommande.json",
+        # Fenêtre d'appairage : présent et touché depuis moins de FENETRE_APPAIRAGE_S.
+        "appairage": execution / "telecommande-appairage",
         "socket": execution / "menu.sock",
         "jetons": config / "telecommande-jetons.json",
         # Autorité locale et certificat du HUB. Dans ~/.config et non /etc : le service
@@ -486,15 +519,68 @@ class Jetons:
 
 
 # ── Appairage ───────────────────────────────────────────────────────────────
-class Appairage:
-    """Le code à 6 chiffres affiché sur la TV, et la limite d'essais."""
+class FenetreAppairage:
+    """Le fichier qui dit « l'écran d'appairage est affiché sur la TV ».
 
-    def __init__(self, horloge=time.time, au_changement=None):
+    Un fichier plutôt qu'un message au service : le menu l'écrit sans connaître le
+    service (démarré avant ou après lui), la ligne de commande aussi, et il survit à
+    un redémarrage de l'un ou de l'autre. Seule sa date compte : rien à analyser.
+    Dans $XDG_RUNTIME_DIR (0700) : seul l'utilisateur de la session peut l'ouvrir.
+    """
+
+    def __init__(self, chemin, horloge=time.time):
+        self.chemin = Path(chemin) if chemin else None
+        self.horloge = horloge
+
+    def _date(self):
+        if self.chemin is None:
+            return None
+        try:
+            st = os.lstat(self.chemin)
+        except OSError:
+            return None
+        # Un lien ou un fichier d'un autre utilisateur n'ouvre rien.
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid():
+            return None
+        return st.st_mtime
+
+    def ouverte(self):
+        date = self._date()
+        if date is None:
+            return False
+        age = self.horloge() - date
+        # Une date dans le futur (horloge recalée par NTP) ne doit pas ouvrir pour des heures.
+        return -60 <= age < FENETRE_APPAIRAGE_S
+
+    def jusqua_ms(self):
+        date = self._date()
+        return int((date + FENETRE_APPAIRAGE_S) * 1000) if date is not None and self.ouverte() else None
+
+    def ouvrir(self):
+        self.chemin.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.close(os.open(self.chemin, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600))
+        maintenant = self.horloge()
+        os.utime(self.chemin, (maintenant, maintenant))
+
+    def fermer(self):
+        if self.chemin:
+            self.chemin.unlink(missing_ok=True)
+
+
+class Appairage:
+    """Le code à 6 chiffres affiché sur la TV, la fenêtre et les limites d'essais."""
+
+    def __init__(self, horloge=time.time, au_changement=None, ouverte=lambda: False):
         self.horloge = horloge
         self.au_changement = au_changement
+        # Fermée par défaut : oublier de brancher la fenêtre ne doit rien ouvrir.
+        self.ouverte = ouverte
         self._verrou = threading.RLock()
         self._essais = {}
         self._echecs = 0
+        self._serie = 0
+        self._dernier_echec = 0.0
+        self._bloque_jusqua = 0.0
         self.code = None
         self.expire_ms = 0
         # Pas de notification ici : le propriétaire n'est pas encore prêt à écrire
@@ -525,6 +611,9 @@ class Appairage:
         with self._verrou:
             maintenant = self.horloge()
             self.verifier_expiration()
+            # Fenêtre fermée : on ne compare même pas. Rien à apprendre, rien à compter.
+            if not self.ouverte():
+                return FERME
             if len(self._essais) > 1000:
                 self._essais = {k: v for k, v in self._essais.items() if v and v[-1] > maintenant - 60}
             recents = self._essais.setdefault(ip, deque())
@@ -532,13 +621,20 @@ class Appairage:
                 recents.popleft()
             # Compter AVANT de comparer, et compter aussi les réussites : sinon le
             # sixième essai d'une rafale serait encore évalué.
-            if len(recents) >= ESSAIS_PAR_MINUTE:
+            if len(recents) >= ESSAIS_PAR_MINUTE or maintenant < self._bloque_jusqua:
                 return TROP
             recents.append(maintenant)
             if isinstance(code, str) and re.fullmatch(r"\d{6}", code) \
                     and hmac.compare_digest(code, self.code):
+                self._serie, self._bloque_jusqua = 0, 0.0
                 self.renouveler()
                 return OK
+            if maintenant - self._dernier_echec > OUBLI_ECHECS_S:
+                self._serie = 0
+            self._serie += 1
+            self._dernier_echec = maintenant
+            if self._serie > ECHECS_LIBRES:
+                self._bloque_jusqua = maintenant + min(DELAI_MAX_S, 2 ** (self._serie - ECHECS_LIBRES))
             self._echecs += 1
             if self._echecs >= ECHECS_AVANT_RENOUVELLEMENT:
                 journal.warning("%d codes faux : code renouvelé", self._echecs)
@@ -547,10 +643,12 @@ class Appairage:
 
     def attente_s(self, ip):
         with self._verrou:
+            maintenant = self.horloge()
+            attente = self._bloque_jusqua - maintenant
             recents = self._essais.get(ip)
-            if not recents:
-                return 0
-            return max(1, int(recents[0] + 60 - self.horloge()) + 1)
+            if recents and len(recents) >= ESSAIS_PAR_MINUTE:
+                attente = max(attente, recents[0] + 60 - maintenant)
+            return max(1, math.ceil(attente))
 
 
 # ── Kodi ────────────────────────────────────────────────────────────────────
@@ -753,10 +851,23 @@ def charger_page(chemin=None):
 # mais pas fabriquer une clé ni un certificat. openssl est « important » dans Ubuntu
 # (présent partout, même en installation minimale) ; python3-cryptography ne l'est pas.
 #
-# CE QUI LIMITE LES DÉGÂTS SI LA CLÉ FUIT. La racine porte des contraintes de nom
-# (RFC 5280, critiques) : elle ne peut signer que des adresses privées et des noms en
-# .local. Même volée, elle ne permet pas d'usurper une banque sur le téléphone qui
-# l'a installée. Chrome, Safari et OpenSSL appliquent ces contraintes.
+# CE QUI LIMITE LES DÉGÂTS SI LA CLÉ FUIT. racine.key est lisible par tout programme
+# de la session (Kodi, UxPlay, Chrome…) : elle doit donc valoir le moins possible. La
+# racine porte des contraintes de nom (RFC 5280, critiques) réduites au strict
+# nécessaire : l'adresse actuelle du HUB (/32), hub.local et nom-machine.local. Volée,
+# elle ne permet d'usurper que le HUB lui-même — ce que hub.key, forcément présente et
+# lisible pareil, permet déjà. Chrome, Safari et OpenSSL appliquent ces contraintes.
+#
+# LE PRIX. Une autre adresse (bail DHCP) ou un autre nom de machine exigent une autre
+# racine, donc de la réinstaller sur chaque téléphone : réserver l'adresse du HUB sur
+# la box. Écarté : garder la racine et supprimer sa clé après signature. Le certificat
+# serveur (397 jours) ne pourrait plus être renouvelé sans réinstaller, et hub.key
+# resterait de toute façon aussi exposée.
+#
+# MIGRATION. Les racines d'avant le 17/09/2026 couvraient 10/8, 172.16/12, 192.168/16,
+# 169.254/16, 127/8 et .local : volée, une telle clé interceptait le téléphone vers
+# toute adresse privée de n'importe quel réseau. preparer() relit les contraintes de la
+# racine existante et la remplace dès qu'elles diffèrent de celles attendues.
 DUREE_RACINE_J = 3650
 # 397 jours : sous la limite d'Apple (825 j pour un certificat serveur) et de celle,
 # plus stricte, des autorités publiques (398 j), au cas où un navigateur finirait
@@ -764,6 +875,8 @@ DUREE_RACINE_J = 3650
 # rien à refaire sur le téléphone : seule la racine y est installée.
 DUREE_CERTIFICAT_J = 397
 RENOUVELER_AVANT_S = 30 * 86400
+# Les seules adresses pour lesquelles on accepte de créer une autorité : un HUB exposé
+# sur une adresse publique n'est pas le cas prévu. 127/8 pour les essais.
 RESEAUX_PERMIS = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16",
                   "127.0.0.0/8")
 # Avant l'heure réseau, une machine peut se croire en 1970 ou en 2019 : un certificat
@@ -778,6 +891,46 @@ class ErreurTLS(Exception):
 def _nom_dns(nom):
     nom = (nom or "").strip().lower()
     return nom if re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", nom) else None
+
+
+def contraintes_attendues(adresse, noms):
+    """Les sous-arbres permis de la racine, sous la forme qu'imprime `openssl x509 -text`."""
+    return {f"IP:{adresse}/255.255.255.255", *(f"DNS:{n}" for n in noms)}
+
+
+def lire_contraintes(texte):
+    """Les sous-arbres permis lus dans la sortie de `openssl x509 -noout -text`, ou None
+    si la racine n'a pas de contraintes de nom (une telle racine est à remplacer)."""
+    lignes = texte.splitlines()
+    for i, ligne in enumerate(lignes):
+        if "Name Constraints" not in ligne:
+            continue
+        titre = len(ligne) - len(ligne.lstrip())
+        permis, section = set(), None
+        for suite in lignes[i + 1:]:
+            propre = suite.strip()
+            # Fin du bloc : ligne vide (LibreSSL) ou extension suivante, au même retrait.
+            if not propre or len(suite) - len(suite.lstrip()) <= titre:
+                break
+            if propre in ("Permitted:", "Excluded:"):
+                section = propre
+            elif section == "Permitted:":
+                permis.add(propre)
+        return permis
+    return None
+
+
+def empreinte_courte(empreinte):
+    """Les 8 premières paires de l'empreinte en 4 groupes : « 3A9F 12C0 4481 7BE2 ».
+
+    Ce que la TV affiche en grand : 64 bits suffisent contre quelqu'un du wifi (il
+    faudrait des dizaines d'années de calcul pour fabriquer un certificat de même
+    début), et c'est lisible d'un canapé. Le téléphone montre l'empreinte entière,
+    on compare son début."""
+    if not empreinte:
+        return None
+    paires = empreinte.split(":")[:8]
+    return " ".join("".join(paires[i:i + 2]) for i in range(0, 8, 2))
 
 
 def noms_du_hub(nom_machine=None):
@@ -839,22 +992,26 @@ class AutoriteLocale:
         return "0x" + secrets.token_hex(16).lstrip("0").rjust(1, "1")
 
     # -- racine ----------------------------------------------------------------------
-    def _creer_racine(self, temp):
+    def contraintes(self):
+        """Les sous-arbres permis de la racine existante (None : elle n'en a pas).
+
+        Un openssl qui échoue lève ErreurTLS au lieu de rendre None : un raté passager
+        ne doit pas détruire une racine installée sur tous les téléphones."""
+        return lire_contraintes(self._commande("x509", "-in", self.racine_crt, "-noout", "-text"))
+
+    def _creer_racine(self, temp, adresse, noms):
         nom = _nom_dns(self.nom_machine if self.nom_machine is not None
                        else socket.gethostname().split(".")[0]) or "hub"
         date = time.strftime("%Y-%m-%d", time.gmtime(self.horloge()))
-        contraintes = []
-        for i, reseau in enumerate(RESEAUX_PERMIS):
-            r = ipaddress.ip_network(reseau)
-            contraintes.append(f"permitted;IP.{i} = {r.network_address}/{r.netmask}")
-        contraintes.append("permitted;DNS.0 = local")
+        contraintes = [f"permitted;IP.0 = {adresse}/255.255.255.255"]
+        contraintes += [f"permitted;DNS.{i} = {n}" for i, n in enumerate(noms)]
         config = Path(temp) / "racine.cnf"
         config.write_text("\n".join([
             "[req]", "distinguished_name = dn", "prompt = no", "utf8 = yes", "string_mask = utf8only",
             "[dn]", "O = HUB",
             # Nom et date dans le sujet : le téléphone qui a connu deux HUB (ou une
             # réinstallation) affiche deux entrées qu'on distingue pour révoquer l'ancienne.
-            f"CN = HUB autorité locale ({nom}, {date})",
+            f"CN = HUB autorité locale ({nom}, {adresse}, {date})",
             "[v3]", "basicConstraints = critical,CA:TRUE,pathlen:0",
             "keyUsage = critical,keyCertSign,cRLSign", "subjectKeyIdentifier = hash",
             "nameConstraints = critical,@contraintes", "[contraintes]", *contraintes, ""]),
@@ -935,12 +1092,22 @@ class AutoriteLocale:
         with self._verrou:
             self.dossier.mkdir(mode=0o700, parents=True, exist_ok=True)
             os.chmod(self.dossier, 0o700)
+            noms = noms_du_hub(self.nom_machine)
             with tempfile.TemporaryDirectory(dir=self.dossier) as temp:
+                if self.racine_cle.is_file() and self.racine_crt.is_file() \
+                        and self.contraintes() != contraintes_attendues(adresse, noms):
+                    # Racine d'avant le 17/09/2026 (tout le privé), autre adresse ou autre
+                    # nom : elle ne signerait pas, ou signerait trop. L'ancienne clé est
+                    # détruite ; les téléphones devront installer la nouvelle racine.
+                    journal.warning("autorité locale remplacée (adresse %s, noms %s) : réinstaller le "
+                                    "certificat sur les téléphones et retirer l'ancien", adresse, ", ".join(noms))
+                    self.racine_cle.unlink(missing_ok=True)
+                    self.racine_crt.unlink(missing_ok=True)
                 if not (self.racine_cle.is_file() and self.racine_crt.is_file()):
-                    self._creer_racine(temp)
+                    self._creer_racine(temp, adresse, noms)
                 if self.a_jour(adresse):
                     return False
-                self._emettre(temp, adresse, noms_du_hub(self.nom_machine))
+                self._emettre(temp, adresse, noms)
                 return True
 
     def a_renouveler(self):
@@ -1121,7 +1288,26 @@ class Service:
         self.hotes_admis = frozenset()
         self.appairage_le = None
         self._verrou_etat = threading.Lock()
-        self.appairage = Appairage(horloge=horloge, au_changement=self.ecrire_etat)
+        self._verrou_photos = threading.Lock()
+        self.fenetre = FenetreAppairage(chemins.get("appairage"), horloge=horloge)
+        self._fenetre_ouverte = False
+        self.appairage = Appairage(horloge=horloge, au_changement=self.ecrire_etat,
+                                   ouverte=self.fenetre.ouverte)
+
+    def verifier_fenetre(self):
+        """À appeler régulièrement : publie l'ouverture et la fermeture de la fenêtre
+        d'appairage. À la fermeture, le code change : celui qu'on a pu lire par-dessus
+        une épaule ne servira pas à la prochaine ouverture."""
+        ouverte = self.fenetre.ouverte()
+        if ouverte == self._fenetre_ouverte:
+            return False
+        self._fenetre_ouverte = ouverte
+        journal.info("fenêtre d'appairage %s", "ouverte" if ouverte else "fermée")
+        if ouverte:
+            self.ecrire_etat()
+        else:
+            self.appairage.renouveler()
+        return True
 
     def publier(self, adresse, port, port_https=None):
         self.url = f"http://{adresse}:{port}/"
@@ -1156,12 +1342,19 @@ class Service:
         """Ce que la TV affiche : URL (pour le QR code), code, expiration."""
         if not self.url:
             return
+        empreinte = self.tls.empreinte() if self.tls and self.tls_pret else None
         etat = {"url": self.url, "code": self.appairage.code, "expire": self.appairage.expire_ms,
                 "telephones": len(self.jetons.lister()), "appairageLe": self.appairage_le,
-                # À afficher sur la TV à côté du code : c'est ce que le téléphone compare
-                # avant de faire confiance au certificat téléchargé en http.
+                # Le code ne vaut rien tant que ceci est faux : le menu le dit plutôt que
+                # de laisser taper un code refusé.
+                "appairageOuvert": self.fenetre.ouverte(),
+                "appairageJusque": self.fenetre.jusqua_ms(),
                 "https": self.url_https,
-                "empreinteRacine": self.tls.empreinte() if self.tls and self.tls_pret else None}
+                # À afficher sur la TV : c'est le SEUL endroit d'où l'empreinte fait foi.
+                # Le téléphone la compare à celle que montrent ses propres réglages
+                # (détails du certificat installé), jamais à ce que dit la page http.
+                "empreinteRacine": empreinte,
+                "empreinteRacineCourte": empreinte_courte(empreinte)}
         with self._verrou_etat:
             try:
                 ecrire_prive(self.chemins["etat"], json.dumps(etat))
@@ -1193,11 +1386,35 @@ class Service:
         Path(self.chemins["etat"]).unlink(missing_ok=True)
 
 
-def enregistrer_photo(dossier, octets, maintenant):
+class PhotoRefusee(Exception):
+    """raison : « quota » (trop de photos du téléphone) ou « espace » (disque presque plein)."""
+
+
+def _espace_libre(dossier):
+    return shutil.disk_usage(dossier).free
+
+
+def enregistrer_photo(dossier, octets, maintenant, espace_libre=_espace_libre):
     """Nom du fichier écrit. Le nom vient d'ici, jamais du téléphone : aucun chemin
-    fourni par le réseau ne touche le disque."""
+    fourni par le réseau ne touche le disque. PhotoRefusee au-delà des quotas.
+
+    L'appelant sérialise les envois : sinon dix envois simultanés passeraient tous le
+    contrôle du quota avant qu'aucun n'écrive."""
     dossier = Path(dossier)
     dossier.mkdir(parents=True, exist_ok=True)
+    # Seules les photos de ce service comptent : celles copiées à la main dans le
+    # dossier ne doivent pas bloquer, ni être comptées contre le téléphone.
+    nombre, taille = 0, 0
+    for photo in dossier.glob("telephone-*.jpg"):
+        try:
+            taille += photo.stat().st_size
+            nombre += 1
+        except OSError:
+            continue
+    if nombre >= PHOTOS_MAX or taille + len(octets) > PHOTOS_TAILLE_MAX:
+        raise PhotoRefusee("quota")
+    if espace_libre(dossier) - len(octets) < ESPACE_LIBRE_MIN:
+        raise PhotoRefusee("espace")
     base = time.strftime("telephone-%Y%m%d-%H%M%S", time.localtime(maintenant))
     provisoire = dossier / f".{base}.{secrets.token_hex(4)}.tmp"
     fd = os.open(provisoire, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
@@ -1347,9 +1564,10 @@ def _gestionnaire(service):
             if chemin == "/api/certificat":
                 pret = bool(service.tls and service.tls_pret)
                 origine = (f"https://{self._hote()}" if self.securise else self._origine_https()) if pret else None
+                # Pas d'empreinte ici : venue par le même canal http que le certificat,
+                # elle serait remplacée avec lui. Elle ne fait foi que lue sur la TV.
                 return self._json(200, {"disponible": pret, "securise": self.securise,
-                                        "https": origine + "/" if origine else None,
-                                        "empreinte": service.tls.empreinte() if pret else None})
+                                        "https": origine + "/" if origine else None})
             if chemin == "/manifest.webmanifest":
                 return self._repondre(200, service.ressources.manifeste,
                                       "application/manifest+json; charset=utf-8")
@@ -1445,6 +1663,9 @@ def _gestionnaire(service):
                     return self._json(403, {"erreur": "transfert"})
                 return self._delivrer(corps, ip)
             resultat = service.appairage.essayer(ip, corps.get("code"))
+            if resultat == FERME:
+                journal.info("appairage refusé depuis %s : écran d'appairage fermé", ip)
+                return self._json(403, {"erreur": "appairage-ferme"})
             if resultat == TROP:
                 attente = service.appairage.attente_s(ip)
                 journal.warning("appairage : trop d'essais depuis %s", ip)
@@ -1533,7 +1754,11 @@ def _gestionnaire(service):
             if len(octets) != longueur or not octets.startswith(b"\xff\xd8\xff"):
                 return self._json(400, {"erreur": "jpeg"})
             try:
-                nom = enregistrer_photo(service.chemins["photos"], octets, service.horloge())
+                with service._verrou_photos:
+                    nom = enregistrer_photo(service.chemins["photos"], octets, service.horloge())
+            except PhotoRefusee as refus:
+                journal.warning("photo refusée (%s)", refus)
+                return self._json(507, {"erreur": str(refus)})
             except OSError as erreur:
                 journal.error("photo non enregistrée : %s", erreur)
                 return self._json(500, {"erreur": "disque"})
@@ -1571,6 +1796,49 @@ class Serveur(ThreadingHTTPServer):
     # Pas de SO_REUSEPORT : un second service lancé par erreur doit échouer bruyamment
     # plutôt que se partager les requêtes avec le premier.
     allow_reuse_address = True
+
+    def __init__(self, *args, **kwargs):
+        self.max_connexions = MAX_CONNEXIONS
+        self.max_par_ip = MAX_CONNEXIONS_PAR_IP
+        self._verrou_places = threading.Lock()
+        self._places = {}
+        super().__init__(*args, **kwargs)
+
+    def _reserver(self, ip):
+        with self._verrou_places:
+            if sum(self._places.values()) >= self.max_connexions or self._places.get(ip, 0) >= self.max_par_ip:
+                return False
+            self._places[ip] = self._places.get(ip, 0) + 1
+            return True
+
+    def _liberer(self, ip):
+        with self._verrou_places:
+            reste = self._places.get(ip, 0) - 1
+            if reste > 0:
+                self._places[ip] = reste
+            else:
+                self._places.pop(ip, None)
+
+    def process_request(self, request, client_address):
+        # Au-delà du plafond, la connexion est fermée tout de suite, sans fil : un
+        # appareil qui en ouvre des centaines ne prive pas les autres téléphones, au
+        # pire de lui-même. Le délai de 10 s par lecture libère les muettes.
+        ip = client_address[0]
+        if not self._reserver(ip):
+            journal.debug("%s : trop de connexions, refusée", ip)
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._liberer(ip)
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._liberer(client_address[0])
 
     def handle_error(self, request, client_address):
         # Poignée de main TLS ratée (certificat pas encore installé, http sur le port
@@ -1635,6 +1903,8 @@ def main(argv=None):
                         help="ne pas ouvrir le HTTPS local (ni autorité locale, ni dictée)")
     parser.add_argument("--empreinte", action="store_true",
                         help="empreinte SHA-256 du certificat racine à comparer sur le téléphone")
+    parser.add_argument("--appairage", action="store_true",
+                        help=f"ouvrir l'appairage {FENETRE_APPAIRAGE_S // 60} minutes (sans le menu) et afficher le code")
     parser.add_argument("--lister", action="store_true", help="téléphones appairés")
     parser.add_argument("--revoquer", metavar="ID", help="retirer un téléphone")
     parser.add_argument("--revoquer-tout", action="store_true", help="retirer tous les téléphones")
@@ -1652,6 +1922,24 @@ def main(argv=None):
         empreinte = AutoriteLocale(chemins["tls"]).empreinte()
         print(empreinte or "pas encore d'autorité locale (créée au premier démarrage du service)")
         return 0 if empreinte else 1
+
+    if args.appairage:
+        # Le recours d'un soir de panne, par SSH : le menu ne s'affiche pas, on veut
+        # quand même relier un téléphone.
+        FenetreAppairage(chemins["appairage"]).ouvrir()
+        print(f"appairage ouvert {FENETRE_APPAIRAGE_S // 60} minutes")
+        # Le service publie la fenêtre et le code au plus 5 s plus tard.
+        for _ in range(20):
+            try:
+                etat = json.loads(Path(chemins["etat"]).read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                etat = {}
+            if etat.get("appairageOuvert"):
+                print(f"adresse : {etat.get('url')}\ncode : {etat.get('code')}")
+                return 0
+            time.sleep(0.5)
+        print("service hub-telecommande injoignable (pas de fichier d'état) : est-il lancé ?", file=sys.stderr)
+        return 1
 
     if args.lister or args.revoquer or args.revoquer_tout:
         jetons = Jetons(chemins["jetons"])
@@ -1703,6 +1991,7 @@ def main(argv=None):
         prochain_certificat = time.monotonic() + 3600
         while not arret.wait(5):
             service.appairage.verifier_expiration()
+            service.verifier_fenetre()
             service.dicteur.entretien()
             # Un HUB peut tourner des mois sans redémarrer : le certificat se renouvelle
             # 30 jours avant son terme, en rouvrant l'écoute avec le nouveau.

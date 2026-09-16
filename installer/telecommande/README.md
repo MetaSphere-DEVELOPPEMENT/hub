@@ -1,7 +1,7 @@
 # Télécommande téléphone
 
-Le téléphone devient la télécommande du HUB : on scanne le QR code affiché sur la TV,
-on tape le code à 6 chiffres, et la page offre un pavé tactile (ou la croix
+Le téléphone devient la télécommande du HUB : on affiche Réglages → Télécommande sur
+la TV, on scanne le QR code, on tape le code à 6 chiffres, et la page offre un pavé tactile (ou la croix
 directionnelle), OK, Retour, Accueil, les modes, le volume, la dictée d'une commande,
 l'envoi de texte (recherche dans Kodi) et l'envoi d'une photo de profil. Elle
 s'ajoute à l'écran d'accueil et s'ouvre alors comme une app.
@@ -51,9 +51,13 @@ systemctl --global enable hub-telecommande.service
   `/opt/hub-voix/venv/bin/python` et les modèles de `/opt/hub-voix/modeles`
   (`HUB_VOIX_DOSSIER`, `HUB_VOIX_PYTHON`, `HUB_VOIX_MODELES` pour forcer). Sans elle,
   la dictée répond « non installée » et tout le reste marche.
-- **Le menu doit afficher l'empreinte** `empreinteRacine` du fichier d'état à côté du
-  code (voir plus bas) : c'est ce que le téléphone compare avant de faire confiance
-  au certificat. Tant qu'il ne le fait pas : `hub-telecommande --empreinte`.
+- **Le menu doit ouvrir la fenêtre d'appairage** (fichier `telecommande-appairage`, voir
+  « Intégration dans le menu ») tant que l'écran Télécommande est affiché : sans elle,
+  tout code est refusé. Recours sans menu : `hub-telecommande --appairage`.
+- **Le menu doit afficher l'empreinte** `empreinteRacineCourte` du fichier d'état à côté
+  du code (voir plus bas) : c'est ce que le téléphone compare, dans ses propres réglages,
+  avant de faire confiance au certificat. Tant qu'il ne le fait pas :
+  `hub-telecommande --empreinte`.
 - Aucune dépendance à installer : `python3`, `openssl`, `wpctl` (paquet
   `wireplumber`) et `gnome-session-quit` sont déjà sur Ubuntu Desktop.
 
@@ -84,9 +88,22 @@ la télécommande n'est ouverte ni à un invité, ni à une page web étrangère
 
 - **Appairage.** Code à 6 chiffres affiché sur la TV : il faut être dans la pièce.
   Renouvelé à chaque démarrage, après chaque appairage réussi, toutes les 5 minutes,
-  et après 20 codes faux toutes adresses confondues.
-- **Limite d'essais.** 5 essais par minute par adresse IP (réussites comprises),
-  réponse 429 avec `Retry-After` au-delà.
+  à la fermeture de l'écran d'appairage et après 20 codes faux toutes adresses confondues.
+- **Fenêtre d'appairage.** Un code n'est comparé que si l'écran Télécommande est
+  affiché sur la TV : le menu touche `$XDG_RUNTIME_DIR/hub/telecommande-appairage`, qui
+  ouvre l'appairage 5 minutes après sa date de modification. Sinon 403
+  `appairage-ferme`, sans rien compter. Avant le 17/09/2026, l'appairage était ouvert en
+  permanence.
+- **Limite d'essais.** 5 essais par minute par adresse IP (réussites comprises), et
+  surtout une limite **globale** : après 3 codes faux toutes adresses confondues, chaque
+  essai attend 2, 4, 8, 16, 32 puis 60 s (la série s'oublie après 15 min calmes ou une
+  réussite). Réponse 429 avec `Retry-After` au-delà. Pourquoi : l'audit du 17/09/2026
+  montrait qu'un appareil prenant ~250 adresses sur le réseau avait ~50 % de chances de
+  deviner le code en ~9 h avec la seule limite par adresse. Désormais : au plus ~12
+  essais par fenêtre de 5 min (test `test_delai_global_croissant_toutes_adresses_confondues`),
+  ~1 chance sur 80 000, et seulement pendant qu'on appaire. Le prix : quelqu'un du
+  réseau qui envoie des codes faux en continu retarde l'appairage légitime (au plus
+  60 s par essai) ; le journal le montre (`appairage : code faux depuis …`).
 - **Jeton.** `secrets.token_urlsafe(32)` (256 bits), gardé par le téléphone dans
   `localStorage`. Le HUB n'en garde que l'**empreinte SHA-256**, dans
   `~/.config/hub/telecommande-jetons.json` (0600). Envoyé en `Authorization: Bearer`,
@@ -117,7 +134,12 @@ la télécommande n'est ouverte ni à un invité, ni à une page web étrangère
   c'est refusé.
 - Corps limités à 2 Kio (JSON), 2 Mio (photo) et 10 s de son (dictée, WAV 16 kHz
   mono 16 bits exigé, rien d'autre n'atteint le reconnaisseur) ; délai de 10 s par
-  connexion, poignée de main TLS comprise.
+  lecture, poignée de main TLS comprise.
+- **Connexions bornées** : 32 à la fois par port, 8 par adresse IP ; au-delà, la
+  connexion est fermée sans ouvrir de fil. Avant, chaque connexion muette coûtait un fil.
+- **Photos bornées** : au plus 50 photos `telephone-*.jpg` et 50 Mio en tout dans le
+  dossier des profils, jamais s'il resterait moins de 512 Mio libres (507 `quota` ou
+  `espace`). Les photos déposées à la main ne comptent pas.
 - **Ticket de transfert** http → https : 256 bits, usage unique, 2 minutes, accepté
   sur l'origine https seulement ; il voyage dans le fragment de l'URL (jamais envoyé
   au serveur par le navigateur) et la page l'efface de l'adresse avant tout.
@@ -132,25 +154,47 @@ Créée au premier démarrage dans `~/.config/hub/telecommande-tls/` (dossier 07
 | `hub.key` (0600) · `hub.crt` | 397 jours, `serverAuth`, SAN : IP du HUB, `hub.local`, `nom-machine.local` |
 | `hub.json` | adresse, noms, échéance, empreinte de la racine qui l'a signé |
 
-- **Contraintes de nom critiques** sur la racine : 10/8, 172.16/12, 192.168/16,
-  169.254/16, 127/8 et `.local`. Même volée, la clé ne signe rien qu'un téléphone
-  accepterait pour un site public (test : un certificat `banque.example` signé par la
-  racine est refusé, « permitted subtree violation »).
-- Le certificat du HUB est **réémis tout seul** si l'adresse DHCP ou le nom change,
-  ou 30 jours avant l'échéance (vérifié toutes les heures) ; la racine, seule chose
-  installée sur les téléphones, ne change pas. Adresse non privée, horloge avant
-  2026 ou openssl absent : pas de HTTPS, la télécommande http continue.
+- **Contraintes de nom critiques** sur la racine, réduites au strict nécessaire :
+  l'adresse actuelle du HUB **en /32**, `hub.local` et `nom-machine.local`. Pourquoi :
+  `racine.key` est lisible par tout programme de la session (Kodi, UxPlay, Chrome…) ;
+  volée, l'ancienne racine (10/8, 172.16/12, 192.168/16, 169.254/16, 127/8, `.local`)
+  permettait d'intercepter le HTTPS du téléphone vers **toute adresse privée de
+  n'importe quel réseau** (box, NAS, wifi d'hôtel). Volée aujourd'hui, elle ne permet
+  d'usurper que le HUB — ce que `hub.key`, lisible pareil, permet déjà. Tests : un
+  certificat signé par la racine pour `banque.example`, `192.168.1.1`, `10.0.0.5` ou
+  `nas.local` est refusé (« permitted subtree violation »).
+- Écarté : supprimer `racine.key` après signature. Le certificat du HUB (397 jours)
+  ne pourrait plus être renouvelé sans réinstaller la racine, et `hub.key` reste de
+  toute façon exposée.
+- **Le prix : une autre adresse ou un autre nom de machine = une nouvelle racine**, à
+  réinstaller sur chaque téléphone (et retirer l'ancienne). **Réserver l'adresse du
+  HUB en DHCP sur la box** (bail fixe) évite de le refaire.
+- **Migration** : au démarrage, le service relit les contraintes de la racine existante
+  (`openssl x509 -text`) ; si elles diffèrent de celles attendues (racine d'avant le
+  17/09/2026, adresse ou nom changés, racine sans contraintes), il **détruit l'ancienne
+  clé, crée une nouvelle racine** et réémet le certificat. Journal : « autorité locale
+  remplacée ». **Après cette mise à jour, il faut donc réinstaller le certificat sur
+  chaque téléphone une fois** et supprimer l'ancien « HUB autorité locale » de ses
+  réglages.
+- Le certificat du HUB est **réémis tout seul** 30 jours avant l'échéance (vérifié
+  toutes les heures) ; la racine, seule chose installée sur les téléphones, ne change
+  pas alors. Adresse non privée, horloge avant 2026 ou openssl absent : pas de HTTPS, la
+  télécommande http continue.
 - 397 jours : sous la limite d'Apple (825 j) et sous celle des autorités publiques
   (398 j), si un navigateur l'étendait un jour aux racines installées à la main.
 - Réinitialiser : arrêter le service, supprimer le dossier, relancer — puis
   réinstaller la nouvelle racine sur chaque téléphone (et retirer l'ancienne).
 - Le téléchargement de la racine passe en **http** : quelqu'un sur le wifi pourrait
-  la remplacer. D'où l'empreinte SHA-256 affichée sur la TV (fichier d'état), à
-  comparer avec celle que montre le téléphone avant d'activer la confiance.
+  la remplacer. D'où l'empreinte SHA-256 affichée **sur la TV** (fichier d'état), à
+  comparer avec celle que montrent **les réglages du téléphone** (détails du certificat
+  téléchargé) avant d'activer la confiance. La page du téléphone ne l'affiche plus, et
+  `/api/certificat` ne la donne plus : venue par le même canal http que le certificat,
+  elle aurait été remplacée avec lui (vérification circulaire, audit du 17/09/2026).
 
 ## Révoquer un téléphone
 
 ```bash
+hub-telecommande --appairage         # sans le menu (SSH) : ouvre l'appairage 5 min, affiche le code
 hub-telecommande --lister            # id, nom, date d'appairage, dernier usage
 hub-telecommande --revoquer 2ab063   # un téléphone
 hub-telecommande --revoquer-tout     # tous
@@ -180,14 +224,14 @@ que `hub-voix`). `Input.SendText` n'a d'effet que si un clavier est ouvert dans 
 | Requête | Jeton | Réponse |
 |---|---|---|
 | `GET /` | non | la page |
-| `POST /api/appairer` `{"code":"123456","nom":"Pixel 8"}` | non | 200 `{"jeton","id","nom"}` · 403 code faux · 429 trop d'essais |
+| `POST /api/appairer` `{"code":"123456","nom":"Pixel 8"}` | non | 200 `{"jeton","id","nom"}` · 403 `{"erreur":"code"}` code faux · 403 `{"erreur":"appairage-ferme"}` écran d'appairage fermé · 429 `{"attente"}` trop d'essais |
 | `POST /api/commande` `{"nom":"gauche"}` ou `{"nom":"texte","texte":"Dune"}` | oui | 200 `{"ok","cible","raison"?,"volume"?}` · 400 hors liste · 401 |
 | `GET /api/etat` | oui | `{"ok":true,"contexte":"menu"\|"kodi"\|"bureau"\|null}` |
 | `POST /api/oublier` `{}` | oui | révoque le jeton présenté |
-| `POST /photo-profil` (corps JPEG brut, `Content-Type: image/jpeg`) | oui | 200 `{"ok":true,"fichier":"telephone-AAAAMMJJ-HHMMSS.jpg"}` · 400 pas un JPEG · 413 > 2 Mio · 415 |
+| `POST /photo-profil` (corps JPEG brut, `Content-Type: image/jpeg`) | oui | 200 `{"ok":true,"fichier":"telephone-AAAAMMJJ-HHMMSS.jpg"}` · 400 pas un JPEG · 413 > 2 Mio · 415 · 507 `{"erreur":"quota"\|"espace"}` |
 | `GET /manifest.webmanifest`, `/icone-32.png`, `/icone-192.png`, `/icone-512.png`, `/apple-touch-icon.png` | non | manifeste, icônes |
 | `GET /hub-racine.crt` | non | la racine en DER (`application/x-x509-ca-cert`) · 404 si HTTPS désactivé |
-| `GET /api/certificat` | non | `{"disponible","securise","https":"https://nom:8791/","empreinte"}` |
+| `GET /api/certificat` | non | `{"disponible","securise","https":"https://nom:8791/"}` (pas d'empreinte : elle ne fait foi que sur la TV) |
 | `GET /sonde` (https) | non | 204 vide, lisible en `no-cors` : prouve que le téléphone fait confiance |
 | `POST /api/transfert` `{}` | oui | `{"url":"https://nom:8791/#transfert=…"}` |
 | `POST /api/appairer` `{"transfert":"…","nom":…}` (https) | non | comme avec le code · 403 ticket faux, usé, expiré ou reçu en http |
@@ -197,7 +241,8 @@ que `hub-voix`). `Input.SendText` n'a d'effet que si un clavier est ouvert dans 
 
 Le téléphone recadre au centre en carré de 512 px et réencode en JPEG qualité 0,88
 (aperçu rond avant l'envoi). Le serveur n'accepte que des octets commençant par
-`FF D8 FF`, écrit de façon atomique dans `~/Images/HUB/profils/telephone-AAAAMMJJ-HHMMSS.jpg`
+`FF D8 FF`, dans la limite des quotas (50 photos du téléphone, 50 Mio, 512 Mio libres au
+moins, 507 sinon), écrit de façon atomique dans `~/Images/HUB/profils/telephone-AAAAMMJJ-HHMMSS.jpg`
 (suffixe `-2`, `-3`… si deux photos arrivent dans la même seconde, jamais
 d'écrasement), puis envoie le datagramme `avatars` au socket du menu s'il existe.
 
@@ -205,24 +250,48 @@ d'écrasement), puis envoie le datagramme `avatars` au socket du menu s'il exist
 
 ### Fichier d'état
 
-`$XDG_RUNTIME_DIR/hub/telecommande.json` (0600), réécrit à chaque changement de code ou
-d'adresse, **supprimé** quand le service s'arrête ou n'a pas d'adresse :
+`$XDG_RUNTIME_DIR/hub/telecommande.json` (0600), réécrit à chaque changement de code,
+d'adresse ou de fenêtre d'appairage, **supprimé** quand le service s'arrête ou n'a pas
+d'adresse :
 
 ```json
 {"url": "http://192.168.1.50:8790/", "code": "123456", "expire": 1789308639458,
  "telephones": 1, "appairageLe": 1789308300000,
+ "appairageOuvert": true, "appairageJusque": 1789308600000,
  "https": "https://192.168.1.50:8791/",
- "empreinteRacine": "3A:9F:…:C2"}
+ "empreinteRacine": "3A:9F:…:C2",
+ "empreinteRacineCourte": "3A9F 12C0 4481 7BE2"}
 ```
 
-`expire` et `appairageLe` en millisecondes epoch ; `telephones` = nombre de
-téléphones appairés ; `appairageLe` change quand un téléphone vient d'être relié
-(pour afficher « Téléphone relié » sur la TV). Le menu doit relire le fichier quand il
-change (Gio.FileMonitor, ou toutes les 2 s tant que l'écran est affiché) et masquer
-QR code et code si le fichier est absent. `https` et `empreinteRacine` valent `null`
-quand le HTTPS n'est pas disponible ; sinon **afficher l'empreinte** (en petit, sous
-le code, par exemple en 8 groupes de 4 paires) : le téléphone la compare avant de
-faire confiance au certificat.
+`expire`, `appairageLe` et `appairageJusque` en millisecondes epoch ; `telephones` =
+nombre de téléphones appairés ; `appairageLe` change quand un téléphone vient d'être
+relié (pour afficher « Téléphone relié » sur la TV). `appairageOuvert` : le code est-il
+accepté en ce moment (publié au plus 5 s après l'ouverture ou la fermeture) ;
+`appairageJusque` : fin de la fenêtre, `null` si fermée. Le menu doit relire le fichier
+quand il change (Gio.FileMonitor, ou toutes les 2 s tant que l'écran est affiché) et
+masquer QR code et code si le fichier est absent. `https`, `empreinteRacine` et
+`empreinteRacineCourte` valent `null` quand le HTTPS n'est pas disponible ; sinon
+**afficher `empreinteRacineCourte`** sous le code, telle quelle (les 8 premières paires
+de l'empreinte SHA-256, 4 groupes de 4 caractères hexadécimaux majuscules), avec
+« Empreinte du certificat (début) » : le téléphone la compare à celle de ses réglages
+avant de faire confiance au certificat. 64 bits suffisent contre quelqu'un du wifi et se
+lisent d'un canapé ; `empreinteRacine` (32 paires séparées par `:`) reste disponible.
+
+### Fenêtre d'appairage
+
+`$XDG_RUNTIME_DIR/hub/telecommande-appairage` : fichier vide, régulier, de l'utilisateur
+de la session. **L'appairage est ouvert tant que sa date de modification a moins de
+5 minutes** (et pas plus d'une minute dans le futur) ; son contenu est ignoré ; un lien
+symbolique n'ouvre rien.
+
+- Le menu le **crée ou le touche** (`os.utime`, ou réécriture) quand il affiche l'écran
+  Télécommande, puis **au moins toutes les 60 s** tant que l'écran reste affiché ;
+- il le **supprime** quand l'écran se ferme (le code est alors renouvelé : celui vu à
+  l'écran ne servira pas à la prochaine ouverture) ;
+- s'il tombe sans le supprimer, la fenêtre se ferme seule 5 minutes après le dernier
+  toucher.
+- `hub-telecommande --appairage` fait la même chose une fois (5 min), pour un appairage
+  par SSH sans menu.
 
 ### `qrcode.js`
 
@@ -362,6 +431,24 @@ Node 22) :
   remplacé par le fichier « Télé. », page en https vérifié, vrai Vosk → datagrammes
   `voix:entendu:télé`, `tv`, `voix:repos` au menu** (sans Vosk, un faux reconnaisseur
   vérifie la capture et la durée envoyée).
+
+Le 17 septembre 2026, sur un Mac (Python 3.9.6 lié à LibreSSL 2.8.3, OpenSSL 3.6.4 de
+Homebrew en ligne de commande) — correctifs de l'audit de sécurité du même jour :
+
+- `python3 -m unittest installer/telecommande/test_telecommande.py` : 88 tests, dont
+  fenêtre d'appairage, délai global croissant (au plus 15 essais simulés par fenêtre de
+  5 min en changeant d'adresse à chaque essai), quotas de photos (envois simultanés
+  compris), plafond de connexions, racine /32 (certificats pour d'autres adresses
+  privées et d'autres noms `.local` refusés par `openssl verify`), migration d'une
+  racine d'avant le 17/09 et d'une racine sans contraintes. **6 tests `ServiceHTTPS`
+  échouent sur ce Mac, avant comme après** : le module `ssl` de Python y est lié à
+  LibreSSL 2.8.3, qui refuse les contraintes de nom IP (« unsupported name constraint
+  type »). Sur le HUB (OpenSSL 3), ils sont à relancer.
+- Contre-épreuve à la main avec OpenSSL 3.6.4 (`openssl s_client -verify_return_error`)
+  contre `banc_essai.py --https` : chaîne acceptée pour `hub.local` et `127.0.0.1`,
+  refusée pour `autre.local` et `127.0.0.2`.
+- `test_navigateur.mjs` mis à jour (l'empreinte absente de la page) mais **pas relancé**
+  (ni Chrome ni playwright sur cette machine).
 
 **Pas prouvé :** un vrai téléphone sur le vrai réseau du HUB — ni l'installation de
 la racine sur Android ou iPhone (écrans de réglages décrits d'après la documentation),
