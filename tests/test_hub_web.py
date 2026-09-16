@@ -77,8 +77,8 @@ class Profils(unittest.TestCase):
     def test_profil_actif_et_langue(self):
         with tempfile.TemporaryDirectory() as d:
             f = Path(d) / "reglages.json"
-            f.write_text(json.dumps({"profilActif": "nora", "profils": [{"id": "samuel"}, {"id": "nora", "langue": "en"}]}))
-            self.assertEqual(hub_web.lire_profil(f), ("nora", "en"))
+            f.write_text(json.dumps({"profilActif": "alix", "profils": [{"id": "samuel"}, {"id": "alix", "langue": "en"}]}))
+            self.assertEqual(hub_web.lire_profil(f), ("alix", "en"))
 
     def test_reglages_absents_ou_hostiles(self):
         with tempfile.TemporaryDirectory() as d:
@@ -94,7 +94,7 @@ class Profils(unittest.TestCase):
         os.environ["XDG_DATA_HOME"] = "/donnees"
         try:
             self.assertEqual(hub_web.dossier_profil("samuel"), Path("/donnees/hub/navigateur/samuel"))
-            self.assertNotEqual(hub_web.dossier_profil("samuel"), hub_web.dossier_profil("nora"))
+            self.assertNotEqual(hub_web.dossier_profil("samuel"), hub_web.dossier_profil("alix"))
             self.assertEqual(hub_web.dossier_profil("../samuel"), Path("/donnees/hub/navigateur/defaut"))
         finally:
             if ancien is None:

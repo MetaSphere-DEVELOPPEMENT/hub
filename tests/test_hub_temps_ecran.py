@@ -46,10 +46,10 @@ class Regles(unittest.TestCase):
         self.assertEqual(te.minutes_du_jour("21:30"), 21 * 60 + 30)
 
     def test_regles_du_profil_lues_dans_les_reglages(self):
-        reglages = {"profilActif": "lea", "profils": [{"id": "sam"}, {"id": "lea", "tempsEcran": REGLES}]}
-        self.assertEqual(te.regles_du_profil(reglages, "lea"), REGLES)
+        reglages = {"profilActif": "camille", "profils": [{"id": "sam"}, {"id": "camille", "tempsEcran": REGLES}]}
+        self.assertEqual(te.regles_du_profil(reglages, "camille"), REGLES)
         self.assertIsNone(te.regles_du_profil(reglages, "sam"))
-        self.assertIsNone(te.regles_du_profil(None, "lea"))
+        self.assertIsNone(te.regles_du_profil(None, "camille"))
 
 
 class Restant(unittest.TestCase):
@@ -79,16 +79,16 @@ class Restant(unittest.TestCase):
     def test_la_prolongation_ouvre_aussi_la_plage(self):
         # Un parent accorde 30 min à 21 h 10 : l'enfant a bien 30 min, plage ou pas.
         etat = {}
-        te.prolonger(etat, "lea", 30, ts(f"{MARDI} 21:10"))
-        jour = etat["profils"]["lea"][MARDI]
+        te.prolonger(etat, "camille", 30, ts(f"{MARDI} 21:10"))
+        jour = etat["profils"]["camille"][MARDI]
         self.assertEqual(te.restant(REGLES, jour, ts(f"{MARDI} 21:10")), 30 * 60)
         self.assertEqual(te.restant(REGLES, jour, ts(f"{MARDI} 21:40")), 0)
 
     def test_prolongations_successives_se_cumulent(self):
         etat = {}
-        te.prolonger(etat, "lea", 15, ts(f"{MARDI} 21:00"))
-        te.prolonger(etat, "lea", 15, ts(f"{MARDI} 21:05"))
-        jour = etat["profils"]["lea"][MARDI]
+        te.prolonger(etat, "camille", 15, ts(f"{MARDI} 21:00"))
+        te.prolonger(etat, "camille", 15, ts(f"{MARDI} 21:05"))
+        jour = etat["profils"]["camille"][MARDI]
         self.assertEqual(jour["bonus"], 1800)
         self.assertEqual(te.restant(REGLES, jour, ts(f"{MARDI} 21:05")), 25 * 60)
 
@@ -96,30 +96,30 @@ class Restant(unittest.TestCase):
 class Comptage(unittest.TestCase):
     def test_ajoute_par_profil_jour_et_mode(self):
         etat = {}
-        te.ajouter(etat, "lea", "tv", 600, ts(f"{MARDI} 10:00"))
-        te.ajouter(etat, "lea", "tv", 60, ts(f"{MARDI} 11:00"))
-        te.ajouter(etat, "lea", "bureau", 30, ts(f"{MARDI} 12:00"))
+        te.ajouter(etat, "camille", "tv", 600, ts(f"{MARDI} 10:00"))
+        te.ajouter(etat, "camille", "tv", 60, ts(f"{MARDI} 11:00"))
+        te.ajouter(etat, "camille", "bureau", 30, ts(f"{MARDI} 12:00"))
         te.ajouter(etat, "sam", "tv", 5, ts(f"{MARDI} 12:00"))
-        jour = etat["profils"]["lea"][MARDI]
+        jour = etat["profils"]["camille"][MARDI]
         self.assertEqual(jour["secondes"], 690)
         self.assertEqual(jour["modes"], {"tv": 660, "bureau": 30})
         self.assertEqual(etat["profils"]["sam"][MARDI]["secondes"], 5)
 
     def test_historique_sept_jours_du_plus_ancien_au_plus_recent(self):
         etat = {}
-        te.ajouter(etat, "lea", "tv", 100, ts("2026-09-10 10:00"))
-        te.ajouter(etat, "lea", "tv", 200, ts(f"{MARDI} 10:00"))
-        te.ajouter(etat, "lea", "tv", 999, ts("2026-09-01 10:00"))
-        h = te.historique(etat, "lea", ts(f"{MARDI} 12:00"))
+        te.ajouter(etat, "camille", "tv", 100, ts("2026-09-10 10:00"))
+        te.ajouter(etat, "camille", "tv", 200, ts(f"{MARDI} 10:00"))
+        te.ajouter(etat, "camille", "tv", 999, ts("2026-09-01 10:00"))
+        h = te.historique(etat, "camille", ts(f"{MARDI} 12:00"))
         self.assertEqual([j["jour"] for j in h], [f"2026-09-{d:02d}" for d in range(9, 16)])
         self.assertEqual([j["secondes"] for j in h], [0, 100, 0, 0, 0, 0, 200])
 
     def test_menage_des_vieux_jours(self):
         etat = {}
-        te.ajouter(etat, "lea", "tv", 100, ts("2026-07-01 10:00"))
-        te.ajouter(etat, "lea", "tv", 100, ts(f"{MARDI} 10:00"))
+        te.ajouter(etat, "camille", "tv", 100, ts("2026-07-01 10:00"))
+        te.ajouter(etat, "camille", "tv", 100, ts(f"{MARDI} 10:00"))
         te.menage(etat, ts(f"{MARDI} 12:00"))
-        self.assertEqual(list(etat["profils"]["lea"]), [MARDI])
+        self.assertEqual(list(etat["profils"]["camille"]), [MARDI])
 
 
 class Fichier(unittest.TestCase):
@@ -137,8 +137,8 @@ class Fichier(unittest.TestCase):
         self.assertEqual(te.lire_etat(self.chemin), {"version": 1, "profils": {}})
 
     def test_modifier_ecrit_atomiquement(self):
-        te.modifier_etat(self.chemin, lambda e: te.ajouter(e, "lea", "tv", 42, ts(f"{MARDI} 10:00")))
-        self.assertEqual(json.loads(self.chemin.read_text())["profils"]["lea"][MARDI]["secondes"], 42)
+        te.modifier_etat(self.chemin, lambda e: te.ajouter(e, "camille", "tv", 42, ts(f"{MARDI} 10:00")))
+        self.assertEqual(json.loads(self.chemin.read_text())["profils"]["camille"][MARDI]["secondes"], 42)
         restes = sorted(p.name for p in self.chemin.parent.iterdir())
         self.assertEqual(restes, ["temps-ecran.json", "temps-ecran.json.verrou"])
 
@@ -146,11 +146,11 @@ class Fichier(unittest.TestCase):
         # Le menu (prolongation) et le suivi d'un mode peuvent écrire en même temps.
         def boucle():
             for _ in range(25):
-                te.modifier_etat(self.chemin, lambda e: te.ajouter(e, "lea", "tv", 1, ts(f"{MARDI} 10:00")))
+                te.modifier_etat(self.chemin, lambda e: te.ajouter(e, "camille", "tv", 1, ts(f"{MARDI} 10:00")))
         fils = [threading.Thread(target=boucle) for _ in range(4)]
         [f.start() for f in fils]
         [f.join() for f in fils]
-        self.assertEqual(te.lire_etat(self.chemin)["profils"]["lea"][MARDI]["secondes"], 100)
+        self.assertEqual(te.lire_etat(self.chemin)["profils"]["camille"][MARDI]["secondes"], 100)
 
 
 class FauxProcessus:
@@ -188,7 +188,7 @@ class Suivi(unittest.TestCase):
         self._tmp.cleanup()
 
     def reglages(self, regles):
-        self.c["reglages"].write_text(json.dumps({"profilActif": "lea", "profils": [{"id": "lea", "langue": "fr", "tempsEcran": regles}]}))
+        self.c["reglages"].write_text(json.dumps({"profilActif": "camille", "profils": [{"id": "camille", "langue": "fr", "tempsEcran": regles}]}))
 
     def suivre(self, horloge, processus, mode="tv"):
         return te.suivre(
@@ -202,7 +202,7 @@ class Suivi(unittest.TestCase):
         self.reglages(None)
         h = Horloge(f"{MARDI} 10:00")
         self.suivre(h, FauxProcessus(600, h))
-        self.assertEqual(te.lire_etat(self.c["etat"])["profils"]["lea"][MARDI]["secondes"], 600)
+        self.assertEqual(te.lire_etat(self.c["etat"])["profils"]["camille"][MARDI]["secondes"], 600)
         self.assertEqual(self.avertissements, [])
 
     def test_avertit_cinq_minutes_avant_puis_ramene_au_menu(self):
@@ -212,7 +212,7 @@ class Suivi(unittest.TestCase):
         self.assertEqual([n for n, _ in self.avertissements], ["bientot", "fin"])
         self.assertEqual(self.avertissements[0][1], 5)
         self.assertEqual(self.termines, ["tv"])
-        passe = te.lire_etat(self.c["etat"])["profils"]["lea"][MARDI]["secondes"]
+        passe = te.lire_etat(self.c["etat"])["profils"]["camille"][MARDI]["secondes"]
         self.assertTrue(600 <= passe <= 615, passe)
 
     def test_refuse_de_lancer_quand_le_temps_est_ecoule(self):
@@ -237,7 +237,7 @@ class Suivi(unittest.TestCase):
             return vrai_wait(timeout)
         p.wait = wait
         self.suivre(h, p)
-        self.assertLessEqual(te.lire_etat(self.c["etat"])["profils"]["lea"][MARDI]["secondes"], 60)
+        self.assertLessEqual(te.lire_etat(self.c["etat"])["profils"]["camille"][MARDI]["secondes"], 60)
 
 
 class Avertir(unittest.TestCase):

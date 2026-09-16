@@ -101,9 +101,9 @@ test("AirPlay avec pochette, et en mode ambiant", async () => {
 
 test("recopie d'écran : le bandeau dit d'où elle vient", async () => {
   await ouvrir();
-  await recevoir({ type: "lecture", etat: { source: "ecran", etat: "lecture", appareil: "iPad de Léa", ecran: true } });
+  await recevoir({ type: "lecture", etat: { source: "ecran", etat: "lecture", appareil: "iPad de Camille", ecran: true } });
   assert.equal(await texte("lecture-titre"), "Recopie d'écran");
-  assert.equal(await texte("lecture-detail"), "depuis iPad de Léa");
+  assert.equal(await texte("lecture-detail"), "depuis iPad de Camille");
 });
 
 test("Réglages → Enceinte réseau : couper la recopie et renommer l'appareil sont enregistrés", async () => {
