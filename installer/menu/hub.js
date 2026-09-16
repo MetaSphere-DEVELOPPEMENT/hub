@@ -1116,11 +1116,21 @@ function rendreSecurite() {
 // ── Code PIN ──────────────────────────────────────────────────────────────
 // Un verrou familial, pas un coffre-fort : il empêche d'ouvrir le profil ou les
 // réglages d'un autre, il ne chiffre rien. Le code n'est jamais stocké en clair.
+//
+// C'est hub-menu qui vérifie (→ { type: "pin-verifier", demande, profils, code }) et
+// qui hache un nouveau code (→ { type: "pin-creer", demande, code }) : il relit les
+// empreintes sur disque et compte les échecs dans un fichier, là où ni une relance du
+// menu ni une saisie scriptée depuis le téléphone ne les remettent à zéro. Réponse :
+// { type: "pin", demande, resultat: "ok" | "refus" | "bloque" | "hache", attente, pin }.
+// La page ne fait que l'afficher. Sans hub-menu (aperçu), elle vérifie elle-même.
 const ICONE_CADENAS = '<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>';
 let deverrouilles = new Set();
 let verrouAccueil = false;
 let demande = null;
-const echecsCode = {};
+// Le blocage annoncé par hub-menu, pour refuser les touches sans l'interroger à chaque chiffre.
+let blocageCode = 0;
+// Au-delà, hub-menu ne répondra plus (PBKDF2 dure moins d'une seconde) : on le dit.
+const DELAI_REPONSE_CODE_MS = 15000;
 
 function sha256(texte) {
   const k = [], h = [];
@@ -1158,8 +1168,52 @@ function sha256(texte) {
 }
 window.hubSha256 = sha256;
 
-function empreinteCode(code, sel) { return sha256(`${sel}:${code}`); }
-function nouveauSel() { return [...crypto.getRandomValues(new Uint8Array(8))].map(o => o.toString(16).padStart(2, "0")).join(""); }
+// Mêmes paramètres que hub-menu (PIN_ALGO, PIN_ITERATIONS) : un profil créé en aperçu
+// reste lisible une fois installé.
+const PIN_ITERATIONS = 600000;
+const hex = octets => [...new Uint8Array(octets)].map(o => o.toString(16).padStart(2, "0")).join("");
+
+async function pbkdf2(code, selHex, iterations) {
+  const cle = await crypto.subtle.importKey("raw", new TextEncoder().encode(code), "PBKDF2", false, ["deriveBits"]);
+  const sel = new Uint8Array(selHex.match(/../g).map(h => parseInt(h, 16)));
+  return hex(await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: sel, iterations }, cle, 256));
+}
+
+let numeroDemandeCode = 0;
+const reponsesCode = new Map();
+function demanderAuHub(message) {
+  const numero = ++numeroDemandeCode;
+  return new Promise(resoudre => {
+    const minuterie = setTimeout(() => { reponsesCode.delete(numero); resoudre(null); }, DELAI_REPONSE_CODE_MS);
+    reponsesCode.set(numero, reponse => { clearTimeout(minuterie); reponsesCode.delete(numero); resoudre(reponse); });
+    envoyer({ ...message, demande: numero });
+  });
+}
+function recevoirCode(message) { reponsesCode.get(message.demande)?.(message); }
+
+// Aperçu seulement : aucun fichier à protéger, le compteur vit en mémoire.
+const apercuCode = { echecs: 0, jusqua: 0 };
+async function verifierCodeLocal(ids, code) {
+  if (apercuCode.jusqua > Date.now()) return { resultat: "bloque", attente: Math.ceil((apercuCode.jusqua - Date.now()) / 1000) };
+  for (const id of ids) {
+    const pin = reglages.profils.find(x => x.id === id)?.pin;
+    if (!pin) continue;
+    const calcule = pin.algo === "pbkdf2-sha256" ? await pbkdf2(code, pin.sel, pin.iterations) : sha256(`${pin.sel}:${code}`);
+    if (calcule === pin.empreinte) { apercuCode.echecs = 0; return { resultat: "ok", profil: id }; }
+  }
+  if (++apercuCode.echecs < 5) return { resultat: "refus", attente: 0 };
+  apercuCode.echecs = 0;
+  apercuCode.jusqua = Date.now() + 30000;
+  return { resultat: "refus", attente: 30 };
+}
+function verifierCode(ids, code) {
+  return PONT ? demanderAuHub({ type: "pin-verifier", profils: ids, code }) : verifierCodeLocal(ids, code);
+}
+async function creerCode(code) {
+  if (PONT) return (await demanderAuHub({ type: "pin-creer", code }))?.pin || null;
+  const sel = hex(crypto.getRandomValues(new Uint8Array(16)));
+  return { algo: "pbkdf2-sha256", iterations: PIN_ITERATIONS, sel, empreinte: await pbkdf2(code, sel, PIN_ITERATIONS) };
+}
 
 function ouvrirPave(p, titre, detail) {
   $("code-titre").textContent = titre;
@@ -1191,11 +1245,10 @@ function majPoints() {
   [...$("code-points").children].forEach((point, i) => point.classList.toggle("plein", i < (demande?.saisie.length || 0)));
 }
 function taperChiffre(ch) {
-  if (!demande) return;
-  const blocage = echecsCode[demande.p.id];
-  if (blocage?.jusqua > Date.now()) {
+  if (!demande || demande.enCours) return;
+  if (blocageCode > Date.now()) {
     son("erreur");
-    $("code-detail").textContent = t("code.bloque", { s: Math.ceil((blocage.jusqua - Date.now()) / 1000) });
+    $("code-detail").textContent = t("code.bloque", { s: Math.ceil((blocageCode - Date.now()) / 1000) });
     return;
   }
   if (demande.saisie.length >= 4) return;
@@ -1205,7 +1258,7 @@ function taperChiffre(ch) {
   if (demande.saisie.length === 4) setTimeout(validerCode, 180);
 }
 function effacerChiffre() {
-  if (!demande) return;
+  if (!demande || demande.enCours) return;
   demande.saisie = demande.saisie.slice(0, -1);
   majPoints();
 }
@@ -1216,13 +1269,30 @@ function refuserCode(message) {
   demande.saisie = "";
   majPoints();
 }
-function validerCode() {
-  if (!demande) return;
+// La demande peut avoir été annulée (Échap) ou remplacée pendant qu'on attendait hub-menu.
+async function attendreHub(travail) {
+  const enCours = demande;
+  enCours.enCours = true;
+  const reponse = await travail;
+  if (demande !== enCours) return undefined;
+  enCours.enCours = false;
+  return reponse;
+}
+
+async function validerCode() {
+  if (!demande || demande.enCours) return;
   const { p, mode, saisie } = demande;
   if (mode === "verifier") {
-    // demande.verifier : un code accepté de plusieurs profils (n'importe quel parent).
-    if (demande.verifier ? demande.verifier(saisie) : p.pin && empreinteCode(saisie, p.pin.sel) === p.pin.empreinte) {
-      delete echecsCode[p.id];
+    // demande.profils : un code accepté de plusieurs profils (n'importe quel parent).
+    const ids = demande.profils || (p.pin ? [p.id] : []);
+    const reponse = await attendreHub(verifierCode(ids, saisie));
+    if (reponse === undefined) return;
+    if (reponse?.resultat === "ok") {
+      // Empreinte refaite par hub-menu (ancien format) : la garder, sinon le prochain
+      // enregistrement des réglages réécrirait l'ancienne.
+      const ouvert = reglages.profils.find(x => x.id === reponse.profil);
+      if (ouvert && reponse.pin) ouvert.pin = reponse.pin;
+      blocageCode = 0;
       deverrouilles.add(p.id);
       if (p.id === profil().id) { verrouAccueil = false; document.body.classList.remove("verrouille"); }
       const { reussite } = demande;
@@ -1232,9 +1302,11 @@ function validerCode() {
       reussite?.();
       return;
     }
-    const echec = echecsCode[p.id] ||= { n: 0, jusqua: 0 };
-    echec.n += 1;
-    if (echec.n >= 5) { echec.n = 0; echec.jusqua = Date.now() + 30000; return refuserCode(t("code.bloque", { s: 30 })); }
+    if (!reponse) return refuserCode(t("code.indisponible"));
+    if (reponse.attente > 0) {
+      blocageCode = Date.now() + reponse.attente * 1000;
+      return refuserCode(t("code.bloque", { s: reponse.attente }));
+    }
     return refuserCode(t("code.faux"));
   }
   if (mode === "nouveau") {
@@ -1249,13 +1321,18 @@ function validerCode() {
     demande.mode = "nouveau";
     return refuserCode(t("code.different"));
   }
-  const sel = nouveauSel();
+  const pin = await attendreHub(creerCode(saisie));
+  if (pin === undefined) return;
+  if (!pin) {
+    demande.mode = "nouveau";
+    return refuserCode(t("code.indisponible"));
+  }
   const { reussite } = demande;
   demande = null;
   deverrouilles.add(p.id);
   fermerCalque();
   annoncer(t("code.defini"));
-  reussite?.({ sel, empreinte: empreinteCode(saisie, sel) });
+  reussite?.(pin);
 }
 function annulerCode() {
   const annuler = demande?.annuler;
@@ -1957,6 +2034,7 @@ window.hub = {
       case "telecommande": return recevoirTelecommande(message.etat);
       case "lecture": return recevoirLecture(message.etat);
       case "maj": return recevoirMiseAJour(message);
+      case "pin": return recevoirCode(message);
       case "texte":
         // Texte tapé sur le téléphone : il remplit la saisie en cours, s'il y en a une.
         if (saisie && typeof message.texte === "string") { saisie.valeur = message.texte.slice(0, 32); majSaisie(); }

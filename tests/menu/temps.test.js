@@ -16,6 +16,33 @@ const PIN_1234 = { sel: "abc", empreinte: createHash("sha256").update("abc:1234"
 const PHOTO = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 
 let navigateur, page;
+
+// Le faux pont joue aussi le rôle de hub-menu pour les codes PIN : il vérifie l'ancien
+// format sha256 (celui de PIN_1234) et compte les échecs comme lui (quatre libres, puis
+// 30 s). window.__pinSilencieux : hub-menu ne répond pas.
+function installerFauxPont(initial) {
+  window.__messages = [];
+  const faux = { echecs: 0, jusqua: 0 };
+  const repondre = m => {
+    if (window.__pinSilencieux) return;
+    let r;
+    if (m.type === "pin-creer") {
+      r = { resultat: "hache", pin: { algo: "essai", sel: "00", empreinte: window.hubSha256(`00:${m.code}`) } };
+    } else if (m.type === "pin-verifier") {
+      if (faux.jusqua > Date.now()) r = { resultat: "bloque", attente: Math.ceil((faux.jusqua - Date.now()) / 1000) };
+      else {
+        // eslint-disable-next-line no-undef -- les réglages de la page, déclarés par hub.js
+        const p = reglages.profils.find(x => m.profils.includes(x.id) && x.pin && window.hubSha256(`${x.pin.sel}:${m.code}`) === x.pin.empreinte);
+        if (p) { faux.echecs = 0; r = { resultat: "ok", attente: 0, profil: p.id }; }
+        else if (++faux.echecs >= 5) { faux.echecs = 0; faux.jusqua = Date.now() + 30000; r = { resultat: "refus", attente: 30 }; }
+        else r = { resultat: "refus", attente: 0 };
+      }
+    } else return;
+    setTimeout(() => window.hub.recevoir({ type: "pin", demande: m.demande, ...r }), 30);
+  };
+  window.webkit = { messageHandlers: { hub: { postMessage: texte => { const m = JSON.parse(texte); window.__messages.push(m); repondre(m); } } } };
+  window.HUB_INITIAL = initial;
+}
 before(async () => {
   navigateur = await chromium.launch(process.env.HUB_NAVIGATEUR === "chromium" ? {} : { channel: "chrome" });
 });
@@ -33,11 +60,7 @@ async function ouvrir(initial = {}, requete = "?sans-intro") {
   page.on("pageerror", e => erreurs.push(e.message));
   page.erreurs = erreurs;
   await page.route(/open-meteo\.com/, route => route.abort());
-  await page.addInitScript(initial => {
-    window.__messages = [];
-    window.webkit = { messageHandlers: { hub: { postMessage: m => window.__messages.push(JSON.parse(m)) } } };
-    window.HUB_INITIAL = initial;
-  }, initial);
+  await page.addInitScript(installerFauxPont, initial);
   await page.goto(PAGE + requete);
   await page.waitForTimeout(250);
 }
