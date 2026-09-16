@@ -1,0 +1,10 @@
+# Clés PUBLIQUES autorisées à signer les versions que le HUB installe.
+#
+# Posé dans /etc/hub/signataires-autorises (root, 0644) par hub-installer.sh ; c'est
+# ce fichier-là que hub-mise-a-jour lit, jamais celui d'un clone. Tant qu'il ne
+# contient aucune ligne de clé, le HUB refuse toute mise à jour depuis le menu.
+#
+# Une ligne par clé, format « allowed signers » de ssh-keygen :
+#   adresse namespaces="git" ssh-ed25519 AAAA…
+# (l'adresse est un simple nom affiché ; la clé est le contenu de ~/.ssh/id_ed25519.pub
+# sans le commentaire final). Procédure : README.md de ce dossier.
