@@ -364,11 +364,6 @@ dialog h2 { font-size: 18px; margin: 4px 4px 14px; }
 .etapes { margin: 0 0 12px; padding-left: 22px; color: var(--texte-doux); line-height: 1.5; font-size: 14px; }
 .etapes li + li { margin-top: 8px; }
 .etapes a.touche { min-height: 52px; color: var(--texte); text-decoration: none; margin-top: 4px; }
-.empreinte {
-  display: block; margin-top: 6px; padding: 8px 10px; border-radius: 10px;
-  background: #07080e; color: var(--texte); font: 12px/1.5 ui-monospace, "Ubuntu Mono", monospace;
-  word-break: break-all; letter-spacing: .02em;
-}
 details.plateforme {
   margin: 0 0 10px; padding: 10px 14px; border-radius: 14px;
   background: var(--verre); border: 1px solid var(--lisere); font-size: 14px; color: var(--texte-doux); line-height: 1.5;
@@ -630,15 +625,17 @@ details.plateforme ol { margin: 8px 0 0; padding-left: 20px; }
   <div id="securite-etapes">
     <ol class="etapes">
       <li><a class="touche" id="lien-certificat" href="/hub-racine.crt">Télécharger le certificat du HUB</a></li>
-      <li>Avant d'y faire confiance, comparez son empreinte SHA-256 avec celle affichée sur la TV
-        (Réglages → Télécommande) : elles doivent être identiques.
-        <code class="empreinte" id="empreinte">…</code></li>
+      <li>Avant d'y faire confiance, ouvrez les détails du certificat <b>dans les réglages du téléphone</b>
+        et comparez le début de son empreinte SHA-256 avec celle affichée sur la TV (Réglages → Télécommande) :
+        les 16 premiers caractères doivent être identiques. Cette page ne l'affiche pas exprès : venue du même
+        chemin que le certificat, elle ne prouverait rien.</li>
     </ol>
     <details class="plateforme" id="etapes-android">
       <summary>Installer sur Android</summary>
       <ol>
         <li>Réglages → cherchez « certificat CA » (Sécurité → Plus de paramètres → Chiffrement et identifiants → Installer un certificat).</li>
         <li>« Certificat CA » → « Installer quand même » → choisissez <b>HUB-autorite-locale.crt</b> dans Téléchargements. Un verrouillage d'écran est exigé.</li>
+        <li>L'empreinte se lit dans Réglages → Sécurité → Plus de paramètres → Chiffrement et identifiants → Identifiants de confiance → Utilisateur → HUB autorité locale.</li>
         <li>Revenez ici et touchez « Ouvrir la version sécurisée ».</li>
       </ol>
     </details>
@@ -1342,7 +1339,6 @@ async function ouvrirSecurite() {
   $("securite").showModal();
   const info = await lireCertificat();
   const disponible = !!info?.disponible;
-  $("empreinte").textContent = info?.empreinte || "—";
   $("securite-etapes").hidden = !disponible || isSecureContext && location.protocol === "https:";
   $("ouvrir-https").hidden = true;
   if (location.protocol === "https:" && isSecureContext) {
