@@ -32,6 +32,7 @@ import json
 import os
 import pwd
 import re
+import stat
 import subprocess
 import sys
 import time
@@ -91,11 +92,25 @@ def ecrire_atomique(chemin, donnees):
 
 
 def lire_json(chemin, taille_max=256_000):
+    """Lit un JSON que son propriétaire, pas root, contrôle (~/.config/hub/reglages.json).
+
+    root ne suit pas de lien symbolique au dernier niveau et n'accepte qu'un fichier
+    ordinaire : un lien vers /dev/zero ferait lire sans fin, une FIFO bloquerait le
+    service à l'ouverture (d'où O_NONBLOCK, qui la laisse s'ouvrir pour être refusée
+    par fstat). La lecture elle-même est bornée : la taille annoncée par stat ne
+    garantit rien pour un fichier qui grossit pendant qu'on le lit."""
     try:
-        chemin = Path(chemin)
-        if chemin.stat().st_size > taille_max:
+        fd = os.open(chemin, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0))
+    except OSError:
+        return None
+    try:
+        with os.fdopen(fd, "rb") as fichier:
+            if not stat.S_ISREG(os.fstat(fichier.fileno()).st_mode):
+                return None
+            brut = fichier.read(taille_max + 1)
+        if len(brut) > taille_max:
             return None
-        return json.loads(chemin.read_text(encoding="utf-8"))
+        return json.loads(brut.decode("utf-8"))
     except (OSError, ValueError):
         return None
 
