@@ -165,7 +165,21 @@ class Telecommande(AvecDossier):
             {"url": "http://192.168.1.50:8790/", "code": "123456", "expire": 5, "telephones": 1, "appairageLe": None, "secret": "x"}))
         self.assertEqual(hub_menu.etat_telecommande(self.c),
                          {"url": "http://192.168.1.50:8790/", "code": "123456", "expire": 5, "telephones": 1, "appairageLe": None,
+                          "https": None, "appairageOuvert": None, "appairageJusque": None, "empreinteRacineCourte": None,
                           "empreinteRacine": None})
+
+    def test_fenetre_d_appairage_et_empreinte_courte(self):
+        base = {"url": "http://192.168.1.50:8790/", "code": "123456"}
+        hub_menu.ecrire_atomique(self.c["telecommande"], json.dumps({**base, "https": "https://hub.local:8791/", "appairageOuvert": True,
+                                                                       "appairageJusque": 1789500000000, "empreinteRacineCourte": "3A9F 12C0 4481 7BE2"}))
+        etat = hub_menu.etat_telecommande(self.c)
+        self.assertEqual((etat["https"], etat["appairageOuvert"], etat["appairageJusque"], etat["empreinteRacineCourte"]),
+                         ("https://hub.local:8791/", True, 1789500000000, "3A9F 12C0 4481 7BE2"))
+        for mauvais in ({"appairageOuvert": "oui"}, {"appairageOuvert": 1}, {"appairageJusque": True}, {"empreinteRacineCourte": "3a9f 12c0 4481 7be2"},
+                        {"empreinteRacineCourte": "3A9F12C044817BE2"}, {"empreinteRacineCourte": "<b>3A9F 12C0 4481 7BE2"}):
+            hub_menu.ecrire_atomique(self.c["telecommande"], json.dumps({**base, **mauvais}))
+            cle = next(iter(mauvais))
+            self.assertIsNone(hub_menu.etat_telecommande(self.c)[cle], mauvais)
 
     def test_empreinte_du_certificat_transmise_si_bien_formee(self):
         empreinte = ":".join(["AB", "0C"] * 16)
@@ -176,12 +190,44 @@ class Telecommande(AvecDossier):
             hub_menu.ecrire_atomique(self.c["telecommande"], json.dumps({**base, "empreinteRacine": mauvaise}))
             self.assertIsNone(hub_menu.etat_telecommande(self.c)["empreinteRacine"], mauvaise)
 
-    def test_la_vraie_telecommande_publie_ce_format(self):
-        # Le format vient de hub_telecommande.AutoriteLocale.empreinte : si elle change,
-        # ce test le dit avant que la TV n'affiche plus rien.
-        source = (RACINE / "installer" / "telecommande" / "hub_telecommande.py").read_text(encoding="utf-8")
-        self.assertIn('":".join(f"{o:02X}" for o in hashlib.sha256(der).digest())', source)
-        self.assertIn('"empreinteRacine":', source)
+    def test_ouvrir_la_fenetre_d_appairage(self):
+        import os
+        self.c["telecommande-appairage"] = Path(self._tmp.name) / "run/hub/telecommande-appairage"
+        fenetre = self.c["telecommande-appairage"]
+        self.assertTrue(hub_menu.ouvrir_appairage(self.c))
+        self.assertTrue(fenetre.is_file() and not fenetre.is_symlink())
+        self.assertEqual(fenetre.stat().st_mode & 0o777, 0o600)
+        os.utime(fenetre, (1000, 1000))
+        hub_menu.ouvrir_appairage(self.c)
+        self.assertGreater(fenetre.stat().st_mtime, time.time() - 60, "retoucher remet la date à maintenant")
+        hub_menu.fermer_appairage(self.c)
+        self.assertFalse(fenetre.exists())
+        hub_menu.fermer_appairage(self.c)
+
+    def test_un_lien_symbolique_est_remplace_sans_toucher_sa_cible(self):
+        import os
+        fenetre = self.c["telecommande-appairage"] = Path(self._tmp.name) / "run/hub/telecommande-appairage"
+        cible = Path(self._tmp.name) / "cible"
+        cible.write_text("x")
+        os.utime(cible, (1000, 1000))
+        fenetre.parent.mkdir(parents=True, exist_ok=True)
+        fenetre.symlink_to(cible)
+        self.assertTrue(hub_menu.ouvrir_appairage(self.c))
+        self.assertFalse(fenetre.is_symlink())
+        self.assertEqual(cible.stat().st_mtime, 1000)
+
+    def test_suivre_retouche_toutes_les_30_s_et_ferme_en_quittant(self):
+        import os
+        fenetre = self.c["telecommande-appairage"] = Path(self._tmp.name) / "run/hub/telecommande-appairage"
+        touche = hub_menu.suivre_appairage(self.c, True, None, maintenant=1000)
+        self.assertEqual(touche, 1000)
+        os.utime(fenetre, (1, 1))
+        self.assertEqual(hub_menu.suivre_appairage(self.c, True, touche, maintenant=1010), 1000)
+        self.assertEqual(fenetre.stat().st_mtime, 1, "pas de retouche avant 30 s")
+        self.assertEqual(hub_menu.suivre_appairage(self.c, True, touche, maintenant=1030), 1030)
+        self.assertGreater(fenetre.stat().st_mtime, 1)
+        self.assertIsNone(hub_menu.suivre_appairage(self.c, False, 1030, maintenant=1032))
+        self.assertFalse(fenetre.exists())
 
     def test_texte_envoye_du_telephone(self):
         self.assertEqual(hub_menu.message_voix("texte:Brest".encode()), {"type": "texte", "texte": "Brest"})

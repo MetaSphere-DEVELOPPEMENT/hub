@@ -9,6 +9,7 @@
 //   → { type: "geocodage", nom, langue } chercher une ville
 //   → { type: "minuteur", minutes }      programmer (ou annuler avec 0) l'extinction
 //   → { type: "infos" }                  machine, adresse IP, disque…
+//   → { type: "appairage", affiche }     l'écran d'appairage de la télécommande est (ou n'est plus) à l'écran
 // Python répond en appelant window.hub.recevoir({ type, ... }), et y relaie aussi les
 // état de l'enceinte réseau ({ type: "lecture", etat: {source, etat, titre, artiste, pochette, ecran…} | null })
 // et les commandes vocales de hub-voix ({ type: "commande", nom } / { type: "voix", ... }).
@@ -752,6 +753,7 @@ function ouvrirCalque(id, focusPremier = true) {
   pile.push(id);
   $(id).classList.add("ouvert");
   document.body.classList.toggle("calque-ouvert", pile.length > 1);
+  majAppairage();
   if (focusPremier) {
     const precedent = focusParCalque[id];
     const liste = candidats();
@@ -767,6 +769,7 @@ function fermerCalque() {
   $(id).classList.remove("ouvert");
   if (id === "profils") document.body.classList.remove("gestion");
   document.body.classList.toggle("calque-ouvert", pile.length > 1);
+  majAppairage();
   const liste = candidats();
   const precedent = focusParCalque[pile.at(-1)];
   definirFocus(liste.includes(precedent) ? precedent : liste[0], true);
@@ -1598,6 +1601,7 @@ function rendreSection(garderFocus = true) {
   }
 
   extensions.contenus[sectionCourante]?.(zone);
+  majAppairage();
 
   if (cle && pile.at(-1) === "reglages") {
     const retrouve = zone.querySelector(`[data-cle="${CSS.escape(cle)}"]`);
@@ -1676,19 +1680,25 @@ let telecommande = INITIAL.telecommande || null;
 })();
 
 // L'écran d'appairage, ligne par ligne : la clé de l'état publié par hub-telecommande
-// (relayé par hub-menu, CHAMPS_TELECOMMANDE) et sa mise en forme. Une ligne dont la
-// valeur manque n'est pas affichée, sauf « toujours ». Un champ de plus au contrat =
-// une entrée de plus ici. Tout passe en texte : ces valeurs viennent d'un autre service.
+// (relayé par hub-menu, CHAMPS_TELECOMMANDE), et sa mise en forme à partir de la valeur
+// et de l'état entier. Une ligne dont la valeur manque n'est pas affichée, sauf
+// « toujours ». Un champ de plus au contrat = une entrée de plus ici. Tout passe en
+// texte : ces valeurs viennent d'un autre service.
 const LIGNES_APPAIRAGE = [
   { etape: "telecommande.etape1" },
   { etape: "telecommande.etape2" },
   { etape: "telecommande.etape3" },
-  { cle: "code", rendre: v => el("div", { class: "code-appairage" }, String(v).replace(/(\d{3})(\d{3})/, "$1 $2")) },
-  { cle: "expire", toujours: true, rendre: () => el("div", { class: "aide", id: "telecommande-expire" }, texteExpiration()) },
+  // Le service n'accepte un téléphone que fenêtre ouverte : avant, un code serait refusé.
+  { cle: "code", rendre: (v, e) => e.appairageOuvert === true
+    ? el("div", { class: "code-appairage" }, String(v).replace(/(\d{3})(\d{3})/, "$1 $2"))
+    : el("div", { class: "code-appairage attente" }, t("telecommande.ouverture")) },
+  { cle: "empreinteRacineCourte", rendre: v => el("div", { class: "empreinte-appairage" },
+    el("div", { class: "aide" }, t("telecommande.empreinte.courte")),
+    el("div", { class: "empreinte-courte" }, v)) },
+  { cle: "expire", toujours: true, rendre: (_, e) => el("div", { class: "aide", id: "telecommande-expire" }, e.appairageOuvert === true ? texteExpiration() : "") },
   { cle: "url", rendre: v => el("div", { class: "aide url" }, v) },
-  { cle: "empreinteRacine", rendre: v => el("div", { class: "empreinte-appairage" },
-    el("div", { class: "aide" }, t("telecommande.empreinte")),
-    el("div", { class: "empreinte-paires" }, groupesEmpreinte(v).map(ligne => el("div", {}, ligne)))) },
+  { cle: "empreinteRacine", rendre: v => el("div", { class: "empreinte-paires", title: t("telecommande.empreinte") },
+    groupesEmpreinte(v).map(ligne => el("div", {}, ligne))) },
   { cle: "telephones", toujours: true, rendre: v => el("div", { class: "aide" }, t("telecommande.telephones", { n: v ?? 0 })) },
 ];
 
@@ -1714,7 +1724,7 @@ function contenuTelecommande() {
   const lignes = LIGNES_APPAIRAGE.map(l => {
     if (l.etape) return el("div", { class: "etape" }, el("b", {}, String(++numero)), t(l.etape));
     const valeur = telecommande[l.cle];
-    return valeur == null && !l.toujours ? null : l.rendre(valeur);
+    return valeur == null && !l.toujours ? null : l.rendre(valeur, telecommande);
   });
   return el("div", { class: "appairage" }, qr, el("div", { class: "etapes" }, lignes));
 }
@@ -1725,8 +1735,18 @@ function texteExpiration() {
 }
 setInterval(() => {
   const e = document.getElementById("telecommande-expire");
-  if (e) e.textContent = texteExpiration();
+  if (e && telecommande?.appairageOuvert === true) e.textContent = texteExpiration();
 }, 1000);
+
+// hub-telecommande n'ouvre l'appairage que pendant que cet écran est à la TV : on dit à
+// hub-menu quand il apparaît et disparaît (changement de section, fermeture, mode ambiant).
+let appairageAffiche = false;
+function majAppairage() {
+  const affiche = pile.at(-1) === "reglages" && sectionCourante === "telecommande";
+  if (affiche === appairageAffiche) return;
+  appairageAffiche = affiche;
+  envoyer({ type: "appairage", affiche });
+}
 
 function recevoirTelecommande(etat) {
   const avant = telecommande;
