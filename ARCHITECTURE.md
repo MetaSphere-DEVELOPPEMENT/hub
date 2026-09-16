@@ -239,6 +239,62 @@ Captures et journaux dans `vm/preuves-2026-09-15/` (hors git).
 Le rendu réel (UHD 630, HDMI, fréquence), l'audio, le démarrage à froid du M720q, et
 le pilotage autrement qu'au clavier. La VM n'a ni GPU 3D ni sortie audio.
 
+Ni, jusqu'au 17 septembre 2026, **l'absence de réseau** : le réseau de QEMU est
+toujours branché. Voir la section suivante.
+
+### La clé HUB, avec et sans réseau
+
+**Ce que le M720q a montré, que la VM n'avait pas vu** (journaux de la clé et du premier
+démarrage, 16 et 17/09/2026) :
+
+1. *Câble débranché pendant l'installation.* eno1 sans porteuse, pas de wifi : miroir
+   injoignable (`Mirror/waiting: FAIL`), l'installateur passe hors ligne et n'a plus que
+   le pool de l'ISO. `packages:` demandait `git`, **absent de ce pool** (« Package 'git'
+   has no installation candidate ») : subiquity s'est arrêté **avant `late-commands`**.
+   Ubuntu installée, mais ni `/opt/hub` ni `hub-premier-demarrage.service`. Rattrapé à la
+   main. Corrigé : `packages:` ne contient plus que `openssh-server`, présent dans le pool ;
+   `git` vient de `hub-installer.sh` (étape 9), une fois en ligne.
+   `tests/test_cle_hors_ligne.py` vérifie `packages:` contre
+   `cle/paquets-iso-ubuntu-26.04.1.txt` (155 paquets, relevé le 17/09/2026).
+2. *Étape 14 refusée.* `librespot --version` répond avec un suffixe
+   `(Built on …, Profile: release)` ; l'installateur exigeait la ligne exacte
+   (`installer/enceinte/README.md`, Preuves).
+
+**Relu, pas mesuré, le 17/09/2026 :** hors `packages:`, rien dans `cle/user-data.modele`
+ne demande le réseau. Fuseau horaire donné explicitement (pas de géolocalisation), français
+fourni par les couches `casper/minimal*.fr.squashfs` de l'ISO, pilotes et codecs non
+demandés, `late-commands` sans téléchargement, et `premier-demarrage.sh` attend le réseau
+avant l'audit et l'installateur. Les étapes de subiquity qui suivent `packages:` n'ont
+jamais tourné hors ligne sur le M720q (l'échec les a sautées) : seul l'essai ci-dessous le
+prouvera.
+
+**L'essai, à refaire à chaque changement de `cle/` :**
+
+```bash
+cle/construire-cle.sh
+cd vm && rm -f disque-hub-cle.qcow2
+./essayer-cle.sh --installer --sans-reseau   # VNC 127.0.0.1:5901, Entrée sur « Installer le HUB »
+# … la VM s'éteint seule en fin d'installation
+./essayer-cle.sh --sans-reseau               # premier démarrage, câble toujours débranché
+./cable.py branche                           # une fois l'attente du réseau vue à l'écran
+ssh -p 2222 samuel@127.0.0.1                 # clé SSH de la machine qui a construit la clé
+```
+
+`--sans-reseau` lance QEMU en pause et coupe le lien de la carte (`set_link reseau off`)
+avant la première instruction : la carte existe, sans porteuse, comme eno1 ce jour-là.
+Une VM sans carte, ou un réseau isolé qui distribue une adresse, ne prend pas le même
+chemin dans l'installateur.
+
+- [ ] installation sans réseau : la VM s'éteint seule, sans écran d'erreur
+- [ ] `/var/log/installer/subiquity-server-debug.log` : passage hors ligne, aucun
+      `has no installation candidate`, `late-commands` exécutées
+- [ ] premier démarrage sans réseau : l'écran HUB affiche « en attente du réseau »
+      (preuve que `/opt/hub` est copié et le service activé)
+- [ ] câble rebranché : audit, `hub-installer.sh`, code 0, redémarrage sur le menu
+- [ ] `systemctl is-enabled hub-premier-demarrage.service` → `disabled` ;
+      `/opt/hub-enceinte/librespot` accepté (étape 14 « déjà fait » à la relance)
+- [ ] le même essai **avec** réseau (`--installer` seul) ne régresse pas
+
 ## Streaming et jeu en nuage
 
 État au 15 septembre 2026. Répond à « le mode Gaming streame depuis quoi ? » **sans PC de
@@ -406,7 +462,9 @@ supposent pas :
 - [ ] **Débrancher le SSD externe** pendant l'installation : il porte les projets
       et cette sauvegarde, il n'a rien à faire près d'un installateur qui propose
       de partitionner.
-- [ ] Brancher l'Ethernet **avant** de démarrer sur la clé.
+- [ ] Brancher l'Ethernet **avant** de démarrer sur la clé. Plus indispensable depuis
+      le 17/09/2026 (voir « La clé HUB, avec et sans réseau ») : sans câble, le premier
+      démarrage attend le réseau à l'écran.
 - [ ] **Appuyer sur F12 au démarrage** pour choisir la clé. Le firmware ne la prendra
       pas de lui-même : l'ordre d'amorçage relevé le 12 septembre place le SSD externe
       (`Boot000D* (marque masquée)`) en premier, Ubuntu en deuxième, et « Generic Usb Device »
