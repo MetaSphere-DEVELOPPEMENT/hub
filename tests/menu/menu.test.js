@@ -523,3 +523,16 @@ test("météo reçue de hub-menu : puce, alerte pluie et panneau détaillé", as
   assert.equal(await page.locator(".jour").count(), 6);
   assert.deepEqual(page.erreurs, []);
 });
+
+test("météo : un nom de ville reçu reste du texte, jamais du HTML", async () => {
+  const piege = '<img src=x onerror="window.__piege=1">Lyon';
+  await ouvrir({ retour: true, reglages: { profils: [{ id: "a", nom: "A" }], systeme: { meteo: { ...LYON, ville: piege } } } });
+  await page.evaluate(() => window.hub.recevoir({ type: "meteo", releveLe: Date.now(), horsLigne: false,
+    donnees: { current: { temperature_2m: 12, weather_code: 3, is_day: 1 }, hourly: { time: [] }, daily: {} } }));
+  await touche("a");
+  await page.waitForTimeout(200);
+  assert.equal(await page.locator("#ambiant-meteo img").count(), 0);
+  assert.equal(await page.locator("#ambiant-meteo svg").count(), 1, "le picto, lui, reste un dessin");
+  assert.match(await page.textContent("#ambiant-meteo"), /onerror/);
+  assert.equal(await page.evaluate(() => window.__piege), undefined);
+});
