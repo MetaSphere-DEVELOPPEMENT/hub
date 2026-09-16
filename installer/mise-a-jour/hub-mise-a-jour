@@ -8,14 +8,21 @@ sans qu'on ressorte une clé USB ni qu'on tape une commande devant la TV.
 COMMENT, SANS RIEN CASSER.
 - Chaque version est un clone à part, rangé par commit dans /var/lib/hub/versions/.
   On ne modifie jamais un clone existant : pas de pull, pas de retour forcé.
-- Avant d'installer, les tests du dépôt tournent dans le nouveau clone. S'ils
-  échouent, rien n'est installé.
+- Le commit cloné doit être SIGNÉ (signature SSH de git) par une clé listée dans
+  /etc/hub/signataires-autorises. Le dépôt est public et l'installateur tourne en
+  root : sans cette vérification, un compte GitHub volé ou une fusion malheureuse
+  donnerait root sur le HUB. Pas de fichier de signataires, ou un fichier vide :
+  rien n'est installé.
+- Les tests du dépôt tournent ensuite, sous l'utilisateur « nobody », dans une copie
+  jetable : c'est du code du dépôt, lancé avant l'installation, qui ne doit pouvoir
+  ni agir en root ni retoucher le clone que root installera. S'ils échouent, rien
+  n'est installé.
 - L'installateur est relancé depuis le nouveau clone ; il ne touche pas aux réglages,
   profils, codes et photos (~/.config/hub). S'il échoue, l'installateur de la
   version précédente est relancé : le HUB revient à ce qui marchait.
 - L'état est publié dans /run/hub-mise-a-jour/etat.json pour que le menu l'affiche.
 
-La source (une URL git : GitHub privé, ou le Mac sur le réseau) est lue dans
+La source (une URL git : le dépôt GitHub public, ou le Mac sur le réseau) est lue dans
 /etc/hub/mise-a-jour.json : {"source": "...", "branche": "main"}.
 
     hub-mise-a-jour verifier     y a-t-il une version plus récente ? (JSON)
@@ -24,17 +31,40 @@ La source (une URL git : GitHub privé, ou le Mac sur le réseau) est lue dans
 
 import json
 import os
+import pwd
+import re
 import shutil
+import stat
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
 CONFIG = Path("/etc/hub/mise-a-jour.json")
+# Lu dans /etc/hub, jamais dans le clone : c'est ce que le clone doit prouver, il ne
+# peut pas en être la source.
+SIGNATAIRES = Path("/etc/hub/signataires-autorises")
 VERSIONS = Path("/var/lib/hub/versions")
 ETAT = Path("/run/hub-mise-a-jour/etat.json")
 VERSION_INSTALLEE = Path("/usr/local/share/hub/VERSION")
 GARDER = 3
+# nobody plutôt que l'utilisateur du HUB : des tests hostiles lancés sous son nom
+# liraient ses codes et ses photos, et pourraient piéger son ~/.bashrc.
+COMPTE_TESTS = "nobody"
+
+# Options de chaque git lancé ici. Le clone appartient à root et ses hooks ne sont
+# pas copiés ; on ferme quand même les deux portes par lesquelles une configuration
+# ferait exécuter une commande (hooks, fsmonitor), et git contrôle les objets reçus
+# (plusieurs failles git passées tenaient à des objets malformés).
+GIT = ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "transfer.fsckObjects=true"]
+# Un service n'a pas de terminal : une source qui demande un mot de passe doit échouer
+# tout de suite, pas attendre une saisie jusqu'à la fin du délai.
+ENV_GIT = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+COMMIT = re.compile(r"^[0-9a-f]{40}([0-9a-f]{24})?$")
+# Sortie de ssh-keygen -Y verify quand la clé figure dans le fichier : « for <nom> ».
+# Une signature valide d'une clé inconnue dit « with … No principal matched. ».
+SIGNATURE_RECONNUE = re.compile(r'^Good "git" signature for (\S.*?) with \S+ key ', re.M)
 
 
 def lire_config(chemin=CONFIG):
@@ -74,16 +104,56 @@ def executer(commande, **options):
     return subprocess.run(commande, capture_output=True, text=True, **options)
 
 
+def signataires_autorises(chemin=SIGNATAIRES):
+    """(True, "") si le fichier peut servir de référence, sinon (False, pourquoi).
+
+    Un fichier qu'un autre que root pourrait modifier ne prouve rien : refusé comme
+    s'il était absent (le propriétaire courant est admis pour que les tests tournent
+    sans root)."""
+    chemin = Path(chemin)
+    try:
+        infos = chemin.lstat()
+    except OSError:
+        return False, f"aucun signataire autorisé : {chemin} absent"
+    if not stat.S_ISREG(infos.st_mode):
+        return False, f"aucun signataire autorisé : {chemin} n'est pas un fichier ordinaire"
+    if infos.st_uid not in (0, os.geteuid()) or infos.st_mode & 0o022:
+        return False, f"aucun signataire autorisé : {chemin} modifiable par un autre que root"
+    try:
+        lignes = chemin.read_text(encoding="utf-8").splitlines()
+    except (OSError, ValueError):
+        return False, f"aucun signataire autorisé : {chemin} illisible"
+    if not any(ligne.strip() and not ligne.lstrip().startswith("#") for ligne in lignes):
+        return False, f"aucun signataire autorisé : {chemin} ne contient aucune clé"
+    return True, ""
+
+
 def dernier_commit(config, lancer=executer):
-    r = lancer(["git", "ls-remote", config["source"], f"refs/heads/{config['branche']}"], timeout=60)
+    r = lancer([*GIT, "ls-remote", config["source"], f"refs/heads/{config['branche']}"], env=ENV_GIT, timeout=60)
     if r.returncode != 0 or not r.stdout.strip():
         raise RuntimeError(f"source injoignable : {(r.stderr or r.stdout).strip()[:300]}")
     return r.stdout.split()[0]
 
 
-def verifier(config, installee, lancer=executer):
+def verifier(config, installee, lancer=executer, signataires=SIGNATAIRES):
     distant = dernier_commit(config, lancer)
-    return {"disponible": not meme_commit(distant, installee), "distant": distant[:12], "installee": installee}
+    reponse = {"disponible": not meme_commit(distant, installee), "distant": distant[:12], "installee": installee}
+    # La signature ne se contrôle qu'une fois le commit téléchargé ; ici on dit seulement
+    # si une installation aurait une chance d'être acceptée.
+    verifiable, detail = signataires_autorises(signataires)
+    reponse["verifiable"] = verifiable
+    if not verifiable:
+        reponse["raison"] = "signataires"
+        reponse["detail"] = detail
+    return reponse
+
+
+def commit_du_clone(depot, lancer=executer):
+    r = lancer([*GIT, "-C", str(depot), "rev-parse", "--verify", "HEAD^{commit}"], env=ENV_GIT)
+    commit = r.stdout.strip()
+    if r.returncode != 0 or not COMMIT.match(commit):
+        raise RuntimeError(f"clone illisible : {(r.stderr or r.stdout).strip()[:300]}")
+    return commit
 
 
 def cloner(config, commit, dossier_versions, lancer=executer):
@@ -93,14 +163,18 @@ def cloner(config, commit, dossier_versions, lancer=executer):
     provisoire = Path(dossier_versions) / f".{commit}.tmp"
     shutil.rmtree(provisoire, ignore_errors=True)
     provisoire.parent.mkdir(parents=True, exist_ok=True)
-    r = lancer(["git", "clone", "--quiet", "--branch", config["branche"], config["source"], str(provisoire)], timeout=600)
+    # --no-local : pour une source sur disque, git lierait sinon ses objets en dur, et
+    # leur propriétaire pourrait les réécrire après la vérification. --depth 1 : seul
+    # le commit installé compte, et c'est lui qui est vérifié.
+    r = lancer([*GIT, "clone", "--quiet", "--no-local", "--depth", "1", "--single-branch", "--no-recurse-submodules",
+                "--branch", config["branche"], "--", config["source"], str(provisoire)], env=ENV_GIT, timeout=600)
     if r.returncode != 0:
         shutil.rmtree(provisoire, ignore_errors=True)
         raise RuntimeError(f"clone impossible : {r.stderr.strip()[:300]}")
-    obtenu = lancer(["git", "-C", str(provisoire), "rev-parse", "HEAD"]).stdout.strip()
+    obtenu = commit_du_clone(provisoire, lancer)
     if obtenu != commit:
-        # La branche a avancé entre la vérification et le clone : on installe ce qu'on a
-        # vraiment téléchargé, rangé sous son vrai nom.
+        # La branche a avancé entre la vérification et le clone : on garde ce qu'on a
+        # vraiment téléchargé, rangé sous son vrai nom — et c'est lui qui sera vérifié.
         commit, cible = obtenu, Path(dossier_versions) / obtenu
         if (cible / ".git").is_dir():
             shutil.rmtree(provisoire, ignore_errors=True)
@@ -109,15 +183,64 @@ def cloner(config, commit, dossier_versions, lancer=executer):
     return cible
 
 
-def lancer_tests(depot, lancer=executer):
+def verifier_signature(depot, signataires=SIGNATAIRES, lancer=executer):
+    """(signataire, commit) si le HEAD du clone est signé par une clé autorisée, sinon (None, pourquoi).
+
+    On vérifie le commit que HEAD désigne dans NOTRE clone, par son empreinte, pas une
+    branche de la source : elle a pu bouger depuis. Deux garde-fous plutôt qu'un :
+    toutes les versions de git n'ont pas rendu un code d'erreur pour une signature
+    valide d'une clé inconnue ; minTrustLevel=fully et la mention « for <nom> »
+    l'excluent chacun."""
+    commit = commit_du_clone(depot, lancer)
+    r = lancer([*GIT, "-C", str(depot), "-c", f"gpg.ssh.allowedSignersFile={signataires}",
+                "-c", "gpg.minTrustLevel=fully", "verify-commit", commit], env=ENV_GIT, timeout=60)
+    sortie = f"{r.stdout}{r.stderr}".strip()
+    trouve = SIGNATURE_RECONNUE.search(sortie)
+    if r.returncode != 0 or not trouve:
+        return None, f"commit {commit[:12]} non signé par une clé autorisée : {sortie or 'aucune signature'}"[:600]
+    return trouve.group(1), commit
+
+
+def donner_au_compte(dossier, compte):
+    """Donne le dossier des tests à `compte` sans jamais suivre un lien symbolique : un
+    lien du dépôt vers /etc/shadow ne doit pas en changer le propriétaire."""
+    fiche = pwd.getpwnam(compte)
+    os.chown(dossier, fiche.pw_uid, fiche.pw_gid, follow_symlinks=False)
+    for racine, dossiers, fichiers in os.walk(dossier):
+        for nom in dossiers + fichiers:
+            os.chown(os.path.join(racine, nom), fiche.pw_uid, fiche.pw_gid, follow_symlinks=False)
+
+
+def lancer_tests(depot, lancer=executer, compte=COMPTE_TESTS, donner=donner_au_compte):
     if not (Path(depot) / "tests").is_dir():
         return True, "aucun test"
-    r = lancer([sys.executable, "-m", "unittest", "discover", "-s", "tests"], cwd=depot, timeout=900)
+    # Une copie sans .git, dans un dossier temporaire donné à nobody : les tests peuvent
+    # y écrire, le clone que root installera reste intact (un .git/config réécrit ferait
+    # exécuter une commande au prochain git lancé par root).
+    with tempfile.TemporaryDirectory(prefix="hub-tests-") as bac:
+        copie, maison = Path(bac) / "depot", Path(bac) / "maison"
+        shutil.copytree(depot, copie, symlinks=True, ignore=shutil.ignore_patterns(".git"))
+        maison.mkdir()
+        donner(bac, compte)
+        # Environnement neuf : rien de celui de root (HOME=/root, variables du service)
+        # ne passe au code testé. nobody n'a pas de maison : on lui en prête une, jetable.
+        environnement = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": str(maison), "TMPDIR": str(maison),
+                         "LANG": "C.UTF-8", "PYTHONDONTWRITEBYTECODE": "1"}
+        try:
+            r = lancer(["runuser", "-u", compte, "--", sys.executable, "-m", "unittest", "discover", "-s", "tests"],
+                       cwd=str(copie), env=environnement, timeout=900)
+        except subprocess.TimeoutExpired:
+            return False, "les tests ont dépassé 15 minutes"
     return r.returncode == 0, (r.stderr or r.stdout)[-800:]
 
 
-def installer(depot, utilisateur, lancer=executer):
+def installer(depot, utilisateur, lancer=executer, verifie=None):
     environnement = {**os.environ, "SUDO_USER": utilisateur, "DEBIAN_FRONTEND": "noninteractive"}
+    environnement.pop("HUB_MISE_A_JOUR_VERIFIEE", None)
+    if verifie:
+        # L'installateur ne remplace /etc/hub/signataires-autorises que s'il tourne depuis
+        # le commit dont la signature vient d'être vérifiée (voir etape_mise_a_jour).
+        environnement["HUB_MISE_A_JOUR_VERIFIEE"] = verifie
     r = lancer(["bash", str(Path(depot) / "installer" / "hub-installer.sh"), "--pour-de-vrai", "--sans-audit"],
                cwd=depot, env=environnement, timeout=3600)
     return r.returncode == 0, (r.stderr or r.stdout)[-800:]
@@ -131,33 +254,50 @@ def menage(dossier_versions, a_garder):
             shutil.rmtree(d, ignore_errors=True)
 
 
-def appliquer(config, utilisateur, dossier_versions=VERSIONS, etat=ecrire_etat, lancer=executer, installee=None):
+def appliquer(config, utilisateur, dossier_versions=VERSIONS, etat=ecrire_etat, lancer=executer, installee=None,
+              signataires=SIGNATAIRES, tests=lancer_tests):
     installee = installee if installee is not None else version_installee()
     etat({"etape": "verification"})
     commit = dernier_commit(config, lancer)
     if meme_commit(commit, installee):
         etat({"etape": "a-jour", "version": commit[:12]})
         return 0
+    # Avant de télécharger : sans référence, aucune version ne pourrait être acceptée.
+    utilisable, detail = signataires_autorises(signataires)
+    if not utilisable:
+        etat({"etape": "echec", "raison": "signataires", "detail": detail, "version": commit[:12]})
+        return 1
     precedente = next((d for d in Path(dossier_versions).glob("*") if installee and meme_commit(d.name, installee)), None) \
         if Path(dossier_versions).is_dir() else None
 
     etat({"etape": "telechargement", "version": commit[:12]})
     depot = cloner(config, commit, dossier_versions, lancer)
 
-    etat({"etape": "tests", "version": depot.name[:12]})
-    reussi, sortie = lancer_tests(depot, lancer)
+    # Rien du clone ne s'exécute avant cette vérification, pas même ses tests.
+    signataire, verifie = verifier_signature(depot, signataires, lancer)
+    if not signataire:
+        # Un clone refusé ne reste pas dans versions/ : rien ne doit pouvoir le reprendre.
+        if not precedente or depot.resolve() != precedente.resolve():
+            shutil.rmtree(depot, ignore_errors=True)
+        etat({"etape": "echec", "raison": "signature", "detail": verifie, "version": depot.name[:12]})
+        return 1
+
+    etat({"etape": "tests", "version": depot.name[:12], "signataire": signataire})
+    reussi, sortie = tests(depot, lancer)
     if not reussi:
         etat({"etape": "echec", "raison": "tests", "detail": sortie, "version": depot.name[:12]})
         return 1
 
-    etat({"etape": "installation", "version": depot.name[:12]})
-    reussi, sortie = installer(depot, utilisateur, lancer)
+    etat({"etape": "installation", "version": depot.name[:12], "signataire": signataire})
+    reussi, sortie = installer(depot, utilisateur, lancer, verifie=verifie)
     if reussi:
-        etat({"etape": "terminee", "version": depot.name[:12]})
+        etat({"etape": "terminee", "version": depot.name[:12], "signataire": signataire})
         menage(dossier_versions, {depot.name, precedente.name if precedente else ""})
         return 0
 
     if precedente:
+        # La précédente était la version en place : on la remet sans exiger une signature
+        # qu'elle n'a peut-être jamais eue (installée avant que la vérification existe).
         etat({"etape": "retour", "version": precedente.name[:12], "detail": sortie})
         revenu, _ = installer(precedente, utilisateur, lancer)
         etat({"etape": "echec", "raison": "installation", "retour": revenu, "detail": sortie, "version": precedente.name[:12]})
