@@ -18,6 +18,36 @@ Restart=on-failure
 RestartSec=5
 NoNewPrivileges=yes
 UMask=0077
+# BAC À SABLE. Ces programmes écoutent le réseau local (ou, pour le coordinateur,
+# télécharge des pochettes) et tournent sous le compte de l'utilisateur : sans bac à
+# sable, une faille leur donnerait ses clés, ses jetons et ses fichiers.
+#  - Appels système (seccomp, fonctionnent en unité utilisateur grâce à
+#    NoNewPrivileges) : familles de sockets de la session et du réseau IP seulement
+#    (AF_NETLINK : la liste des interfaces pour mDNS et l'adresse MAC d'UxPlay),
+#    pas d'espaces de noms, pas d'ABI 32 bits, pas de changement de personnalité.
+#  - Système de fichiers : le dossier personnel et /run/user remplacés par des tmpfs
+#    en lecture seule, où l'on ne remonte que ce qu'il faut. En unité UTILISATEUR,
+#    systemd a besoin pour cela d'un espace de noms utilisateur non privilégié
+#    (systemd.exec(5), « only available for system services, or … PrivateUsers=
+#    implicitly enabled »). Ubuntu les restreint par AppArmor : s'il refuse, systemd
+#    258 continue SANS ces réglages plutôt que d'échouer (exec-invoke.c, ENOANO), tant
+#    qu'aucun montage ne déplace de fichiers — d'où des BindPaths= source = destination
+#    seulement. Effectif ou non : à vérifier sur le M720q (README, « Bac à sable »).
+# /run/user/UID/hub est partagé avec le menu, la voix, la télécommande : créé ici sans
+# bac à sable (+), jamais par RuntimeDirectory=, qui le supprimerait à l'arrêt.
+ExecStartPre=+/usr/bin/mkdir -p -m 0700 %t/hub
+PrivateTmp=yes
+ProtectHome=tmpfs
+# La session : PipeWire, Wayland, D-Bus, systemctl --user (sockets, que la lecture seule
+# n'empêche pas de joindre) ; les réglages du menu, lus.
+BindReadOnlyPaths=%t -%h/.config/hub
+BindPaths=-%t/hub
+# L'autorité TLS et les jetons des téléphones de la télécommande : de quoi piloter le HUB.
+InaccessiblePaths=-%h/.config/hub/telecommande-tls -%h/.config/hub/telecommande-jetons.json
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
 # Garde-fou : quelques Mo suffisent (bibliothèque standard, une pochette à la fois).
 MemoryMax=100M
 
