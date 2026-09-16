@@ -58,6 +58,7 @@ def main():
     options = set(sys.argv[2:])
     chemins = {
         "etat": dossier / "run" / "telecommande.json",
+        "appairage": dossier / "run" / "telecommande-appairage",
         "socket": dossier / "run" / "menu.sock",
         "jetons": dossier / "config" / "telecommande-jetons.json",
         "photos": dossier / "photos",
@@ -88,6 +89,14 @@ def main():
     routeur = T.Routeur(chemins["socket"], executer=executer, processus=lambda _n: [], kodi_http=None)
     tls = T.AutoriteLocale(chemins["tls"]) if "--https" in options else None
     service = T.Service(chemins, routeur=routeur, tls=tls, dicteur=choisir_dicteur(dossier))
+    # Le faux menu garde l'écran d'appairage affiché : il retouche la fenêtre comme le
+    # vrai menu, sinon une suite de tests plus longue que la fenêtre refuserait les codes.
+    def garder_fenetre_ouverte():
+        while True:
+            service.fenetre.ouvrir()
+            threading.Event().wait(T.FENETRE_APPAIRAGE_S / 5)
+
+    threading.Thread(target=garder_fenetre_ouverte, daemon=True).start()
     serveurs = T.demarrer_ecoutes(service, "127.0.0.1", 0, 0 if tls else None, sondage=0.05)
     ports = {"http": serveurs[0].server_address[1]}
     if len(serveurs) > 1:
