@@ -25,6 +25,23 @@ sur tuyau (--remote-debugging-pipe) reste : pas de port réseau ouvert, et il pe
 d'injecter un petit script avant la page, d'en recevoir les appels, et d'envoyer de
 vraies touches (une page ignore souvent les touches synthétisées en JavaScript).
 
+POURQUOI L'ORIGINE DE L'APPEL EST VÉRIFIÉE. La fonction hubHub existe dans toute page de
+premier niveau, y compris un site atteint par un lien depuis le service. Une touche
+relayée par le protocole est une vraie touche (isTrusted) : une page étrangère pourrait
+s'en servir pour valider ce qu'une vraie action de l'utilisateur doit valider. Une touche
+n'est donc relayée que si l'appel vient du cadre principal, dans le monde de la page, et
+d'une origine https du service lancé (ses domaines ci-dessous). « Retour au HUB », lui,
+reste accepté de partout : il ne fait que fermer le navigateur, et c'est la sortie de
+secours d'une page de connexion où l'on se serait perdu.
+
+POURQUOI LA NAVIGATION N'EST PAS FILTRÉE. Netflix, Prime Video, Disney+, GeForce NOW et
+Xbox passent par des domaines de connexion qui changent sans prévenir (amazon.fr,
+login.live.com, login.nvgs.nvidia.com, fournisseurs d'identité liés : Epic, Ubisoft,
+Steam…). Une liste trop courte laisserait la famille devant un écran blanc de connexion,
+un soir, sans clavier. Le risque restant — une page quelconque ouverte dans la session
+qui a les cookies du profil — est celui d'un navigateur ordinaire ; il n'a plus, lui,
+de moyen de piloter le HUB.
+
 Ce fichier se charge sans rien lancer : tests/test_hub_web.py et hub-menu l'importent.
 """
 
@@ -53,22 +70,31 @@ AGENT_TV = "Mozilla/5.0 (PS4; Leanback Shell) Cobalt/25.lts.40.1035033; compatib
 # sans_av1 : l'UHD 630 ne décode pas l'AV1 ; refuser ce codec à la page fait choisir
 #   VP9 ou H.264, décodés par la puce, au lieu d'un AV1 que le processeur ne tient pas.
 # appli : commande native préférée si elle est installée.
+# domaines : les pages (https, domaine ou sous-domaine) d'où la page peut demander une
+#   touche. Le domaine de l'adresse du service, et celui de sa connexion quand elle se
+#   pilote à la manette ; ailleurs, la manette ne fait que « retour au HUB ».
 SERVICES = {
     "youtube": {"categorie": "streaming", "url": "https://www.youtube.com/tv", "agent": AGENT_TV,
-                "touches": True, "sans_av1": True},
-    "netflix": {"categorie": "streaming", "url": "https://www.netflix.com/browse", "touches": True},
-    "primevideo": {"categorie": "streaming", "url": "https://www.primevideo.com/", "touches": True},
-    "disneyplus": {"categorie": "streaming", "url": "https://www.disneyplus.com/", "touches": True},
-    "canalplus": {"categorie": "streaming", "url": "https://www.canalplus.com/", "touches": True},
-    "twitch": {"categorie": "streaming", "url": "https://www.twitch.tv/", "touches": True, "sans_av1": True},
-    "arte": {"categorie": "streaming", "url": "https://www.arte.tv/fr/", "touches": True},
-    "francetv": {"categorie": "streaming", "url": "https://www.france.tv/", "touches": True},
+                "touches": True, "sans_av1": True, "domaines": ("youtube.com",)},
+    "netflix": {"categorie": "streaming", "url": "https://www.netflix.com/browse", "touches": True,
+                "domaines": ("netflix.com",)},
+    "primevideo": {"categorie": "streaming", "url": "https://www.primevideo.com/", "touches": True,
+                   "domaines": ("primevideo.com", "amazon.fr", "amazon.com")},
+    "disneyplus": {"categorie": "streaming", "url": "https://www.disneyplus.com/", "touches": True,
+                   "domaines": ("disneyplus.com",)},
+    "canalplus": {"categorie": "streaming", "url": "https://www.canalplus.com/", "touches": True,
+                  "domaines": ("canalplus.com",)},
+    "twitch": {"categorie": "streaming", "url": "https://www.twitch.tv/", "touches": True, "sans_av1": True,
+               "domaines": ("twitch.tv",)},
+    "arte": {"categorie": "streaming", "url": "https://www.arte.tv/fr/", "touches": True, "domaines": ("arte.tv",)},
+    "francetv": {"categorie": "streaming", "url": "https://www.france.tv/", "touches": True,
+                 "domaines": ("france.tv",)},
     # L'appli Linux de NVIDIA (Flatpak, sortie de bêta en août 2026) monte plus haut
     # que la page web, limitée à 1440p sous Linux : elle passe devant si elle est là.
     "geforcenow": {"categorie": "jeux", "url": "https://play.geforcenow.com/",
-                   "appli": {"flatpak": "com.nvidia.geforcenow"}},
-    "xcloud": {"categorie": "jeux", "url": "https://www.xbox.com/play"},
-    "boosteroid": {"categorie": "jeux", "url": "https://cloud.boosteroid.com/"},
+                   "appli": {"flatpak": "com.nvidia.geforcenow"}, "domaines": ("geforcenow.com",)},
+    "xcloud": {"categorie": "jeux", "url": "https://www.xbox.com/play", "domaines": ("xbox.com",)},
+    "boosteroid": {"categorie": "jeux", "url": "https://cloud.boosteroid.com/", "domaines": ("boosteroid.com",)},
     # Pas de page web : proposés seulement s'ils sont installés.
     "steam": {"categorie": "jeux", "appli": {"commande": ["steam", "-gamepadui"]}},
     "moonlight": {"categorie": "jeux", "appli": {"commande": ["moonlight-qt"],
@@ -289,6 +315,23 @@ def lire_message_page(brut):
     return None
 
 
+def origine_permise(fiche, origine):
+    """Vrai si une page de cette origine peut demander une touche pour ce service.
+
+    Comparaison exacte sur le nom d'hôte (domaine ou sous-domaine) : « netflix.com.
+    exemple.org » et « faux-netflix.com » ne passent pas. En essai, seule une adresse
+    locale est jamais ouverte (url_locale) : l'origine n'a rien à trahir."""
+    if fiche.get("essai"):
+        return True
+    if not isinstance(origine, str):
+        return False
+    trouve = re.fullmatch(r"https://([a-z0-9.-]+)(?::443)?", origine.lower())
+    if not trouve:
+        return False
+    hote = trouve.group(1)
+    return any(hote == d or hote.endswith("." + d) for d in fiche.get("domaines") or ())
+
+
 def evenements_touche(cle):
     code, vk = TOUCHES[cle]
     commun = {"key": cle, "code": code, "windowsVirtualKeyCode": vk, "nativeVirtualKeyCode": vk}
@@ -397,6 +440,11 @@ def piloter(processus, tuyau, fiche, url, essai=False, journal=None, trace=False
     script = script_injecte(fiche)
     etat = {"retour": False, "fermeture": False, "essai_ok": not essai}
     principale = None
+    # Pour savoir d'où vient un appel de hubHub : l'identifiant de cadre principal de
+    # chaque page (celui de sa cible) et, par contexte d'exécution, son origine, son
+    # cadre et s'il est le monde de la page (pas un monde isolé).
+    cadres_principaux = {}
+    contextes = {}
     verification = None
     tuyau.envoyer("Target.setAutoAttach", {"autoAttach": True, "waitForDebuggerOnStart": True, "flatten": True})
     fin = time.monotonic() + DELAI_ESSAI_S if essai else None
@@ -426,6 +474,7 @@ def piloter(processus, tuyau, fiche, url, essai=False, journal=None, trace=False
             info = message["params"]["targetInfo"]
             cible = message["params"]["sessionId"]
             if info.get("type") == "page":
+                cadres_principaux[cible] = info.get("targetId")
                 # Sans Runtime.enable, la page appelle hubHub mais l'événement ne sort pas.
                 tuyau.envoyer("Runtime.enable", session=cible)
                 tuyau.envoyer("Runtime.addBinding", {"name": "hubHub"}, cible)
@@ -437,11 +486,27 @@ def piloter(processus, tuyau, fiche, url, essai=False, journal=None, trace=False
             if info.get("type") == "page" and principale is None:
                 principale = cible
                 tuyau.envoyer("Page.navigate", {"url": url}, cible)
+        elif methode == "Runtime.executionContextCreated":
+            contexte = message["params"].get("context") or {}
+            donnees = contexte.get("auxData") or {}
+            contextes[(session, contexte.get("id"))] = {
+                "origine": contexte.get("origin"), "cadre": donnees.get("frameId"),
+                "page": donnees.get("isDefault") is True}
+        elif methode == "Runtime.executionContextDestroyed":
+            contextes.pop((session, message["params"].get("executionContextId")), None)
+        elif methode == "Runtime.executionContextsCleared":
+            for cle in [c for c in contextes if c[0] == session]:
+                del contextes[cle]
         elif methode == "Runtime.bindingCalled" and message["params"].get("name") == "hubHub":
             demande = lire_message_page(message["params"].get("payload"))
+            appelant = contextes.get((session, message["params"].get("executionContextId"))) or {}
             if demande and demande["type"] == "retour":
                 journal("retour au HUB demandé")
                 etat["retour"] = etat["fermeture"] = True
+            elif demande and demande["type"] == "touche" and not (
+                    appelant.get("page") and appelant.get("cadre") == cadres_principaux.get(session)
+                    and origine_permise(fiche, appelant.get("origine"))):
+                journal(f"touche refusée : demandée par {appelant.get('origine') or 'une origine inconnue'}")
             elif demande and demande["type"] == "touche":
                 touche(demande["cle"], session)
                 if essai and verification is None:
@@ -520,7 +585,7 @@ def principal(argv):
         if not url_locale(url):
             journal("--essai n'ouvre que des adresses locales (file://, localhost)")
             return 2
-        fiche, profil, langue = {"touches": True, "sans_av1": True}, "essai", "fr"
+        fiche, profil, langue = {"touches": True, "sans_av1": True, "essai": True}, "essai", "fr"
     else:
         fiche = service(argv[0])
         if not fiche:

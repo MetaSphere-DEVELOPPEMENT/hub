@@ -175,6 +175,25 @@ class ScriptInjecte(unittest.TestCase):
                      "pas du json", "[1]", None):
             self.assertIsNone(hub_web.lire_message_page(brut), brut)
 
+    def test_origines_permises_pour_les_touches(self):
+        netflix = hub_web.SERVICES["netflix"]
+        for bonne in ("https://www.netflix.com", "https://netflix.com", "https://www.netflix.com:443"):
+            self.assertTrue(hub_web.origine_permise(netflix, bonne), bonne)
+        for mauvaise in ("http://www.netflix.com", "https://netflix.com.exemple.org", "https://faux-netflix.com",
+                         "https://www.netflix.com:8443", "https://exemple.org", "null", "", None,
+                         "https://www.youtube.com", "file://"):
+            self.assertFalse(hub_web.origine_permise(netflix, mauvaise), mauvaise)
+        self.assertFalse(hub_web.origine_permise({}, "https://www.netflix.com"), "sans domaines, aucune touche")
+        self.assertTrue(hub_web.origine_permise({"essai": True}, "null"))
+
+    def test_chaque_page_de_service_est_dans_ses_domaines(self):
+        from urllib.parse import urlsplit
+        for ident, fiche in hub_web.SERVICES.items():
+            if "url" in fiche:
+                origine = "https://" + urlsplit(fiche["url"]).hostname
+                self.assertTrue(hub_web.origine_permise(fiche, origine), ident)
+                self.assertNotIn("essai", fiche, ident)
+
     def test_touches_reelles(self):
         bas, haut = hub_web.evenements_touche("Enter")
         self.assertEqual((bas["type"], haut["type"]), ("rawKeyDown", "keyUp"))
@@ -199,14 +218,30 @@ def lire():
         yield json.loads(brut)
 def ecrire(o): os.write(sortie, json.dumps(o).encode() + b"\0")
 recus = []
+def contexte(ident, origine, cadre="T1", page=True):
+    ecrire({"method": "Runtime.executionContextCreated", "sessionId": "S1", "params": {"context": {
+        "id": ident, "origin": origine, "auxData": {"frameId": cadre, "isDefault": page}}}})
+def appel(ident, charge):
+    ecrire({"method": "Runtime.bindingCalled", "sessionId": "S1",
+            "params": {"name": "hubHub", "payload": charge, "executionContextId": ident}})
 for m in lire():
     recus.append(m["method"])
     if m["method"] == "Target.setAutoAttach":
-        ecrire({"method": "Target.attachedToTarget", "params": {"sessionId": "S1", "targetInfo": {"type": "page"}}})
+        ecrire({"method": "Target.attachedToTarget", "params": {"sessionId": "S1", "targetInfo": {"type": "page", "targetId": "T1"}}})
     if m["method"] == "Page.navigate":
-        ecrire({"method": "Runtime.bindingCalled", "sessionId": "S1", "params": {"name": "hubHub", "payload": '{"type":"touche","cle":"ArrowLeft"}'}})
-        ecrire({"method": "Runtime.bindingCalled", "sessionId": "S1", "params": {"name": "hubHub", "payload": '{"type":"url","url":"https://x"}'}})
-        ecrire({"method": "Runtime.bindingCalled", "sessionId": "S1", "params": {"name": "hubHub", "payload": '{"type":"retour"}'}})
+        contexte(1, "https://www.netflix.com")
+        contexte(2, "https://site-etranger.example")          # page atteinte par un lien
+        contexte(3, "https://www.netflix.com", cadre="F2")    # cadre intérieur
+        contexte(4, "https://www.netflix.com", page=False)    # monde isolé
+        contexte(5, "https://assets.netflix.com")
+        ecrire({"method": "Runtime.executionContextDestroyed", "sessionId": "S1", "params": {"executionContextId": 5}})
+        touche = '{"type":"touche","cle":"ArrowLeft"}'
+        for refuse in (2, 3, 4, 5, 99):
+            appel(refuse, '{"type":"touche","cle":"Enter"}')
+        appel(1, touche)
+        appel(1, '{"type":"url","url":"https://x"}')
+        # Le retour reste permis de partout : c'est la sortie de secours.
+        appel(2, '{"type":"retour"}')
     if m["method"] == "Browser.close":
         open(sys.argv[1], "w").write(json.dumps(recus))
         break
@@ -227,7 +262,9 @@ for m in lire():
             recus = json.loads(rapport.read_text())
         self.assertLess(recus.index("Page.addScriptToEvaluateOnNewDocument"), recus.index("Page.navigate"))
         self.assertLess(recus.index("Runtime.addBinding"), recus.index("Page.navigate"))
-        self.assertEqual(recus.count("Input.dispatchKeyEvent"), 2, "une flèche : appui et relâche, rien pour l'URL")
+        self.assertEqual(recus.count("Input.dispatchKeyEvent"), 2,
+                         "une flèche de la page du service : appui et relâche ; rien pour l'URL ni pour les "
+                         "touches demandées par un site étranger, un cadre, un monde isolé ou un contexte détruit")
         self.assertEqual(recus[-1], "Browser.close")
 
 
