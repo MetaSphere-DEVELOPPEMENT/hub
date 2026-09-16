@@ -91,6 +91,11 @@ ECHECS_AVANT_RENOUVELLEMENT = 20
 # un code deviné ne sert à rien. Le menu (re)touche le fichier tant que l'écran est
 # affiché ; oublié, le fichier ne vaut plus rien au bout de ce délai.
 FENETRE_APPAIRAGE_S = 5 * 60
+# Des fils de connexion bornés : sans plafond, un appareil qui ouvre des milliers de
+# connexions muettes fait créer autant de fils (mémoire, puis plus rien ne répond).
+# 8 par adresse : un téléphone en ouvre 2 ou 3 à la fois (page, sonde, icônes).
+MAX_CONNEXIONS = 32
+MAX_CONNEXIONS_PAR_IP = 8
 TAILLE_MAX_CORPS = 2048
 # Une photo recadrée à 512 px en JPEG 0,88 pèse 60 à 150 Ko : 2 Mio laisse de la marge
 # à un navigateur qui compresse mal, sans laisser remplir le disque par rafales.
@@ -1754,6 +1759,49 @@ class Serveur(ThreadingHTTPServer):
     # Pas de SO_REUSEPORT : un second service lancé par erreur doit échouer bruyamment
     # plutôt que se partager les requêtes avec le premier.
     allow_reuse_address = True
+
+    def __init__(self, *args, **kwargs):
+        self.max_connexions = MAX_CONNEXIONS
+        self.max_par_ip = MAX_CONNEXIONS_PAR_IP
+        self._verrou_places = threading.Lock()
+        self._places = {}
+        super().__init__(*args, **kwargs)
+
+    def _reserver(self, ip):
+        with self._verrou_places:
+            if sum(self._places.values()) >= self.max_connexions or self._places.get(ip, 0) >= self.max_par_ip:
+                return False
+            self._places[ip] = self._places.get(ip, 0) + 1
+            return True
+
+    def _liberer(self, ip):
+        with self._verrou_places:
+            reste = self._places.get(ip, 0) - 1
+            if reste > 0:
+                self._places[ip] = reste
+            else:
+                self._places.pop(ip, None)
+
+    def process_request(self, request, client_address):
+        # Au-delà du plafond, la connexion est fermée tout de suite, sans fil : un
+        # appareil qui en ouvre des centaines ne prive pas les autres téléphones, au
+        # pire de lui-même. Le délai de 10 s par lecture libère les muettes.
+        ip = client_address[0]
+        if not self._reserver(ip):
+            journal.debug("%s : trop de connexions, refusée", ip)
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._liberer(ip)
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._liberer(client_address[0])
 
     def handle_error(self, request, client_address):
         # Poignée de main TLS ratée (certificat pas encore installé, http sur le port

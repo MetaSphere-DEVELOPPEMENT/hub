@@ -134,7 +134,9 @@ la télécommande n'est ouverte ni à un invité, ni à une page web étrangère
   c'est refusé.
 - Corps limités à 2 Kio (JSON), 2 Mio (photo) et 10 s de son (dictée, WAV 16 kHz
   mono 16 bits exigé, rien d'autre n'atteint le reconnaisseur) ; délai de 10 s par
-  connexion, poignée de main TLS comprise.
+  lecture, poignée de main TLS comprise.
+- **Connexions bornées** : 32 à la fois par port, 8 par adresse IP ; au-delà, la
+  connexion est fermée sans ouvrir de fil. Avant, chaque connexion muette coûtait un fil.
 - **Ticket de transfert** http → https : 256 bits, usage unique, 2 minutes, accepté
   sur l'origine https seulement ; il voyage dans le fragment de l'URL (jamais envoyé
   au serveur par le navigateur) et la page l'efface de l'adresse avant tout.
