@@ -676,6 +676,51 @@ class PhotoProfil(AvecServeur):
         finally:
             menu.fermer()
 
+    def test_quota_de_photos_nombre_et_taille(self):
+        jeton = self.appairer()
+        dossier = self.chemins["photos"]
+        dossier.mkdir(parents=True)
+        # Une photo déposée à la main ne compte pas contre le téléphone.
+        (dossier / "vacances.jpg").write_bytes(b"x" * 10_000)
+        for i in range(T.PHOTOS_MAX):
+            (dossier / f"telephone-20260101-0000{i:02d}.jpg").write_bytes(JPEG)
+        statut, _h, rep = self.envoyer(JPEG, jeton)
+        self.assertEqual((statut, rep["erreur"]), (507, "quota"))
+        self.assertEqual(len(list(dossier.glob("telephone-*.jpg"))), T.PHOTOS_MAX)
+        for photo in list(dossier.glob("telephone-*.jpg"))[1:]:
+            photo.unlink()
+        self.assertEqual(self.envoyer(JPEG, jeton)[0], 200)
+        # Taille totale : deux photos déjà là pèsent presque tout le quota.
+        for photo in dossier.glob("telephone-*.jpg"):
+            photo.unlink()
+        (dossier / "telephone-20260101-000000.jpg").write_bytes(b"\xff" * (T.PHOTOS_TAILLE_MAX - 100))
+        statut, _h, rep = self.envoyer(JPEG, jeton)
+        self.assertEqual((statut, rep["erreur"]), (507, "quota"))
+
+    def test_disque_presque_plein(self):
+        with self.assertRaises(T.PhotoRefusee) as refus:
+            T.enregistrer_photo(self.chemins["photos"], JPEG, self.horloge(),
+                                espace_libre=lambda d: T.ESPACE_LIBRE_MIN + len(JPEG) - 1)
+        self.assertEqual(str(refus.exception), "espace")
+        self.assertEqual(self.photos(), [])
+        self.assertTrue(T.enregistrer_photo(self.chemins["photos"], JPEG, self.horloge(),
+                                            espace_libre=lambda d: T.ESPACE_LIBRE_MIN + len(JPEG)))
+
+    def test_envois_simultanes_ne_depassent_pas_le_quota(self):
+        jeton = self.appairer()
+        dossier = self.chemins["photos"]
+        dossier.mkdir(parents=True)
+        for i in range(T.PHOTOS_MAX - 2):
+            (dossier / f"telephone-20260101-0000{i:02d}.jpg").write_bytes(JPEG)
+        statuts = []
+        fils = [threading.Thread(target=lambda: statuts.append(self.envoyer(JPEG, jeton)[0])) for _ in range(6)]
+        for f in fils:
+            f.start()
+        for f in fils:
+            f.join()
+        self.assertEqual(sorted(statuts), [200, 200, 507, 507, 507, 507])
+        self.assertEqual(len(list(dossier.glob("telephone-*.jpg"))), T.PHOTOS_MAX)
+
     def test_sans_menu_la_photo_est_quand_meme_ecrite(self):
         jeton = self.appairer()
         statut, _h, rep = self.envoyer(JPEG, jeton)

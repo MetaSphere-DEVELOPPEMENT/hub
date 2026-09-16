@@ -1510,7 +1510,10 @@ $("photo-envoyer").addEventListener("click", async () => {
       message("Photo envoyée : choisissez-la dans le profil, sur la TV", 3600);
       return;
     }
-    message(statut === 413 ? "Photo trop lourde" : "Photo refusée par le HUB");
+    message(statut === 413 ? "Photo trop lourde"
+      : donnees?.erreur === "quota" ? "Trop de photos du téléphone sur le HUB : supprimez-en d'abord"
+      : donnees?.erreur === "espace" ? "Disque du HUB presque plein : photo non enregistrée"
+      : "Photo refusée par le HUB");
   } catch (e) {
     if (!(e instanceof JetonRefuse)) message("Envoi impossible : HUB injoignable");
   }
