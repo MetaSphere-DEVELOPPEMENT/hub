@@ -37,9 +37,13 @@ autoinstall:
       match:
         path: "@DISQUE@"
 
+  # Seulement des paquets du pool de l'ISO. Sans réseau, l'installateur n'a que lui, et
+  # un seul paquet absent l'arrête AVANT late-commands : Ubuntu nue, sans /opt/hub ni
+  # premier démarrage. Vu sur le M720q le 16/09/2026, câble débranché, avec git ici.
+  # git viendra de hub-installer.sh (étape 9), une fois le réseau là.
+  # Liste du pool : cle/paquets-iso-ubuntu-26.04.1.txt, vérifiée par tests/test_cle_hors_ligne.py.
   packages:
     - openssh-server
-    - git
 
   late-commands:
     - mkdir -p /target/opt/hub
