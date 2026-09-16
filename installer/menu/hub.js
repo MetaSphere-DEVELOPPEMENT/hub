@@ -89,6 +89,8 @@ function el(tag, attrs = {}, ...enfants) {
   for (const [k, v] of Object.entries(attrs)) {
     if (v === false || v == null) continue;
     if (k === "class") e.className = v;
+    // « html » : pictos et icônes écrits dans ce code, jamais une donnée reçue (nom,
+    // ville, titre) — la page a accès aux fichiers et parle à hub-menu.
     else if (k === "html") e.innerHTML = v;
     else if (k === "style") e.style.cssText = v;
     else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
@@ -506,14 +508,17 @@ function alerteMeteo() {
 function afficherMeteo() {
   const actif = meteoProfil().active && meteoSituee() && meteo?.current;
   $("puce-meteo").hidden = !actif;
-  $("ambiant-meteo").innerHTML = "";
+  $("ambiant-meteo").replaceChildren();
   if (!actif) return;
   const c = meteo.current;
   const nuit = c.is_day === 0;
   $("meteo-picto-puce").innerHTML = pictoMeteo(c.weather_code, nuit);
   $("meteo-temp-puce").textContent = `${Math.round(c.temperature_2m)}°`;
   $("meteo-ville-puce").textContent = meteoProfil().ville;
-  $("ambiant-meteo").innerHTML = `${pictoMeteo(c.weather_code, nuit)}<span>${Math.round(c.temperature_2m)}° · ${libelleMeteo(c.weather_code)} · ${meteoProfil().ville}</span>`;
+  // Le picto est une construction interne ; le nom de ville vient du géocodage ou du
+  // fichier de réglages : texte seulement, dans une page qui a accès aux fichiers.
+  $("ambiant-meteo").append(el("span", { html: pictoMeteo(c.weather_code, nuit) }).firstChild,
+    el("span", {}, `${Math.round(c.temperature_2m)}° · ${libelleMeteo(c.weather_code)} · ${meteoProfil().ville || ""}`));
   if (pile.at(-1) === "meteo") rendreMeteo();
   horloge();
 }
@@ -978,9 +983,9 @@ function rendreProfils() {
     liste.append(el("button", { class: "tuile-profil ajout", "data-nav": true, "data-cle": "profil-ajout", onclick: () => ouvrirEditeur(null) },
       el("span", { class: "avatar" }, "+"), t("profils.ajouter")));
   }
-  const retrouve = cle && liste.querySelector(`[data-cle="${cle}"]`);
-  if (pile.at(-1) === "profils") definirFocus(retrouve || liste.querySelector(`[data-cle="profil-${reglages.profilActif}"]`), true);
-  else focusParCalque.profils = liste.querySelector(`[data-cle="profil-${reglages.profilActif}"]`);
+  const retrouve = cle && liste.querySelector(`[data-cle="${CSS.escape(cle)}"]`);
+  if (pile.at(-1) === "profils") definirFocus(retrouve || liste.querySelector(`[data-cle="${CSS.escape(`profil-${reglages.profilActif}`)}"]`), true);
+  else focusParCalque.profils = liste.querySelector(`[data-cle="${CSS.escape(`profil-${reglages.profilActif}`)}"]`);
 }
 
 function choisirProfil(id) {
@@ -1039,7 +1044,7 @@ function rendreEditeur() {
     }));
   }
   $("aide-photo").hidden = listeAvatars.length > 0;
-  const retrouve = cle && $("editeur-profil").querySelector(`[data-cle="${cle}"]`);
+  const retrouve = cle && $("editeur-profil").querySelector(`[data-cle="${CSS.escape(cle)}"]`);
   if (retrouve && pile.at(-1) === "editeur-profil") definirFocus(retrouve, true);
 }
 function enregistrerProfil() {
