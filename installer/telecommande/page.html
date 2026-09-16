@@ -403,7 +403,7 @@ details.plateforme ol { margin: 8px 0 0; padding-left: 20px; }
 <main id="appairage" class="ecran" hidden>
   <div class="marque"><b>HUB</b></div>
   <h1>Relier ce téléphone</h1>
-  <p>Tapez le code à 6 chiffres affiché sur la TV, sous le QR code<br>
+  <p>Tapez le code à 6 chiffres affiché sur la TV, sous le QR code, en laissant cet écran ouvert<br>
     <span class="chemin">Réglages → Télécommande</span></p>
   <form id="form-code" autocomplete="off">
     <input id="code" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code"
@@ -805,7 +805,9 @@ async function relier() {
     const erreur = $("erreur-code");
     erreur.textContent = statut === 429
       ? `Trop d'essais : réessayez dans ${donnees?.attente || 60} s`
-      : "Code incorrect — il change à chaque usage, relisez la TV";
+      : donnees?.erreur === "appairage-ferme"
+        ? "Affichez d'abord l'écran Réglages → Télécommande sur la TV, puis retapez le code"
+        : "Code incorrect — il change à chaque usage, relisez la TV";
     const champ = $("code");
     champ.classList.remove("secoue");
     void champ.offsetWidth;  // relance l'animation
