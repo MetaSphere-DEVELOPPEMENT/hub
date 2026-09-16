@@ -625,3 +625,20 @@ test("télécommande : l'empreinte du certificat s'affiche en groupes courts, co
   assert.match(await page.textContent(".empreinte-appairage"), /SHA-256/);
   assert.deepEqual(page.erreurs, []);
 });
+
+test("mise à jour signée : sans signataire autorisé, pas de bouton Installer, et les refus sont expliqués", async () => {
+  await ouvrir({ retour: true });
+  await page.evaluate(() => ACTIONS.reglages("apropos"));
+  await page.evaluate(() => window.hub.recevoir({ type: "maj", verification: { disponible: true, verifiable: false, raison: "signataires", distant: "abc1234" }, etat: null }));
+  assert.match(await page.textContent("#contenu-reglages"), /aucun signataire autorisé : elle ne peut pas être installée/);
+  assert.equal(await page.locator('[data-cle="maj-appliquer"]').count(), 0);
+  for (const [raison, attendu] of [["signataires", /Aucun signataire autorisé sur ce HUB/], ["signature", /pas signée par une clé autorisée/], ["inconnue-demain", /L'installation a échoué\./]]) {
+    await page.evaluate(r => window.hub.recevoir({ type: "maj", etat: { etape: "echec", raison: r } }), raison);
+    assert.match(await page.textContent("#contenu-reglages"), attendu, raison);
+  }
+  await page.evaluate(() => window.hub.recevoir({ type: "maj", verification: { disponible: true, distant: "abc1234" }, etat: null }));
+  assert.equal(await page.locator('[data-cle="maj-appliquer"]').count(), 1, "un ancien hub-mise-a-jour sans « verifiable » reste installable");
+  await page.evaluate(() => window.hub.recevoir({ type: "maj", etat: { etape: "installation", version: "abc1234", signataire: "Parent <parent@example.org>" } }));
+  assert.match(await page.textContent("#contenu-reglages"), /signée par Parent <parent@example\.org>/);
+  assert.deepEqual(page.erreurs, []);
+});
