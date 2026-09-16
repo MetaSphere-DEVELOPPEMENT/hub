@@ -366,7 +366,18 @@ function fondChoisi() {
   return PALETTES[f] || f === "photos" ? f : "aurore";
 }
 
+// Personne ne regarde le fond : page cachée, mode qui démarre, calque plein écran
+// par-dessus (voile, et le verre de la feuille recalculé à chaque image du fond), ou
+// cadre photo qui le recouvre en ambiant.
+function fondSuspendu() {
+  const corps = document.body.classList;
+  return document.hidden || corps.contains("depart") || corps.contains("calque-ouvert") || corps.contains("cadre-actif");
+}
+
 function dessinerFond(temps) {
+  // Suspendu, on dessine encore une image si quelque chose a changé (thème, fond
+  // choisi dans les réglages), puis la boucle s'arrête jusqu'à relancerFond.
+  if (fondSuspendu() && fondPret) { boucleFond = false; dernierDessin = null; return; }
   // Une image sur deux à 60 Hz ; la marge de 4 ms évite de tomber à 20 images par
   // seconde quand la synchro arrive une milliseconde en avance.
   if (fondPret && dernierDessin !== null && temps - dernierDessin < 1000 / IMAGES_FOND_PAR_SECONDE - 4) {
@@ -420,8 +431,11 @@ function dessinerFond(temps) {
 function relancerFond() {
   etoilesVisibles();
   photosVisibles();
+  // Fond, thème ou teinte ont pu changer pendant la pause : une image au moins.
+  fondPret = false;
   if (!boucleFond) { boucleFond = true; requestAnimationFrame(dessinerFond); }
 }
+document.addEventListener("visibilitychange", () => { if (!document.hidden) relancerFond(); });
 
 function etoilesVisibles() {
   const visible = fondChoisi() === "nebuleuse" && racine.dataset.theme !== "clair";
@@ -829,6 +843,7 @@ function fermerCalque() {
   const liste = candidats();
   const precedent = focusParCalque[pile.at(-1)];
   definirFocus(liste.includes(precedent) ? precedent : liste[0], true);
+  if (pile.length === 1) relancerFond();
   son("retour");
   if (verrouAccueil && pile.length === 1 && id !== "code") setTimeout(exigerDeverrouillage, 0);
 }
@@ -1934,6 +1949,7 @@ function reveiller() {
   if (!document.body.classList.contains("ambiant")) return false;
   document.body.classList.remove("ambiant");
   extensions.ambiant.forEach(f => f(false));
+  relancerFond();
   if (verrouAccueil) setTimeout(exigerDeverrouillage, 0);
   return true;
 }
@@ -2024,8 +2040,17 @@ addEventListener("mouseover", e => {
   if (cible && calqueActif().contains(cible) && !verrou) definirFocus(cible, true);
 });
 
+// La boucle ne tourne que manette branchée : sans elle, le menu demandait une image
+// à chaque rafraîchissement de l'écran pour n'y trouver aucune manette.
 const pressees = new Set();
+let boucleManettes = false;
+function manettesBranchees() { return [...(navigator.getGamepads?.() || [])].some(Boolean); }
+function relancerManettes() {
+  if (!boucleManettes && manettesBranchees()) { boucleManettes = true; requestAnimationFrame(manettes); }
+}
+addEventListener("gamepadconnected", relancerManettes);
 function manettes() {
+  if (!manettesBranchees()) { boucleManettes = false; pressees.clear(); return; }
   for (const m of navigator.getGamepads?.() || []) {
     if (!m) continue;
     const etat = {
@@ -2253,7 +2278,9 @@ if (!INITIAL.retour && !parametres.get("ecran") && !parametres.has("sans-intro")
   setTimeout(() => { intro.hidden = true; }, 2700);
 }
 setInterval(chargerMeteo, 20 * 60000);
-requestAnimationFrame(manettes);
+// Une manette déjà branchée au retour de Kodi ne renvoie pas « gamepadconnected ».
+relancerManettes();
+window.hubBoucles = () => ({ fond: boucleFond, manettes: boucleManettes });
 
 const carteDepart = cartes.find(c => c.dataset.mode === (INITIAL.dernier || profil().dernier)) || cartes[0];
 definirFocus(carteDepart, true);

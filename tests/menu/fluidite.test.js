@@ -105,3 +105,53 @@ test("fond : mouvement réduit, il ne bouge plus et la boucle s'arrête", async 
   await page.waitForTimeout(600);
   assert.equal(await page.evaluate(() => document.getElementById("fond").toDataURL()), avant);
 });
+
+const boucles = () => page.evaluate(() => window.hubBoucles());
+const attendreBoucle = (nom, valeur) => page.waitForFunction(([n, v]) => window.hubBoucles()[n] === v, [nom, valeur], { timeout: 3000 });
+
+test("fond : figé sous un calque, relancé en le refermant", async () => {
+  await ouvrir(profilAvec({ fond: "aurore" }));
+  assert.equal((await boucles()).fond, true);
+  await page.keyboard.press("r");
+  await attendreBoucle("fond", false);
+  await page.keyboard.press("Escape");
+  await attendreBoucle("fond", true);
+  assert.deepEqual(page.erreurs, []);
+});
+
+test("fond : arrêté quand la page est cachée ou qu'un mode démarre", async () => {
+  await ouvrir(profilAvec({ fond: "nebuleuse" }));
+  await page.evaluate(() => {
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  // Chromium ne coupe pas requestAnimationFrame d'une page qu'on dit cachée : c'est la boucle elle-même qui s'arrête.
+  await attendreBoucle("fond", false);
+  await page.evaluate(() => {
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => false });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await attendreBoucle("fond", true);
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("Enter");
+  await attendreBoucle("fond", false);
+});
+
+test("manettes : pas de boucle sans manette ; une manette branchée pilote, débranchée la boucle s'arrête", async () => {
+  await ouvrir({}, "?sans-intro", () => {
+    window.__manette = null;
+    navigator.getGamepads = () => [window.__manette];
+  });
+  await page.waitForTimeout(200);
+  assert.equal((await boucles()).manettes, false);
+  await page.evaluate(() => {
+    window.__manette = { index: 0, axes: [0, 0], buttons: Array.from({ length: 16 }, () => ({ pressed: false })) };
+    window.dispatchEvent(new Event("gamepadconnected"));
+  });
+  await attendreBoucle("manettes", true);
+  await page.evaluate(() => { window.__manette.buttons[15] = { pressed: true }; });
+  await page.waitForFunction(() => document.querySelector(".carte.focus")?.dataset.mode === "gaming", null, { timeout: 3000 });
+  await page.evaluate(() => { window.__manette = null; });
+  await attendreBoucle("manettes", false);
+});
