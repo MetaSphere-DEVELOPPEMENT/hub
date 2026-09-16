@@ -485,8 +485,25 @@ test("aperçu depuis la clé : bandeau, et aucun mode lancé", async () => {
   assert.ok(!(await page.evaluate(() => document.body.classList.contains("depart"))));
 });
 
+const LYON = { active: true, ville: "Lyon", lat: 45.76, lon: 4.84 };
+
+test("météo : sans ville choisie, rien n'est demandé ni affiché", async () => {
+  await ouvrir({ retour: true });
+  await page.waitForTimeout(200);
+  assert.deepEqual(await messages("meteo"), [], "aucune ville par défaut, donc aucun relevé");
+  assert.ok(!(await page.isVisible("#puce-meteo")));
+  await page.evaluate(() => ACTIONS.reglages("meteo"));
+  assert.match(await page.textContent("#contenu-reglages"), /Aucune ville choisie/);
+});
+
+test("météo : une ville déjà enregistrée est gardée et relevée", async () => {
+  await ouvrir({ retour: true, reglages: { profils: [{ id: "a", nom: "A" }], systeme: { meteo: LYON } } });
+  await page.waitForFunction(() => window.__messages.some(m => m.type === "meteo"));
+  assert.deepEqual(await messages("meteo"), [{ type: "meteo", lat: 45.76, lon: 4.84 }]);
+});
+
 test("météo reçue de hub-menu : puce, alerte pluie et panneau détaillé", async () => {
-  await ouvrir();
+  await ouvrir({ reglages: { profils: [{ id: "a", nom: "A" }], systeme: { meteo: LYON } } });
   // Open-Meteo (timezone=auto) donne des heures locales sans fuseau : on fait pareil.
   const heure = h => { const d = new Date(); d.setMinutes(0, 0, 0); d.setHours(d.getHours() + h); return new Date(d - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); };
   const heures = Array.from({ length: 24 }, (_, i) => heure(i));
@@ -500,6 +517,7 @@ test("météo reçue de hub-menu : puce, alerte pluie et panneau détaillé", as
   }), { heures });
   assert.equal(await page.textContent("#meteo-temp-puce"), "18°");
   assert.match(await page.textContent("#sous-salut"), /Pluie probable vers/);
+  assert.equal(await page.textContent("#meteo-ville-puce"), "Lyon");
   await touche("m");
   assert.deepEqual(await calques(), ["meteo"]);
   assert.equal(await page.locator(".jour").count(), 6);

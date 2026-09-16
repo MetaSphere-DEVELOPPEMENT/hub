@@ -73,7 +73,10 @@ const DEFAUTS = {
     marge: 5,
     // Enceinte réseau (installer/enceinte) : lu par hub-enceinte, qui relance le récepteur concerné.
     enceinte: { spotify: true, airplay: true, ecran: true, nom: "HUB" },
-    meteo: { active: true, ville: "Landivisiau", lat: 48.5091, lon: -4.0691 },
+    // Pas de ville par défaut : le dépôt est public, et une ville inventée afficherait la
+    // météo d'ailleurs. Choisir sa ville active la météo. Les réglages déjà enregistrés
+    // gardent la leur (fusion avec ces défauts).
+    meteo: { active: false, ville: null, lat: null, lon: null },
   },
 };
 
@@ -148,6 +151,7 @@ let reglages = (() => {
 
 function profil() { return reglages.profils.find(p => p.id === reglages.profilActif); }
 function meteoProfil() { return profil().meteo || reglages.systeme.meteo; }
+function meteoSituee(m = meteoProfil()) { return Number.isFinite(m?.lat) && Number.isFinite(m?.lon); }
 function sonsActifs() { return profil().sons ?? reglages.systeme.sons; }
 function veilleMinutes() { return profil().veille ?? reglages.systeme.veille; }
 function modeAutorise(mode, p = profil()) { return p.modes?.[mode] !== false; }
@@ -500,7 +504,7 @@ function alerteMeteo() {
 }
 
 function afficherMeteo() {
-  const actif = meteoProfil().active && meteo?.current;
+  const actif = meteoProfil().active && meteoSituee() && meteo?.current;
   $("puce-meteo").hidden = !actif;
   $("ambiant-meteo").innerHTML = "";
   if (!actif) return;
@@ -527,7 +531,7 @@ const URL_METEO = "https://api.open-meteo.com/v1/forecast?current=temperature_2m
 
 async function chargerMeteo() {
   const { active, lat, lon } = meteoProfil();
-  if (!active) return afficherMeteo();
+  if (!active || !meteoSituee()) return afficherMeteo();
   if (PONT) return envoyer({ type: "meteo", lat, lon });
   try {
     const reponse = await fetch(`${URL_METEO}&latitude=${lat}&longitude=${lon}`);
@@ -626,7 +630,7 @@ function montrerVilles(resultats) {
     liste.append(el("button", {
       class: "option", "data-nav": true, "data-cle": `ville-${v.id}`,
       onclick: () => {
-        profil().meteo = { ...meteoProfil(), ville: v.name, lat: v.latitude, lon: v.longitude };
+        profil().meteo = { ...meteoProfil(), active: true, ville: String(v.name ?? ""), lat: Number(v.latitude), lon: Number(v.longitude) };
         sauver();
         chargerMeteo();
         rendreSection();
@@ -1457,8 +1461,13 @@ function rendreSection(garderFocus = true) {
 
     case "meteo":
       zone.append(
-        rangee(t("meteo.afficher"), null, options("meteo", [[true, t("oui")], [false, t("non")]], meteoProfil().active, v => { p.meteo = { ...meteoProfil(), active: v === true || v === "true" }; chargerMeteo(); })),
-        rangee(t("meteo.ville"), meteoProfil().ville, el("div", { class: "options" },
+        rangee(t("meteo.afficher"), meteoSituee() ? null : t("meteo.sans.ville"), options("meteo", [[true, t("oui")], [false, t("non")]], meteoProfil().active && meteoSituee(), v => {
+          p.meteo = { ...meteoProfil(), active: v === true || v === "true" };
+          chargerMeteo();
+          // Activer sans ville ne montrerait rien : on la demande tout de suite.
+          if (p.meteo.active && !meteoSituee()) setTimeout(chercherVille, 0);
+        })),
+        rangee(t("meteo.ville"), meteoProfil().ville || t("meteo.sans.ville"), el("div", { class: "options" },
           el("button", { class: "option", "data-nav": true, "data-cle": "chercher-ville", onclick: chercherVille }, t("meteo.chercher")))));
       break;
 

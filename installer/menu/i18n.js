@@ -158,6 +158,7 @@ const TEXTES = {
     "meteo.alerte.pluie": "Pluie probable vers {h} — prévois un parapluie.",
     "meteo.releve": "Relevé à {h}",
     "meteo.aucune.ville": "Aucune ville trouvée.",
+    "meteo.sans.ville": "Aucune ville choisie",
 
     "veille": "Mode ambiant",
     "veille.detail": "Après un moment sans action : grande horloge et météo, l'écran est préservé.",
@@ -422,6 +423,7 @@ const TEXTES = {
     "meteo.indisponible": "Weather unavailable",
     "meteo.aujourdhui": "Today",
     "meteo.resultats": "Pick your city",
+    "meteo.sans.ville": "No city chosen",
     "meteo.alerte.pluie": "Rain likely around {h} — take an umbrella.",
     "meteo.releve": "Updated at {h}",
     "meteo.aucune.ville": "No city found.",

@@ -69,32 +69,32 @@ class Meteo(AvecDossier):
     def test_releve_frais_puis_cache_sans_nouvelle_requete(self):
         appels = []
         telecharger = lambda url: appels.append(url) or METEO
-        r1 = hub_menu.meteo(self.c, 48.5, -4.07, maintenant=1000, telecharger=telecharger)
-        r2 = hub_menu.meteo(self.c, 48.5, -4.07, maintenant=1000 + 60, telecharger=telecharger)
+        r1 = hub_menu.meteo(self.c, 45.76, 4.84, maintenant=1000, telecharger=telecharger)
+        r2 = hub_menu.meteo(self.c, 45.76, 4.84, maintenant=1000 + 60, telecharger=telecharger)
         self.assertEqual(len(appels), 1)
         self.assertFalse(r1["horsLigne"])
         self.assertEqual(r2["donnees"], METEO)
-        self.assertIn("latitude=48.5", appels[0])
+        self.assertIn("latitude=45.76", appels[0])
 
     def test_sans_reseau_rend_le_cache_marque_hors_ligne(self):
-        hub_menu.meteo(self.c, 48.5, -4.07, maintenant=1000, telecharger=lambda url: METEO)
+        hub_menu.meteo(self.c, 45.76, 4.84, maintenant=1000, telecharger=lambda url: METEO)
 
         def coupe(url):
             raise OSError("réseau absent")
-        r = hub_menu.meteo(self.c, 48.5, -4.07, maintenant=1000 + 3600, telecharger=coupe)
+        r = hub_menu.meteo(self.c, 45.76, 4.84, maintenant=1000 + 3600, telecharger=coupe)
         self.assertTrue(r["horsLigne"])
         self.assertEqual(r["releve"], 1000)
 
     def test_autre_ville_ne_reutilise_pas_le_cache(self):
-        hub_menu.meteo(self.c, 48.5, -4.07, maintenant=1000, telecharger=lambda url: METEO)
+        hub_menu.meteo(self.c, 45.76, 4.84, maintenant=1000, telecharger=lambda url: METEO)
 
         def coupe(url):
             raise OSError
         self.assertIsNone(hub_menu.meteo(self.c, 43.3, 5.4, maintenant=1010, telecharger=coupe))
 
     def test_reponse_inattendue_n_ecrase_pas_le_cache(self):
-        hub_menu.meteo(self.c, 48.5, -4.07, maintenant=1000, telecharger=lambda url: METEO)
-        r = hub_menu.meteo(self.c, 48.5, -4.07, maintenant=5000, telecharger=lambda url: {"error": True})
+        hub_menu.meteo(self.c, 45.76, 4.84, maintenant=1000, telecharger=lambda url: METEO)
+        r = hub_menu.meteo(self.c, 45.76, 4.84, maintenant=5000, telecharger=lambda url: {"error": True})
         self.assertTrue(r["horsLigne"])
         self.assertEqual(json.loads(self.c["meteo"].read_text())["donnees"], METEO)
 
