@@ -42,6 +42,9 @@ def chemins_de(d):
         "tube-airplay": d / "run/hub/airplay-metadonnees",
         "conf-airplay": d / "run/hub/shairport-sync.conf",
         "applique": d / "run/hub/enceinte-applique.json",
+        "code-recopie": d / "config/hub/enceinte/code-recopie",
+        "appareils-recopie": d / "config/hub/enceinte/uxplay-appareils",
+        "demande-code": d / "run/hub/recopie-code.json",
     }
 
 
@@ -74,9 +77,55 @@ class Reglages(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             c = chemins_de(d)
             self.assertEqual(E.lire_reglages(c)["nom"], "HUB")
+            self.assertTrue(E.lire_reglages(c)["recopiePermise"])
             c["reglages"].parent.mkdir(parents=True)
             c["reglages"].write_text("{pas du json")
             self.assertTrue(E.lire_reglages(c)["spotify"])
+            # On ne sait plus qui regarde : la musique reste, la recopie non.
+            self.assertFalse(E.lire_reglages(c)["recopiePermise"])
+            self.assertFalse(E.actif(E.lire_reglages(c), "ecran"))
+
+
+def reglages_profils(actif, **temps):
+    return {"profilActif": actif, "profils": [
+        {"id": "samuel"},
+        {"id": "camille", "tempsEcran": {"limites": [None] * 7, "debut": None, "fin": None, **temps}},
+    ]}
+
+
+class RecopieSelonLeProfil(unittest.TestCase):
+    """Le format est celui que lit hub-temps-ecran (profilActif, profils[].tempsEcran)."""
+
+    def test_profil_sans_regle(self):
+        self.assertFalse(E.profil_encadre(reglages_profils("samuel")))
+        self.assertFalse(E.profil_encadre(None))
+        self.assertFalse(E.profil_encadre({"profils": "x"}))
+        # Règles présentes mais toutes vides : rien n'est compté, rien n'est refusé.
+        self.assertFalse(E.profil_encadre(reglages_profils("camille")))
+
+    def test_une_limite_un_seul_jour_suffit(self):
+        limites = [None] * 7
+        limites[5] = 90
+        self.assertTrue(E.profil_encadre(reglages_profils("camille", limites=limites)))
+        limites[5] = 0
+        self.assertTrue(E.profil_encadre(reglages_profils("camille", limites=limites)))
+
+    def test_plage_horaire(self):
+        self.assertTrue(E.profil_encadre(reglages_profils("camille", fin="21:00")))
+        self.assertTrue(E.profil_encadre(reglages_profils("camille", debut="07:30")))
+        self.assertFalse(E.profil_encadre(reglages_profils("camille", debut="25:00")))
+
+    def test_valeurs_ignorees_comme_hub_temps_ecran(self):
+        self.assertFalse(E.profil_encadre(reglages_profils("camille", limites=[True] * 7)))
+        self.assertFalse(E.profil_encadre(reglages_profils("camille", limites=[60] * 6)))
+        self.assertFalse(E.profil_encadre(reglages_profils("camille", limites=[-1] * 7)))
+
+    def test_actif(self):
+        r = E.reglages_enceinte(None)
+        self.assertTrue(E.actif({**r, "recopiePermise": True}, "ecran"))
+        self.assertFalse(E.actif({**r, "recopiePermise": False}, "ecran"))
+        self.assertTrue(E.actif({**r, "recopiePermise": False}, "spotify"))
+        self.assertFalse(E.actif({**r, "ecran": False, "recopiePermise": True}, "ecran"))
 
 
 class Configurations(unittest.TestCase):
@@ -106,11 +155,15 @@ class Configurations(unittest.TestCase):
         self.assertIn("udp_port_base = 6001;", conf)
         self.assertIn('pipe_name = "/run/essai/run/hub/airplay-metadonnees";', conf)
         self.assertIn('mpris_service_bus = "session";', conf)
+        self.assertIn('allow_session_interruption = "no";', conf)
+        self.assertNotIn("password =", conf)
         self.assertEqual(conf.count("{"), conf.count("}"))
 
     def test_uxplay(self):
-        a = E.arguments_uxplay(self.r, self.c, programme="/usr/bin/uxplay")
+        a = E.arguments_uxplay(self.r, self.c, "0482", programme="/usr/bin/uxplay")
         self.assertEqual(self.valeur(a, "-n"), 'Le "HUB" \\ salon Écran')
+        self.assertEqual(self.valeur(a, "-pin"), "0482")
+        self.assertEqual(self.valeur(a, "-reg"), "/run/essai/config/hub/enceinte/uxplay-appareils")
         self.assertIn("-nh", a)
         self.assertIn("-fs", a)
         self.assertEqual(self.valeur(a, "-p"), "7000")
@@ -177,6 +230,84 @@ class Evenements(unittest.TestCase):
         self.assertIsNone(E.ligne_uxplay("Open connections: 1"))
         self.assertEqual(E.ligne_uxplay("Open connections: 0"), {"source": "ecran", "etat": "arret"})
         self.assertIsNone(E.ligne_uxplay("raop_rtp_mirror starting"))
+        # Messages de lib/raop_handlers.h, UxPlay 1.73.2.
+        self.assertEqual(E.ligne_uxplay("client sent PAIR-PIN-START request\n"), {"source": "ecran", "demandeCode": True})
+        self.assertEqual(E.ligne_uxplay("pair-pin-setup (step 3): client authentication failed\n"),
+                         {"source": "ecran", "codeFaux": True})
+
+
+class CodeRecopie(unittest.TestCase):
+    def test_codes_evidents_refuses(self):
+        for code in ("0000", "7777", "1234", "6789", "9876", "3210"):
+            self.assertTrue(E.code_evident(code), code)
+        self.assertFalse(E.code_evident("0482"))
+        tirages = iter([1111, 1234, 0, 482])
+        self.assertEqual(E.nouveau_code(lambda n: next(tirages)), "0482")
+
+    def test_cree_une_fois_prive_puis_stable(self):
+        with tempfile.TemporaryDirectory() as d:
+            c = chemins_de(d)
+            code = E.code_recopie(c)
+            self.assertRegex(code, r"^\d{4}$")
+            self.assertEqual(c["code-recopie"].stat().st_mode & 0o777, 0o600)
+            self.assertEqual(E.code_recopie(c), code)
+            c["code-recopie"].write_text("abc\n")
+            self.assertNotEqual(E.code_recopie(c, hasard=lambda n: 4821), "abc")
+
+    def test_renouveler_oublie_les_appareils(self):
+        with tempfile.TemporaryDirectory() as d:
+            c = chemins_de(d)
+            E.code_recopie(c, hasard=lambda n: 4821)
+            c["appareils-recopie"].write_text("cle,AA:BB,iPhone\n")
+            (c["config"] / "uxplay.pem").write_text("cle")
+            self.assertEqual(E.code_recopie(c, renouveler=True, hasard=lambda n: 5930), "5930")
+            self.assertFalse(c["appareils-recopie"].exists())
+            self.assertFalse((c["config"] / "uxplay.pem").exists())
+            self.assertEqual(E.code_recopie(c), "5930")
+
+    def test_commande_code_pour_le_menu(self):
+        with tempfile.TemporaryDirectory() as d:
+            env = {**os.environ, "XDG_CONFIG_HOME": str(Path(d) / "config"), "XDG_RUNTIME_DIR": str(Path(d) / "run")}
+            sortie = subprocess.run([sys.executable, E.__file__, "code"], env=env, capture_output=True, text=True, check=True)
+            self.assertRegex(sortie.stdout, r"^\d{4}\n$")
+            self.assertEqual((Path(d) / "config/hub/enceinte/code-recopie").read_text(), sortie.stdout)
+            encore = subprocess.run([sys.executable, E.__file__, "code"], env=env, capture_output=True, text=True)
+            self.assertEqual(encore.stdout, sortie.stdout)
+            self.assertEqual(subprocess.run([sys.executable, E.__file__, "code", "x"], env=env).returncode, 2)
+
+    def test_garde_cinq_codes_faux_en_un_quart_d_heure(self):
+        g = E.GardeCode()
+        self.assertEqual([g.code_faux(t) for t in (0, 10, 20, 30)], [False] * 4)
+        self.assertTrue(g.code_faux(40))
+        # Des erreurs espacées d'une soirée ne verrouillent jamais.
+        g = E.GardeCode()
+        self.assertFalse(any(g.code_faux(t * 400) for t in range(20)))
+
+    def test_uxplay_verrouille_apres_cinq_codes_faux(self):
+        faux = ("import sys, time\n"
+                "print('client sent PAIR-PIN-START request', flush=True)\n"
+                "for _ in range(5): print('pair-pin-setup (step 3): client authentication failed', flush=True)\n"
+                "time.sleep(30)\n")
+        with tempfile.TemporaryDirectory() as d:
+            c = chemins_de(d)
+            ancien = E.arguments_uxplay
+            E.arguments_uxplay = lambda r, c, code: [sys.executable, "-c", faux]
+            envoyes, envoyer = [], E.envoyer
+            E.envoyer = lambda ev, c=None: envoyes.append(ev)
+            try:
+                with open(os.devnull, "w") as muet:
+                    sortie, sys.stdout = sys.stdout, muet
+                    try:
+                        debut = time.time()
+                        retour, verrouille = E.une_recopie(c, E.lire_reglages(c), "0482", E.GardeCode(), [])
+                    finally:
+                        sys.stdout = sortie
+            finally:
+                E.arguments_uxplay, E.envoyer = ancien, envoyer
+            self.assertTrue(verrouille)
+            self.assertLess(time.time() - debut, 10)
+            self.assertIn({"source": "ecran", "demandeCode": True, "code": "0482"}, envoyes)
+            self.assertEqual(envoyes[-1], {"source": "ecran", "etat": "arret"})
 
 
 class Priorite(unittest.TestCase):
@@ -314,6 +445,21 @@ class Executions(unittest.TestCase):
             c["reglages"].write_text(json.dumps({"systeme": {"enceinte": {"ecran": False, "nom": "Salon"}}}))
             self.assertEqual(sorted(E.appliquer(c, executer)), ["airplay", "ecran", "spotify"])
 
+    def test_profil_encadre_arrete_la_recopie(self):
+        with tempfile.TemporaryDirectory() as d:
+            c = chemins_de(d)
+            c["reglages"].parent.mkdir(parents=True)
+            c["reglages"].write_text(json.dumps(reglages_profils("samuel")))
+            r = E.lire_reglages(c)
+            for s in E.SOURCES:
+                E.noter_lancement(c, r, s)
+            appels, executer = self.enregistreur()
+            c["reglages"].write_text(json.dumps(reglages_profils("camille", fin="20:00")))
+            self.assertEqual(E.appliquer(c, executer), ["ecran"])
+            self.assertEqual(appels, [["systemctl", "--user", "restart", "hub-airplay-ecran.service"]])
+            c["reglages"].write_text(json.dumps(reglages_profils("samuel")))
+            self.assertEqual(E.appliquer(c, executer), ["ecran"])
+
     def test_actif(self):
         with tempfile.TemporaryDirectory() as d:
             ancien, programmes = dict(os.environ), (E.SHAIRPORT, E.UXPLAY)
@@ -325,6 +471,9 @@ class Executions(unittest.TestCase):
                 E.SHAIRPORT, E.UXPLAY = vrai, vrai
                 self.assertEqual(E.principal(["x", "actif", "airplay"]), 1)
                 self.assertEqual(E.principal(["x", "actif", "ecran"]), 0)
+                (Path(d) / "hub/reglages.json").write_text(json.dumps(reglages_profils("camille", limites=[60] * 7)))
+                self.assertEqual(E.principal(["x", "actif", "ecran"]), 1)
+                self.assertEqual(E.principal(["x", "actif", "airplay"]), 0)
                 E.UXPLAY = "/nexiste/pas"
                 self.assertEqual(E.principal(["x", "actif", "ecran"]), 1)
                 with open(os.devnull, "w") as muet:
@@ -436,6 +585,28 @@ class CoordinateurReel(unittest.TestCase):
         self.kodi.notifier("Player.OnResume")
         self.attendre(lambda: any(a[0] == "gdbus" for a in self.appels))
         self.attendre(lambda: self.lecture() is None)
+
+    def test_code_montre_sur_la_tv_puis_cache(self):
+        self.attendre(lambda: self.kodi.client is not None)
+        env = {**os.environ, "XDG_RUNTIME_DIR": str(Path(self._tmp.name) / "run")}
+        # Comme le lanceur d'UxPlay l'envoie.
+        E.envoyer({"source": "ecran", "demandeCode": True, "code": "0482"}, self.c)
+        self.attendre(lambda: self.c["demande-code"].exists())
+        self.assertEqual(json.loads(self.c["demande-code"].read_text())["code"], "0482")
+        self.assertEqual(self.c["demande-code"].stat().st_mode & 0o777, 0o600)
+        self.attendre(lambda: any(o.get("method") == "GUI.ShowNotification" for o in self.kodi.recu))
+        notification = [o for o in self.kodi.recu if o.get("method") == "GUI.ShowNotification"][0]
+        self.assertIn("0482", notification["params"]["message"])
+        # Un code qui n'en est pas un n'est jamais affiché.
+        E.envoyer({"source": "ecran", "demandeCode": True, "code": "<b>"}, self.c)
+        # L'appareil est appairé, la recopie commence : le code disparaît.
+        subprocess.run([sys.executable, E.__file__, "evenement", "ecran", "lecture"], env=env, check=True)
+        self.attendre(lambda: not self.c["demande-code"].exists())
+
+    def test_changement_de_profil_relance_la_recopie(self):
+        self.c["reglages"].parent.mkdir(parents=True, exist_ok=True)
+        self.c["reglages"].write_text(json.dumps(reglages_profils("camille", limites=[60] * 7)))
+        self.attendre(lambda: ["systemctl", "--user", "restart", "hub-airplay-ecran.service"] in self.appels)
 
 
 if __name__ == "__main__":
