@@ -23,6 +23,16 @@
 #
 #   ./audit.sh              affiche à l'écran
 #   ./audit.sh > rapport.md garde une trace datée
+#   HUB_AUDIT_BRUT=1 ./audit.sh   sans masquage, pour un diagnostic qui reste local
+#
+# POURQUOI LE RAPPORT MASQUE DES IDENTIFIANTS. Les rapports sont versionnés dans un
+# dépôt public. Le nom du Wi-Fi et l'adresse MAC du point d'accès suffisent à
+# situer la maison sur les cartes publiques de bornes Wi-Fi ; le préfixe IPv6
+# global identifie l'abonnement ; les adresses fe80:: et les noms d'interface
+# « wlx… » contiennent l'adresse MAC de la carte ; le nom d'hôte, les chemins
+# /media/<utilisateur> et les UUID de /etc/crypttab nomment la personne et ses
+# disques. Aucune de ces valeurs ne décide d'un choix d'architecture : les
+# débits, modèles, pilotes et états restent en clair.
 
 set -uo pipefail
 export LC_ALL=C.UTF-8 2>/dev/null || true
@@ -34,11 +44,36 @@ ligne() { printf '  %-26s %s\n' "$1" "$2"; }
 a() { command -v "$1" >/dev/null 2>&1; }
 sinon_absent() { local v; v=$("$@" 2>/dev/null); [ -n "$v" ] && printf '%s' "$v" || printf '—'; }
 
+# Tout passe par sed -E sans extension GNU (pas de \b ni de \s), pour que le
+# masquage s'éprouve aussi sous macOS (bash 3.2, sed BSD).
+masquer() {
+  if [ "${HUB_AUDIT_BRUT:-0}" = 1 ]; then cat; return; fi
+  sed -E \
+    -e 's/ESSID:"[^"]*"/ESSID:"(masqué)"/g' \
+    -e 's/(^|[^0-9A-Fa-f:])([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}/\1(MAC masquée)/g' \
+    -e 's/(wlx|enx)[0-9a-f]{12}/\1(masqué)/g' \
+    -e 's/(^|[^0-9a-f:])(fe80|fec0):[0-9a-f:]*/\1\2::(masquée)/g' \
+    -e 's/(^|[^0-9a-f:])f[cd][0-9a-f]{2}:[0-9a-f:]*/\1(IPv6 locale masquée)/g' \
+    -e 's/(^|[^0-9a-f:])[23][0-9a-f]{3}:[0-9a-f]{1,4}:[0-9a-f:]*/\1(IPv6 globale masquée)/g' \
+    -e 's/[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}/(UUID masqué)/g' \
+    -e 's#(/run)?/media/[^ ]+#/media/(masqué)#g' \
+    -e 's#/home/[^/ ]+#/home/(masqué)#g'
+}
+
+nom_hote() {
+  if [ "${HUB_AUDIT_BRUT:-0}" = 1 ]; then hostname; else printf '(nom d%shôte masqué)' "'"; fi
+}
+
+# Chargé avec HUB_AUDIT_SOURCE=1, le script ne livre que ses fonctions : on
+# éprouve ainsi le masque sur des sorties connues sans lancer tout l'audit.
+[ "${HUB_AUDIT_SOURCE:-0}" = 1 ] && return 0 2>/dev/null
+
+{
 JOURS=(dimanche lundi mardi mercredi jeudi vendredi samedi)
 MOIS=('' janvier février mars avril mai juin juillet août septembre octobre novembre décembre)
 printf '# Audit matériel — %s %s %s %s, %s\n\n' \
   "${JOURS[$(date +%w)]}" "$(date +%-d)" "${MOIS[$(date +%-m)]}" "$(date +%Y)" "$(date +%Hh%M)"
-printf '_Mesuré sur `%s`. Aucune installation, aucune modification._\n' "$(hostname)"
+printf '_Mesuré sur `%s`. Aucune installation, aucune modification._\n' "$(nom_hote)"
 
 # ── Système ───────────────────────────────────────────────────────────────────
 titre "Système"
@@ -207,3 +242,4 @@ for m in \
   printf '  [ ] %s\n' "$m"
 done
 printf '\n'
+} | masquer

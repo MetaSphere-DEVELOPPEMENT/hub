@@ -14,6 +14,35 @@
 #
 # Produit sortie/hub-cle.iso et sortie/MOT-DE-PASSE.txt (hors git).
 
+# POURQUOI DES SYLLABES TIRÉES DE /dev/urandom. L'ancien générateur (deux mots parmi
+# dix et quatre chiffres, avec $RANDOM) ne donnait que 20 bits : 900 000
+# possibilités, qu'un hachage $6$ ne protège pas longtemps si le fichier user-data de
+# la clé traîne. Ici, 12 syllables consonne-voyelle (16 consonnes × 5 voyelles, soit
+# 6,3 bits chacune) donnent 75 bits. Elles restent lisibles à voix haute et se tapent
+# sur une TV avec un clavier AZERTY sans majuscule ni chiffre ni touche morte :
+# « kobave-tirulo-pedusa-fijomi ». Les octets sont tirés par rejet (un octet ≥ 255
+# est jeté pour les voyelles) pour que chaque lettre ait exactement la même chance.
+generer_mot_de_passe() {
+  local consonnes=bcdfgjklmnprstvz voyelles=aeiou mdp="" n=0 octet
+  while [ "$n" -lt 24 ]; do
+    for octet in $(od -An -tu1 -N48 /dev/urandom); do
+      [ "$n" -lt 24 ] || break
+      if [ $((n % 2)) -eq 0 ]; then
+        mdp="$mdp${consonnes:$((octet % 16)):1}"
+      else
+        [ "$octet" -lt 255 ] || continue
+        mdp="$mdp${voyelles:$((octet % 5)):1}"
+        [ $((n % 6)) -eq 5 ] && [ "$n" -lt 23 ] && mdp="$mdp-"
+      fi
+      n=$((n + 1))
+    done
+  done
+  printf '%s\n' "$mdp"
+}
+# Chargé avec HUB_CLE_SOURCE=1, le script ne livre que ce générateur, pour l'éprouver
+# sans ISO ni Docker.
+if [ "${HUB_CLE_SOURCE:-0}" = 1 ]; then return 0; fi
+
 set -euo pipefail
 cd "$(dirname "$(readlink -f "$0")")"
 RACINE=$(cd .. && pwd)
@@ -46,11 +75,16 @@ git -C "$RACINE" describe --always --dirty > "$travail/hub/VERSION"
 
 # Un mot de passe propre à cette clé : il sert à sudo et au bureau, jamais à l'allumage.
 if [ ! -f sortie/MOT-DE-PASSE.txt ]; then
-  mots=(salon kodi aurore braise ocean nebuleuse lumiere canape cinema etoile)
-  printf '%s-%s-%s\n' "${mots[RANDOM%10]}" "${mots[RANDOM%10]}" "$((RANDOM%9000+1000))" > sortie/MOT-DE-PASSE.txt
+  (umask 077 && generer_mot_de_passe > sortie/MOT-DE-PASSE.txt)
   chmod 600 sortie/MOT-DE-PASSE.txt
+elif grep -Eqx '[a-z]+-[a-z]+-[0-9]{4}' sortie/MOT-DE-PASSE.txt; then
+  # On ne le remplace pas d'office : une clé déjà installée avec ce mot de passe
+  # doit rester ouvrable par celui qui le connaît.
+  printf '  ! sortie/MOT-DE-PASSE.txt vient de l’ancien générateur (20 bits, devinable) :\n' >&2
+  printf '    supprimez-le pour en tirer un robuste, puis reconstruisez la clé.\n' >&2
 fi
-hache=$(openssl passwd -6 "$(cat sortie/MOT-DE-PASSE.txt)")
+# Par l'entrée standard : en argument, le mot de passe se lirait dans la liste des processus.
+hache=$(openssl passwd -6 -stdin < sortie/MOT-DE-PASSE.txt)
 cle_ssh=$(cat "$HOME/.ssh/id_rsa.pub")
 
 sed -e "s|@MOT_DE_PASSE_HACHE@|$hache|" -e "s|@CLE_SSH@|$cle_ssh|" -e "s|@DISQUE@|$DISQUE|" user-data.modele > "$travail/nocloud/user-data"

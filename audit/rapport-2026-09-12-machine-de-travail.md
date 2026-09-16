@@ -2,6 +2,10 @@
 
 _Mesuré sur `(nom d'hôte masqué)`. Aucune installation, aucune modification._
 
+_Publié le 17 septembre 2026 avec les identifiants masqués à la main (nom du Wi-Fi,_
+_adresses MAC, IPv6, UUID, chemins personnels) : ils localisent la maison sans rien_
+_apprendre sur la machine. Les mesures sont inchangées._
+
 ## Système
 
   distribution               Ubuntu 24.04.4 LTS
@@ -66,17 +70,17 @@ _Mesuré sur `(nom d'hôte masqué)`. Aucune installation, aucune modification._
 ## Réseau
 
   eno1             DOWN           
-  wlx(masqué)  UP             192.168.1.50/24 (IPv6 globale masquée)/64 (IPv6 globale masquée)/64 (IPv6 globale masquée)/64 fe80::(masquée)/64 
+  wlx(masqué)      UP             192.168.x.x/24 (masquée) 3 × IPv6 globale/64 (masquées) fe80::(masquée)/64 
   br-060ae02bc718  UP             172.18.0.1/16 fe80::(masquée)/64 
   docker0          DOWN           172.17.0.1/16 
   veth5307bdd@if2  UP             fe80::(masquée)/64 
   vetha70e2aa@if2  UP             fe80::(masquée)/64 
 
   eno1 (filaire)             DÉBRANCHÉ
-  wlx(masqué) (sans fil) branché
+  wlx(masqué)     (sans fil) branché
 
-  wlx(masqué)  IEEE 802.11  ESSID:"(masqué)"  
-            Mode:Managed  Frequency:2.462 GHz  Access Point: (MAC masquée)   
+  wlx(masqué)      IEEE 802.11  ESSID:"(masqué)"  
+            Mode:Managed  Frequency:2.462 GHz  Access Point: (masqué)   
             Bit Rate=26 Mb/s   Tx-Power=20 dBm   
             Link Quality=42/70  Signal level=-68 dBm  
 
@@ -110,7 +114,7 @@ _Mesuré sur `(nom d'hôte masqué)`. Aucune installation, aucune modification._
   /dev/nvme0n1p1  1.1G  6.2M  1.1G   1% /boot/efi
 
   volumes chiffrés déclarés :
-    travail UUID=(UUID masqué) none luks,nofail
+    travail UUID=(masqué) none luks,nofail
     (« nofail » = le démarrage continue si le volume ne s'ouvre pas)
   racine chiffrée           non
 
