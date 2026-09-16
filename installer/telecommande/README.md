@@ -1,7 +1,7 @@
 # Télécommande téléphone
 
-Le téléphone devient la télécommande du HUB : on scanne le QR code affiché sur la TV,
-on tape le code à 6 chiffres, et la page offre un pavé tactile (ou la croix
+Le téléphone devient la télécommande du HUB : on affiche Réglages → Télécommande sur
+la TV, on scanne le QR code, on tape le code à 6 chiffres, et la page offre un pavé tactile (ou la croix
 directionnelle), OK, Retour, Accueil, les modes, le volume, la dictée d'une commande,
 l'envoi de texte (recherche dans Kodi) et l'envoi d'une photo de profil. Elle
 s'ajoute à l'écran d'accueil et s'ouvre alors comme une app.
@@ -51,6 +51,9 @@ systemctl --global enable hub-telecommande.service
   `/opt/hub-voix/venv/bin/python` et les modèles de `/opt/hub-voix/modeles`
   (`HUB_VOIX_DOSSIER`, `HUB_VOIX_PYTHON`, `HUB_VOIX_MODELES` pour forcer). Sans elle,
   la dictée répond « non installée » et tout le reste marche.
+- **Le menu doit ouvrir la fenêtre d'appairage** (fichier `telecommande-appairage`, voir
+  « Intégration dans le menu ») tant que l'écran Télécommande est affiché : sans elle,
+  tout code est refusé. Recours sans menu : `hub-telecommande --appairage`.
 - **Le menu doit afficher l'empreinte** `empreinteRacineCourte` du fichier d'état à côté
   du code (voir plus bas) : c'est ce que le téléphone compare, dans ses propres réglages,
   avant de faire confiance au certificat. Tant qu'il ne le fait pas :
@@ -85,9 +88,22 @@ la télécommande n'est ouverte ni à un invité, ni à une page web étrangère
 
 - **Appairage.** Code à 6 chiffres affiché sur la TV : il faut être dans la pièce.
   Renouvelé à chaque démarrage, après chaque appairage réussi, toutes les 5 minutes,
-  et après 20 codes faux toutes adresses confondues.
-- **Limite d'essais.** 5 essais par minute par adresse IP (réussites comprises),
-  réponse 429 avec `Retry-After` au-delà.
+  à la fermeture de l'écran d'appairage et après 20 codes faux toutes adresses confondues.
+- **Fenêtre d'appairage.** Un code n'est comparé que si l'écran Télécommande est
+  affiché sur la TV : le menu touche `$XDG_RUNTIME_DIR/hub/telecommande-appairage`, qui
+  ouvre l'appairage 5 minutes après sa date de modification. Sinon 403
+  `appairage-ferme`, sans rien compter. Avant le 17/09/2026, l'appairage était ouvert en
+  permanence.
+- **Limite d'essais.** 5 essais par minute par adresse IP (réussites comprises), et
+  surtout une limite **globale** : après 3 codes faux toutes adresses confondues, chaque
+  essai attend 2, 4, 8, 16, 32 puis 60 s (la série s'oublie après 15 min calmes ou une
+  réussite). Réponse 429 avec `Retry-After` au-delà. Pourquoi : l'audit du 17/09/2026
+  montrait qu'un appareil prenant ~250 adresses sur le réseau avait ~50 % de chances de
+  deviner le code en ~9 h avec la seule limite par adresse. Désormais : au plus ~12
+  essais par fenêtre de 5 min (test `test_delai_global_croissant_toutes_adresses_confondues`),
+  ~1 chance sur 80 000, et seulement pendant qu'on appaire. Le prix : quelqu'un du
+  réseau qui envoie des codes faux en continu retarde l'appairage légitime (au plus
+  60 s par essai) ; le journal le montre (`appairage : code faux depuis …`).
 - **Jeton.** `secrets.token_urlsafe(32)` (256 bits), gardé par le téléphone dans
   `localStorage`. Le HUB n'en garde que l'**empreinte SHA-256**, dans
   `~/.config/hub/telecommande-jetons.json` (0600). Envoyé en `Authorization: Bearer`,
@@ -173,6 +189,7 @@ Créée au premier démarrage dans `~/.config/hub/telecommande-tls/` (dossier 07
 ## Révoquer un téléphone
 
 ```bash
+hub-telecommande --appairage         # sans le menu (SSH) : ouvre l'appairage 5 min, affiche le code
 hub-telecommande --lister            # id, nom, date d'appairage, dernier usage
 hub-telecommande --revoquer 2ab063   # un téléphone
 hub-telecommande --revoquer-tout     # tous
@@ -202,7 +219,7 @@ que `hub-voix`). `Input.SendText` n'a d'effet que si un clavier est ouvert dans 
 | Requête | Jeton | Réponse |
 |---|---|---|
 | `GET /` | non | la page |
-| `POST /api/appairer` `{"code":"123456","nom":"Pixel 8"}` | non | 200 `{"jeton","id","nom"}` · 403 code faux · 429 trop d'essais |
+| `POST /api/appairer` `{"code":"123456","nom":"Pixel 8"}` | non | 200 `{"jeton","id","nom"}` · 403 `{"erreur":"code"}` code faux · 403 `{"erreur":"appairage-ferme"}` écran d'appairage fermé · 429 `{"attente"}` trop d'essais |
 | `POST /api/commande` `{"nom":"gauche"}` ou `{"nom":"texte","texte":"Dune"}` | oui | 200 `{"ok","cible","raison"?,"volume"?}` · 400 hors liste · 401 |
 | `GET /api/etat` | oui | `{"ok":true,"contexte":"menu"\|"kodi"\|"bureau"\|null}` |
 | `POST /api/oublier` `{}` | oui | révoque le jeton présenté |
@@ -227,28 +244,48 @@ d'écrasement), puis envoie le datagramme `avatars` au socket du menu s'il exist
 
 ### Fichier d'état
 
-`$XDG_RUNTIME_DIR/hub/telecommande.json` (0600), réécrit à chaque changement de code ou
-d'adresse, **supprimé** quand le service s'arrête ou n'a pas d'adresse :
+`$XDG_RUNTIME_DIR/hub/telecommande.json` (0600), réécrit à chaque changement de code,
+d'adresse ou de fenêtre d'appairage, **supprimé** quand le service s'arrête ou n'a pas
+d'adresse :
 
 ```json
 {"url": "http://192.168.1.50:8790/", "code": "123456", "expire": 1789308639458,
  "telephones": 1, "appairageLe": 1789308300000,
+ "appairageOuvert": true, "appairageJusque": 1789308600000,
  "https": "https://192.168.1.50:8791/",
  "empreinteRacine": "3A:9F:…:C2",
  "empreinteRacineCourte": "3A9F 12C0 4481 7BE2"}
 ```
 
-`expire` et `appairageLe` en millisecondes epoch ; `telephones` = nombre de
-téléphones appairés ; `appairageLe` change quand un téléphone vient d'être relié
-(pour afficher « Téléphone relié » sur la TV). Le menu doit relire le fichier quand il
-change (Gio.FileMonitor, ou toutes les 2 s tant que l'écran est affiché) et masquer
-QR code et code si le fichier est absent. `https`, `empreinteRacine` et
+`expire`, `appairageLe` et `appairageJusque` en millisecondes epoch ; `telephones` =
+nombre de téléphones appairés ; `appairageLe` change quand un téléphone vient d'être
+relié (pour afficher « Téléphone relié » sur la TV). `appairageOuvert` : le code est-il
+accepté en ce moment (publié au plus 5 s après l'ouverture ou la fermeture) ;
+`appairageJusque` : fin de la fenêtre, `null` si fermée. Le menu doit relire le fichier
+quand il change (Gio.FileMonitor, ou toutes les 2 s tant que l'écran est affiché) et
+masquer QR code et code si le fichier est absent. `https`, `empreinteRacine` et
 `empreinteRacineCourte` valent `null` quand le HTTPS n'est pas disponible ; sinon
 **afficher `empreinteRacineCourte`** sous le code, telle quelle (les 8 premières paires
 de l'empreinte SHA-256, 4 groupes de 4 caractères hexadécimaux majuscules), avec
 « Empreinte du certificat (début) » : le téléphone la compare à celle de ses réglages
 avant de faire confiance au certificat. 64 bits suffisent contre quelqu'un du wifi et se
 lisent d'un canapé ; `empreinteRacine` (32 paires séparées par `:`) reste disponible.
+
+### Fenêtre d'appairage
+
+`$XDG_RUNTIME_DIR/hub/telecommande-appairage` : fichier vide, régulier, de l'utilisateur
+de la session. **L'appairage est ouvert tant que sa date de modification a moins de
+5 minutes** (et pas plus d'une minute dans le futur) ; son contenu est ignoré ; un lien
+symbolique n'ouvre rien.
+
+- Le menu le **crée ou le touche** (`os.utime`, ou réécriture) quand il affiche l'écran
+  Télécommande, puis **au moins toutes les 60 s** tant que l'écran reste affiché ;
+- il le **supprime** quand l'écran se ferme (le code est alors renouvelé : celui vu à
+  l'écran ne servira pas à la prochaine ouverture) ;
+- s'il tombe sans le supprimer, la fenêtre se ferme seule 5 minutes après le dernier
+  toucher.
+- `hub-telecommande --appairage` fait la même chose une fois (5 min), pour un appairage
+  par SSH sans menu.
 
 ### `qrcode.js`
 

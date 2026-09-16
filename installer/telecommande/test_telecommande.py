@@ -51,6 +51,7 @@ class AvecDossier(unittest.TestCase):
         self.dossier = Path(self._tmp.name)
         self.chemins = {
             "etat": self.dossier / "run" / "hub" / "telecommande.json",
+            "appairage": self.dossier / "run" / "hub" / "telecommande-appairage",
             "socket": self.dossier / "run" / "hub" / "menu.sock",
             "jetons": self.dossier / "config" / "hub" / "telecommande-jetons.json",
             "photos": self.dossier / "Images" / "HUB" / "profils",
@@ -65,10 +66,16 @@ class AvecDossier(unittest.TestCase):
 
 # ── Appairage (logique) ─────────────────────────────────────────────────────
 class Appairage(AvecDossier):
-    def nouveau(self, **kw):
+    def nouveau(self, ouverte=True):
         changements = []
-        a = T.Appairage(horloge=self.horloge, au_changement=lambda: changements.append(a.code), **kw)
+        self.ouverte = ouverte
+        a = T.Appairage(horloge=self.horloge, au_changement=lambda: changements.append(a.code),
+                        ouverte=lambda: self.ouverte)
         return a, changements
+
+    @staticmethod
+    def faux(a):
+        return "000000" if a.code != "000000" else "111111"
 
     def test_code_a_six_chiffres(self):
         a, _ = self.nouveau()
@@ -85,22 +92,76 @@ class Appairage(AvecDossier):
 
     def test_mauvais_code_refuse(self):
         a, _ = self.nouveau()
-        faux = "000000" if a.code != "000000" else "111111"
-        self.assertEqual(a.essayer("10.0.0.2", faux), T.MAUVAIS)
+        self.assertEqual(a.essayer("10.0.0.2", self.faux(a)), T.MAUVAIS)
         self.assertEqual(a.essayer("10.0.0.2", "abc"), T.MAUVAIS)
         self.assertEqual(a.essayer("10.0.0.2", None), T.MAUVAIS)
 
+    def test_fenetre_fermee_rien_n_est_compare_ni_compte(self):
+        a, _ = self.nouveau(ouverte=False)
+        self.assertEqual(a.essayer("10.0.0.2", a.code), T.FERME, "le bon code ne sert à rien écran fermé")
+        for _ in range(50):
+            self.assertEqual(a.essayer("10.0.0.2", self.faux(a)), T.FERME)
+        self.ouverte = True
+        self.assertEqual(a.essayer("10.0.0.2", a.code), T.OK, "les essais écran fermé ne pénalisent personne")
+
+    def test_par_defaut_la_fenetre_est_fermee(self):
+        a = T.Appairage(horloge=self.horloge)
+        self.assertEqual(a.essayer("10.0.0.2", a.code), T.FERME)
+
     def test_cinq_essais_par_minute_par_ip(self):
         a, _ = self.nouveau()
-        faux = "000000" if a.code != "000000" else "111111"
+        # Chaque essai attend le délai global : seule la limite par adresse doit jouer ici.
         for _ in range(5):
-            self.assertEqual(a.essayer("10.0.0.2", faux), T.MAUVAIS)
+            self.horloge.t = max(self.horloge.t, a._bloque_jusqua)
+            self.assertEqual(a.essayer("10.0.0.2", self.faux(a)), T.MAUVAIS)
+        self.horloge.t = max(self.horloge.t, a._bloque_jusqua)
+        self.assertLess(self.horloge.t, 1_800_000_000 + 60)
         # Le sixième est refusé même avec le bon code : sinon la limite ne limite rien.
         self.assertEqual(a.essayer("10.0.0.2", a.code), T.TROP)
-        # Une autre IP n'est pas punie pour la première.
-        self.assertEqual(a.essayer("10.0.0.9", faux), T.MAUVAIS)
+        self.assertGreater(a.attente_s("10.0.0.2"), 1)
+        # Une autre IP n'est pas punie par la limite de la première.
+        self.assertEqual(a.essayer("10.0.0.9", a.code), T.OK)
+
+    def test_delai_global_croissant_toutes_adresses_confondues(self):
+        # L'attaque de l'audit : une adresse différente à chaque essai.
+        a, _ = self.nouveau()
+        for i in range(T.ECHECS_LIBRES):
+            self.assertEqual(a.essayer(f"10.0.1.{i}", self.faux(a)), T.MAUVAIS, "fautes de frappe libres")
+        delais = []
+        for i in range(8):
+            self.assertEqual(a.essayer(f"10.0.2.{i}", self.faux(a)), T.MAUVAIS)
+            attente = a.attente_s(f"10.0.3.{i}")
+            # Pendant l'attente, une adresse neuve est refusée, même avec le bon code.
+            self.assertEqual(a.essayer(f"10.0.3.{i}", a.code), T.TROP)
+            delais.append(attente)
+            self.horloge.t += attente
+        self.assertEqual(delais, [2, 4, 8, 16, 32, 60, 60, 60])
+        # Combien d'essais dans une fenêtre de 5 minutes, toutes adresses confondues ?
+        b, _ = self.nouveau()
+        debut, essais = self.horloge.t, 0
+        while self.horloge.t < debut + T.FENETRE_APPAIRAGE_S:
+            if b.essayer(f"10.9.{essais // 250}.{essais % 250}", self.faux(b)) == T.MAUVAIS:
+                essais += 1
+            self.horloge.t += 0.5
+        self.assertLessEqual(essais, 15)
+
+    def test_la_serie_s_oublie_apres_un_moment_calme(self):
+        a, _ = self.nouveau()
+        for _ in range(T.ECHECS_LIBRES + 2):
+            a.essayer("10.0.0.2", self.faux(a))
+            self.horloge.t += 61
+        self.horloge.t += T.OUBLI_ECHECS_S + 1
+        self.assertEqual(a.essayer("10.0.0.3", self.faux(a)), T.MAUVAIS)
+        self.assertEqual(a.essayer("10.0.0.3", a.code), T.OK, "plus de délai après un quart d'heure calme")
+
+    def test_une_reussite_remet_le_compteur_a_zero(self):
+        a, _ = self.nouveau()
+        for _ in range(T.ECHECS_LIBRES + 1):
+            a.essayer("10.0.0.2", self.faux(a))
         self.horloge.t += 61
         self.assertEqual(a.essayer("10.0.0.2", a.code), T.OK)
+        self.assertEqual(a.essayer("10.0.0.2", self.faux(a)), T.MAUVAIS)
+        self.assertEqual(a.essayer("10.0.0.2", a.code), T.OK, "pas de délai hérité d'avant la réussite")
 
     def test_code_expire_est_renouvele(self):
         a, changements = self.nouveau()
@@ -111,12 +172,50 @@ class Appairage(AvecDossier):
         self.assertEqual(a.essayer("10.0.0.2", ancien) if a.code != ancien else T.MAUVAIS, T.MAUVAIS)
 
     def test_trop_d_echecs_toutes_ip_confondues_renouvelle_le_code(self):
-        # Contre une attaque répartie sur plusieurs adresses du réseau local.
         a, _ = self.nouveau()
         ancien = a.code
         for i in range(T.ECHECS_AVANT_RENOUVELLEMENT):
             a.essayer(f"10.0.1.{i}", "000000" if ancien != "000000" else "111111")
+            self.horloge.t += T.DELAI_MAX_S
         self.assertNotEqual(a.code, ancien)
+
+
+class FenetreAppairage(AvecDossier):
+    def fenetre(self):
+        return T.FenetreAppairage(self.chemins["appairage"], horloge=self.horloge)
+
+    def test_ouverte_seulement_si_touchee_recemment(self):
+        f = self.fenetre()
+        self.assertFalse(f.ouverte())
+        self.assertIsNone(f.jusqua_ms())
+        f.ouvrir()
+        self.assertTrue(f.ouverte())
+        self.assertEqual(f.jusqua_ms(), int((self.horloge() + T.FENETRE_APPAIRAGE_S) * 1000))
+        self.assertEqual(stat.S_IMODE(os.stat(self.chemins["appairage"]).st_mode), 0o600)
+        self.horloge.t += T.FENETRE_APPAIRAGE_S - 1
+        self.assertTrue(f.ouverte())
+        self.horloge.t += 2
+        self.assertFalse(f.ouverte(), "un menu tombé sans nettoyer ne laisse pas l'appairage ouvert")
+        f.ouvrir()
+        self.assertTrue(f.ouverte(), "le menu prolonge la fenêtre en retouchant le fichier")
+        f.fermer()
+        self.assertFalse(f.ouverte())
+
+    def test_date_future_ou_lien_n_ouvrent_rien(self):
+        f = self.fenetre()
+        f.ouvrir()
+        t = self.horloge() + 3600
+        os.utime(self.chemins["appairage"], (t, t))
+        self.assertFalse(f.ouverte())
+        self.chemins["appairage"].unlink()
+        cible = self.dossier / "cible"
+        cible.write_text("")
+        os.utime(cible, (self.horloge(), self.horloge()))
+        self.chemins["appairage"].symlink_to(cible)
+        self.assertFalse(f.ouverte())
+
+    def test_sans_chemin_toujours_fermee(self):
+        self.assertFalse(T.FenetreAppairage(None).ouverte())
 
 
 # ── Jetons ──────────────────────────────────────────────────────────────────
@@ -225,6 +324,7 @@ class AvecServeur(AvecDossier):
         return r.status, dict((k.lower(), v) for k, v in r.getheaders()), valeur
 
     def appairer(self):
+        self.service.fenetre.ouvrir()
         statut, _h, rep = self.requete("POST", "/api/appairer",
                                        {"code": self.service.appairage.code, "nom": "Test"})
         self.assertEqual(statut, 200, rep)
@@ -338,18 +438,41 @@ class AppairageHTTP(AvecServeur):
         self.assertEqual(len(self.service.jetons.lister()), 1)
 
     def test_mauvais_code(self):
+        self.service.fenetre.ouvrir()
         faux = "000000" if self.service.appairage.code != "000000" else "111111"
         statut, _h, rep = self.requete("POST", "/api/appairer", {"code": faux})
-        self.assertEqual(statut, 403)
+        self.assertEqual((statut, rep["erreur"]), (403, "code"))
         self.assertNotIn("jeton", rep)
 
+    def test_ecran_d_appairage_ferme(self):
+        statut, _h, rep = self.requete("POST", "/api/appairer", {"code": self.service.appairage.code})
+        self.assertEqual((statut, rep["erreur"]), (403, "appairage-ferme"))
+        self.assertEqual(self.service.jetons.lister(), [])
+        etat = json.loads(self.chemins["etat"].read_text())
+        self.assertEqual((etat["appairageOuvert"], etat["appairageJusque"]), (False, None))
+
+    def test_ouverture_et_fermeture_publiees_code_change_a_la_fermeture(self):
+        self.service.fenetre.ouvrir()
+        self.assertTrue(self.service.verifier_fenetre())
+        etat = json.loads(self.chemins["etat"].read_text())
+        self.assertTrue(etat["appairageOuvert"])
+        self.assertEqual(etat["appairageJusque"], int((self.horloge() + T.FENETRE_APPAIRAGE_S) * 1000))
+        self.assertFalse(self.service.verifier_fenetre(), "rien à publier sans changement")
+        self.service.fenetre.fermer()
+        self.assertTrue(self.service.verifier_fenetre())
+        etat2 = json.loads(self.chemins["etat"].read_text())
+        self.assertFalse(etat2["appairageOuvert"])
+        self.assertNotEqual(etat2["code"], etat["code"], "le code vu à l'écran ne sert pas à la prochaine ouverture")
+
     def test_limitation_des_essais(self):
+        self.service.fenetre.ouvrir()
         faux = "000000" if self.service.appairage.code != "000000" else "111111"
-        for _ in range(5):
+        for _ in range(T.ECHECS_LIBRES + 1):
             self.assertEqual(self.requete("POST", "/api/appairer", {"code": faux})[0], 403)
-        statut, h, _ = self.requete("POST", "/api/appairer", {"code": self.service.appairage.code})
+        statut, h, rep = self.requete("POST", "/api/appairer", {"code": self.service.appairage.code})
         self.assertEqual(statut, 429)
-        self.assertIn("retry-after", h)
+        self.assertEqual(h["retry-after"], "2")
+        self.assertEqual(rep["attente"], 2)
 
     def test_type_de_contenu_exige(self):
         # Un formulaire d'une autre page (text/plain, sans prévol CORS) ne passe pas.
@@ -713,6 +836,7 @@ class ServiceHTTPS(AvecDossier):
                             processus=lambda noms: [], kodi_http=None)
         self.tls = T.AutoriteLocale(self.chemins["tls"])
         self.service = T.Service(self.chemins, routeur=routeur, tls=self.tls)
+        self.service.fenetre.ouvrir()
         self.serveurs = T.demarrer_ecoutes(self.service, "127.0.0.1", 0, 0, sondage=0.05)
         self.http, self.https = (s.server_address[1] for s in self.serveurs)
 

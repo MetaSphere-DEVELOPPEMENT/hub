@@ -13,11 +13,12 @@ réparer un soir de panne : pas de pip, pas de framework, un seul fichier Python
 une page, une unité systemd.
 
 LA SÉCURITÉ, EN BREF (détails dans README.md). Rien n'est accepté sans jeton ; un
-jeton ne s'obtient qu'avec le code affiché sur la TV, donc en étant dans la pièce.
-Le code change à chaque démarrage, après chaque usage, toutes les 5 minutes et après
-trop d'échecs ; 5 essais par minute par adresse. Les commandes sont une liste
-blanche, la page est la seule chose servie, et l'en-tête Host est vérifié contre le
-rebinding DNS.
+jeton ne s'obtient qu'avec le code affiché sur la TV, donc en étant dans la pièce, et
+seulement pendant que l'écran d'appairage est ouvert. Le code change à chaque
+démarrage, après chaque usage, toutes les 5 minutes et à la fermeture de l'écran ;
+5 essais par minute par adresse, et un délai croissant après chaque code faux, toutes
+adresses confondues. Les commandes sont une liste blanche, la page est la seule chose
+servie, et l'en-tête Host est vérifié contre le rebinding DNS.
 
 OÙ VONT LES COMMANDES. Menu ouvert : au socket du menu, exactement comme la voix.
 Menu fermé : à Kodi (navigation, texte, quitter) s'il tourne, sinon à la session
@@ -44,6 +45,7 @@ import shutil
 import signal
 import socket
 import ssl
+import stat
 import struct
 import subprocess
 import sys
@@ -70,9 +72,25 @@ PORT_HTTPS = 8791
 
 DUREE_CODE_S = 5 * 60
 ESSAIS_PAR_MINUTE = 5
-# Au-delà, toutes adresses confondues, le code change : cinq essais par adresse ne
-# protègent rien contre quelqu'un qui en utilise cinquante.
+# Cinq essais par adresse ne protègent rien contre un appareil qui en prend deux cents
+# sur le réseau (audit du 17/09/2026 : ~50 % de chances en 9 h). La vraie limite est
+# donc globale : après ECHECS_LIBRES codes faux, toutes adresses confondues, chaque
+# essai suivant attend 2, 4, 8… jusqu'à DELAI_MAX_S secondes. Au plus une douzaine
+# d'essais par fenêtre d'appairage de 5 minutes, soit ~1 chance sur 80 000 ; une faute
+# de frappe en famille ne coûte, elle, que quelques secondes.
+ECHECS_LIBRES = 3
+DELAI_MAX_S = 60
+# Une série d'échecs s'oublie après un quart d'heure calme : l'invité maladroit d'hier
+# ne ralentit pas l'appairage d'aujourd'hui.
+OUBLI_ECHECS_S = 15 * 60
+# Renouveler le code change peu aux chances d'un attaquant, mais un code qui a subi
+# vingt essais n'a plus rien à faire à l'écran.
 ECHECS_AVANT_RENOUVELLEMENT = 20
+# L'appairage n'est accepté que pendant une fenêtre ouverte par le menu (l'écran
+# « Télécommande » affiché) ou par `hub-telecommande --appairage` : le reste du temps,
+# un code deviné ne sert à rien. Le menu (re)touche le fichier tant que l'écran est
+# affiché ; oublié, le fichier ne vaut plus rien au bout de ce délai.
+FENETRE_APPAIRAGE_S = 5 * 60
 TAILLE_MAX_CORPS = 2048
 # Une photo recadrée à 512 px en JPEG 0,88 pèse 60 à 150 Ko : 2 Mio laisse de la marge
 # à un navigateur qui compresse mal, sans laisser remplir le disque par rafales.
@@ -83,7 +101,7 @@ TAILLE_MAX_NOM = 40
 # de dernier usage ne sert qu'à reconnaître un vieux téléphone à révoquer.
 PRECISION_VU_S = 3600
 
-OK, MAUVAIS, TROP = "ok", "mauvais", "trop"
+OK, MAUVAIS, TROP, FERME = "ok", "mauvais", "trop", "ferme"
 
 # Les noms du protocole du socket du menu (hub-menu.py, COMMANDES), recopiés et non
 # importés : importer hub-menu.py tirerait sa logique entière dans un service réseau.
@@ -342,6 +360,8 @@ def chemins_par_defaut():
     config = Path(os.environ.get("XDG_CONFIG_HOME") or maison / ".config") / "hub"
     return {
         "etat": execution / "telecommande.json",
+        # Fenêtre d'appairage : présent et touché depuis moins de FENETRE_APPAIRAGE_S.
+        "appairage": execution / "telecommande-appairage",
         "socket": execution / "menu.sock",
         "jetons": config / "telecommande-jetons.json",
         # Autorité locale et certificat du HUB. Dans ~/.config et non /etc : le service
@@ -486,15 +506,68 @@ class Jetons:
 
 
 # ── Appairage ───────────────────────────────────────────────────────────────
-class Appairage:
-    """Le code à 6 chiffres affiché sur la TV, et la limite d'essais."""
+class FenetreAppairage:
+    """Le fichier qui dit « l'écran d'appairage est affiché sur la TV ».
 
-    def __init__(self, horloge=time.time, au_changement=None):
+    Un fichier plutôt qu'un message au service : le menu l'écrit sans connaître le
+    service (démarré avant ou après lui), la ligne de commande aussi, et il survit à
+    un redémarrage de l'un ou de l'autre. Seule sa date compte : rien à analyser.
+    Dans $XDG_RUNTIME_DIR (0700) : seul l'utilisateur de la session peut l'ouvrir.
+    """
+
+    def __init__(self, chemin, horloge=time.time):
+        self.chemin = Path(chemin) if chemin else None
+        self.horloge = horloge
+
+    def _date(self):
+        if self.chemin is None:
+            return None
+        try:
+            st = os.lstat(self.chemin)
+        except OSError:
+            return None
+        # Un lien ou un fichier d'un autre utilisateur n'ouvre rien.
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid():
+            return None
+        return st.st_mtime
+
+    def ouverte(self):
+        date = self._date()
+        if date is None:
+            return False
+        age = self.horloge() - date
+        # Une date dans le futur (horloge recalée par NTP) ne doit pas ouvrir pour des heures.
+        return -60 <= age < FENETRE_APPAIRAGE_S
+
+    def jusqua_ms(self):
+        date = self._date()
+        return int((date + FENETRE_APPAIRAGE_S) * 1000) if date is not None and self.ouverte() else None
+
+    def ouvrir(self):
+        self.chemin.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.close(os.open(self.chemin, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600))
+        maintenant = self.horloge()
+        os.utime(self.chemin, (maintenant, maintenant))
+
+    def fermer(self):
+        if self.chemin:
+            self.chemin.unlink(missing_ok=True)
+
+
+class Appairage:
+    """Le code à 6 chiffres affiché sur la TV, la fenêtre et les limites d'essais."""
+
+    def __init__(self, horloge=time.time, au_changement=None, ouverte=lambda: False):
         self.horloge = horloge
         self.au_changement = au_changement
+        # Fermée par défaut : oublier de brancher la fenêtre ne doit rien ouvrir.
+        self.ouverte = ouverte
         self._verrou = threading.RLock()
         self._essais = {}
         self._echecs = 0
+        self._serie = 0
+        self._dernier_echec = 0.0
+        self._bloque_jusqua = 0.0
         self.code = None
         self.expire_ms = 0
         # Pas de notification ici : le propriétaire n'est pas encore prêt à écrire
@@ -525,6 +598,9 @@ class Appairage:
         with self._verrou:
             maintenant = self.horloge()
             self.verifier_expiration()
+            # Fenêtre fermée : on ne compare même pas. Rien à apprendre, rien à compter.
+            if not self.ouverte():
+                return FERME
             if len(self._essais) > 1000:
                 self._essais = {k: v for k, v in self._essais.items() if v and v[-1] > maintenant - 60}
             recents = self._essais.setdefault(ip, deque())
@@ -532,13 +608,20 @@ class Appairage:
                 recents.popleft()
             # Compter AVANT de comparer, et compter aussi les réussites : sinon le
             # sixième essai d'une rafale serait encore évalué.
-            if len(recents) >= ESSAIS_PAR_MINUTE:
+            if len(recents) >= ESSAIS_PAR_MINUTE or maintenant < self._bloque_jusqua:
                 return TROP
             recents.append(maintenant)
             if isinstance(code, str) and re.fullmatch(r"\d{6}", code) \
                     and hmac.compare_digest(code, self.code):
+                self._serie, self._bloque_jusqua = 0, 0.0
                 self.renouveler()
                 return OK
+            if maintenant - self._dernier_echec > OUBLI_ECHECS_S:
+                self._serie = 0
+            self._serie += 1
+            self._dernier_echec = maintenant
+            if self._serie > ECHECS_LIBRES:
+                self._bloque_jusqua = maintenant + min(DELAI_MAX_S, 2 ** (self._serie - ECHECS_LIBRES))
             self._echecs += 1
             if self._echecs >= ECHECS_AVANT_RENOUVELLEMENT:
                 journal.warning("%d codes faux : code renouvelé", self._echecs)
@@ -547,10 +630,12 @@ class Appairage:
 
     def attente_s(self, ip):
         with self._verrou:
+            maintenant = self.horloge()
+            attente = self._bloque_jusqua - maintenant
             recents = self._essais.get(ip)
-            if not recents:
-                return 0
-            return max(1, int(recents[0] + 60 - self.horloge()) + 1)
+            if recents and len(recents) >= ESSAIS_PAR_MINUTE:
+                attente = max(attente, recents[0] + 60 - maintenant)
+            return max(1, math.ceil(attente))
 
 
 # ── Kodi ────────────────────────────────────────────────────────────────────
@@ -1190,7 +1275,25 @@ class Service:
         self.hotes_admis = frozenset()
         self.appairage_le = None
         self._verrou_etat = threading.Lock()
-        self.appairage = Appairage(horloge=horloge, au_changement=self.ecrire_etat)
+        self.fenetre = FenetreAppairage(chemins.get("appairage"), horloge=horloge)
+        self._fenetre_ouverte = False
+        self.appairage = Appairage(horloge=horloge, au_changement=self.ecrire_etat,
+                                   ouverte=self.fenetre.ouverte)
+
+    def verifier_fenetre(self):
+        """À appeler régulièrement : publie l'ouverture et la fermeture de la fenêtre
+        d'appairage. À la fermeture, le code change : celui qu'on a pu lire par-dessus
+        une épaule ne servira pas à la prochaine ouverture."""
+        ouverte = self.fenetre.ouverte()
+        if ouverte == self._fenetre_ouverte:
+            return False
+        self._fenetre_ouverte = ouverte
+        journal.info("fenêtre d'appairage %s", "ouverte" if ouverte else "fermée")
+        if ouverte:
+            self.ecrire_etat()
+        else:
+            self.appairage.renouveler()
+        return True
 
     def publier(self, adresse, port, port_https=None):
         self.url = f"http://{adresse}:{port}/"
@@ -1228,6 +1331,10 @@ class Service:
         empreinte = self.tls.empreinte() if self.tls and self.tls_pret else None
         etat = {"url": self.url, "code": self.appairage.code, "expire": self.appairage.expire_ms,
                 "telephones": len(self.jetons.lister()), "appairageLe": self.appairage_le,
+                # Le code ne vaut rien tant que ceci est faux : le menu le dit plutôt que
+                # de laisser taper un code refusé.
+                "appairageOuvert": self.fenetre.ouverte(),
+                "appairageJusque": self.fenetre.jusqua_ms(),
                 "https": self.url_https,
                 # À afficher sur la TV : c'est le SEUL endroit d'où l'empreinte fait foi.
                 # Le téléphone la compare à celle que montrent ses propres réglages
@@ -1518,6 +1625,9 @@ def _gestionnaire(service):
                     return self._json(403, {"erreur": "transfert"})
                 return self._delivrer(corps, ip)
             resultat = service.appairage.essayer(ip, corps.get("code"))
+            if resultat == FERME:
+                journal.info("appairage refusé depuis %s : écran d'appairage fermé", ip)
+                return self._json(403, {"erreur": "appairage-ferme"})
             if resultat == TROP:
                 attente = service.appairage.attente_s(ip)
                 journal.warning("appairage : trop d'essais depuis %s", ip)
@@ -1708,6 +1818,8 @@ def main(argv=None):
                         help="ne pas ouvrir le HTTPS local (ni autorité locale, ni dictée)")
     parser.add_argument("--empreinte", action="store_true",
                         help="empreinte SHA-256 du certificat racine à comparer sur le téléphone")
+    parser.add_argument("--appairage", action="store_true",
+                        help=f"ouvrir l'appairage {FENETRE_APPAIRAGE_S // 60} minutes (sans le menu) et afficher le code")
     parser.add_argument("--lister", action="store_true", help="téléphones appairés")
     parser.add_argument("--revoquer", metavar="ID", help="retirer un téléphone")
     parser.add_argument("--revoquer-tout", action="store_true", help="retirer tous les téléphones")
@@ -1725,6 +1837,24 @@ def main(argv=None):
         empreinte = AutoriteLocale(chemins["tls"]).empreinte()
         print(empreinte or "pas encore d'autorité locale (créée au premier démarrage du service)")
         return 0 if empreinte else 1
+
+    if args.appairage:
+        # Le recours d'un soir de panne, par SSH : le menu ne s'affiche pas, on veut
+        # quand même relier un téléphone.
+        FenetreAppairage(chemins["appairage"]).ouvrir()
+        print(f"appairage ouvert {FENETRE_APPAIRAGE_S // 60} minutes")
+        # Le service publie la fenêtre et le code au plus 5 s plus tard.
+        for _ in range(20):
+            try:
+                etat = json.loads(Path(chemins["etat"]).read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                etat = {}
+            if etat.get("appairageOuvert"):
+                print(f"adresse : {etat.get('url')}\ncode : {etat.get('code')}")
+                return 0
+            time.sleep(0.5)
+        print("service hub-telecommande injoignable (pas de fichier d'état) : est-il lancé ?", file=sys.stderr)
+        return 1
 
     if args.lister or args.revoquer or args.revoquer_tout:
         jetons = Jetons(chemins["jetons"])
@@ -1776,6 +1906,7 @@ def main(argv=None):
         prochain_certificat = time.monotonic() + 3600
         while not arret.wait(5):
             service.appairage.verifier_expiration()
+            service.verifier_fenetre()
             service.dicteur.entretien()
             # Un HUB peut tourner des mois sans redémarrer : le certificat se renouvelle
             # 30 jours avant son terme, en rouvrant l'écoute avec le nouveau.
