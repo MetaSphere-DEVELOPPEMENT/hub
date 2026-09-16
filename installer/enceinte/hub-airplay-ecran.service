@@ -24,6 +24,29 @@ Restart=on-failure
 RestartSec=10
 NoNewPrivileges=yes
 UMask=0077
+# Bac à sable : pourquoi chaque ligne, et ce qui reste à vérifier sur le M720q, dans
+# hub-enceinte.service et le README (« Bac à sable »).
+# /run/user/UID/hub est partagé avec le menu, la voix, la télécommande : créé ici sans
+# bac à sable (+), jamais par RuntimeDirectory=, qui le supprimerait à l'arrêt.
+ExecStartPre=+/usr/bin/mkdir -p -m 0700 %t/hub
+PrivateTmp=yes
+ProtectHome=tmpfs
+# La session : PipeWire, Wayland, D-Bus, systemctl --user (sockets, que la lecture seule
+# n'empêche pas de joindre) ; les réglages du menu, lus.
+BindReadOnlyPaths=%t -%h/.config/hub
+BindPaths=-%t/hub
+# L'autorité TLS et les jetons des téléphones de la télécommande : de quoi piloter le HUB.
+InaccessiblePaths=-%h/.config/hub/telecommande-tls -%h/.config/hub/telecommande-jetons.json
+# Clé d'UxPlay, registre des appareils appairés et code : écrits par le lanceur et UxPlay.
+ConfigurationDirectory=hub/enceinte
+ConfigurationDirectoryMode=0700
+# Registre de GStreamer (GST_REGISTRY, posé par le lanceur) : ~/.cache est en lecture seule.
+CacheDirectory=hub/uxplay
+CacheDirectoryMode=0700
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
 # Décodage H.264 1080p : la mémoire des tampons vidéo, pas plus.
 MemoryMax=600M
 
