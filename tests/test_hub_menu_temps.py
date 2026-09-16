@@ -39,14 +39,14 @@ class TempsEcran(unittest.TestCase):
         etat = hub_menu.temps_ecran()
         self.assertEqual(etat["profils"], {})
         self.assertIn("aujourdhui", etat)
-        etat = hub_menu.prolonger_temps("lea", 30)
-        jour = etat["profils"]["lea"][etat["aujourdhui"]]
+        etat = hub_menu.prolonger_temps("camille", 30)
+        jour = etat["profils"]["camille"][etat["aujourdhui"]]
         self.assertEqual(jour["bonus"], 1800)
         self.assertTrue((Path(self._tmp.name) / "hub" / "temps-ecran.json").exists())
 
     def test_prolongation_bornee(self):
         # La page n'accorde que 15, 30 ou 60 minutes ; tout le reste est ignoré.
-        for profil, minutes in (("lea", 600), ("lea", -15), ("lea", "30"), ("", 15), ("x" * 200, 15), (None, 15)):
+        for profil, minutes in (("camille", 600), ("camille", -15), ("camille", "30"), ("", 15), ("x" * 200, 15), (None, 15)):
             self.assertIsNone(hub_menu.prolonger_temps(profil, minutes), (profil, minutes))
 
 

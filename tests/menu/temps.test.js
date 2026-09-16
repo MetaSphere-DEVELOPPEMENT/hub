@@ -49,24 +49,24 @@ const focus = () => page.evaluate(() => document.querySelector(".focus")?.datase
 const touche = async (...touches) => { for (const k of touches) { await page.keyboard.press(k); await page.waitForTimeout(60); } };
 const calques = () => page.evaluate(() => [...document.querySelectorAll(".calque.ouvert")].map(c => c.id));
 
-// Deux profils : Samuel, parent protégé par 1234 ; Léa, deux heures par jour.
-function famille({ utiliseLea = 3600, actif = "lea", leaExtra = {} } = {}) {
+// Deux profils : Samuel, parent protégé par 1234 ; Camille, deux heures par jour.
+function famille({ utiliseCamille = 3600, actif = "camille", camilleExtra = {} } = {}) {
   return {
     retour: true,
     reglages: {
       profilActif: actif,
       profils: [
         { id: "sam", nom: "Samuel", pin: PIN_1234 },
-        { id: "lea", nom: "Léa", couleur: "rose", tempsEcran: { limites: [120, 120, 120, 120, 120, 120, 120], debut: null, fin: null }, ...leaExtra },
+        { id: "camille", nom: "Camille", couleur: "rose", tempsEcran: { limites: [120, 120, 120, 120, 120, 120, 120], debut: null, fin: null }, ...camilleExtra },
       ],
       systeme: { meteo: { active: false } },
     },
-    tempsEcran: { aujourdhui: aujourdhui(), profils: { lea: { [aujourdhui()]: { secondes: utiliseLea, modes: { tv: utiliseLea } } } } },
+    tempsEcran: { aujourdhui: aujourdhui(), profils: { camille: { [aujourdhui()]: { secondes: utiliseCamille, modes: { tv: utiliseCamille } } } } },
   };
 }
 
 test("jauge : le temps restant du profil s'affiche sur sa puce", async () => {
-  await ouvrir(famille({ utiliseLea: 3600 }));
+  await ouvrir(famille({ utiliseCamille: 3600 }));
   assert.ok(await page.isVisible("#jauge-temps"));
   assert.equal(await page.textContent("#jauge-temps-texte"), "1 h");
   const largeur = await page.evaluate(() => $("jauge-temps").querySelector("i").style.width);
@@ -80,7 +80,7 @@ test("jauge : absente pour un profil sans limite", async () => {
 });
 
 test("temps écoulé : le mode ne se lance pas, un parent accorde 15 min avec son code", async () => {
-  await ouvrir(famille({ utiliseLea: 7200 }));
+  await ouvrir(famille({ utiliseCamille: 7200 }));
   assert.match(await page.getAttribute("#jauge-temps", "class"), /epuise/);
   await touche("1");
   await page.waitForTimeout(800);
@@ -96,17 +96,17 @@ test("temps écoulé : le mode ne se lance pas, un parent accorde 15 min avec so
   assert.deepEqual(await messages("temps-prolonger"), [], "un mauvais code n'accorde rien");
   await page.keyboard.type("1234");
   await attendreMessage("temps-prolonger");
-  assert.deepEqual(await messages("temps-prolonger"), [{ type: "temps-prolonger", profil: "lea", minutes: 30 }]);
+  assert.deepEqual(await messages("temps-prolonger"), [{ type: "temps-prolonger", profil: "camille", minutes: 30 }]);
   assert.deepEqual(await calques(), []);
   // hub-menu répond avec l'état écrit : la jauge repart.
-  await page.evaluate(j => window.hub.recevoir({ type: "temps-ecran", etat: { profils: { lea: { [j]: { secondes: 7200, bonus: 1800 } } } } }), aujourdhui());
+  await page.evaluate(j => window.hub.recevoir({ type: "temps-ecran", etat: { profils: { camille: { [j]: { secondes: 7200, bonus: 1800 } } } } }), aujourdhui());
   assert.equal(await page.textContent("#jauge-temps-texte"), "30 min");
   await touche("1");
   await attendreMessage("choix");
 });
 
 test("sans parent protégé par un code, on ne peut pas accorder de temps", async () => {
-  const initial = famille({ utiliseLea: 7200 });
+  const initial = famille({ utiliseCamille: 7200 });
   initial.reglages.profils[0].pin = null;
   await ouvrir(initial);
   await touche("1");
@@ -128,12 +128,12 @@ test("écran Temps d'écran : historique de 7 jours, limites réglables par le p
   assert.equal(await page.locator(".histo-temps").count(), 2, "un historique par profil");
   assert.equal(await page.locator(".histo-temps").first().locator(".jour-temps").count(), 7);
   assert.equal(await page.locator('[data-cle="temps-regler-sam"]').count(), 0, "on ne se limite pas soi-même");
-  await page.click('[data-cle="temps-regler-lea"]');
+  await page.click('[data-cle="temps-regler-camille"]');
   await page.click('[data-cle="temps-semaine-180"]');
   await page.click('[data-cle="temps-fin-21:00"]');
   await page.waitForFunction(() => {
     const m = window.__messages.filter(x => x.type === "reglages").at(-1);
-    const r = m?.donnees.profils.find(p => p.id === "lea").tempsEcran;
+    const r = m?.donnees.profils.find(p => p.id === "camille").tempsEcran;
     return r && r.limites.join() === "180,180,180,180,180,120,120" && r.fin === "21:00";
   }, null, { timeout: 5000 });
   // Au clavier, depuis le sommaire, la section est atteignable.
@@ -149,7 +149,7 @@ test("écran Temps d'écran : un profil limité ne règle rien, il voit seulemen
   await page.waitForTimeout(200);
   assert.equal(await page.locator('[data-cle^="temps-regler-"]').count(), 0);
   assert.match(await page.textContent("#contenu-reglages"), /se règlent depuis un profil sans restriction/);
-  assert.ok(await page.locator('[data-cle="temps-plus-lea"]').count());
+  assert.ok(await page.locator('[data-cle="temps-plus-camille"]').count());
 });
 
 test("réglages Allumage : jours et heure du réveil, service réarmé, adresse MAC affichée", async () => {
@@ -230,7 +230,7 @@ test("cadre photo : réglages par profil (album, durée, souvenirs) dans Veille"
 });
 
 test("anglais : les nouveaux écrans sont traduits", async () => {
-  const initial = famille({ utiliseLea: 7200 });
+  const initial = famille({ utiliseCamille: 7200 });
   initial.reglages.profils[1].langue = "en";
   await ouvrir(initial);
   await page.evaluate(() => ACTIONS.reglages("temps"));

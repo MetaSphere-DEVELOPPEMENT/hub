@@ -141,7 +141,7 @@ test("réglages : masquer un service l'enlève de l'accueil et l'enregistre dans
 test("profil sans TV : pas de streaming, services figés dans les réglages, voix refusée", async () => {
   const r = deuxProfils();
   r.profils[1].modes = { tv: false, gaming: true, bureau: true };
-  r.profilActif = "nora";
+  r.profilActif = "alix";
   await ouvrir({ retour: true, reglages: r });
   assert.ok(!(await page.isVisible("#applis")));
   await page.evaluate(() => window.hub.recevoir({ type: "commande", nom: "web:youtube" }));
@@ -226,16 +226,16 @@ test("profils : créer un profil au clavier, puis l'utiliser", async () => {
   assert.equal(await focus(), "profil-ajout");
   await touche("Enter");
   assert.deepEqual(await calques(), ["profils", "editeur-profil", "clavier"]);
-  await page.keyboard.type("lea");
+  await page.keyboard.type("camille");
   await touche("Enter");
   assert.deepEqual(await calques(), ["profils", "editeur-profil"]);
-  assert.equal(await page.textContent("#editeur-nom"), "Lea");
+  assert.equal(await page.textContent("#editeur-nom"), "Camille");
   await page.click('[data-action="enregistrer-profil"]');
   await attendreReglages(d => d.profils.length === 2);
   const donnees = (await messages("reglages")).at(-1).donnees;
-  assert.deepEqual(donnees.profils.map(p => p.nom), ["Samuel", "Lea"]);
+  assert.deepEqual(donnees.profils.map(p => p.nom), ["Samuel", "Camille"]);
   await page.click(`[data-cle="profil-${donnees.profils[1].id}"]`);
-  assert.match(await page.textContent("#salut"), /Lea$/);
+  assert.match(await page.textContent("#salut"), /Camille$/);
   await page.waitForFunction(id => window.__messages.filter(m => m.type === "reglages").at(-1)?.donnees.profilActif === id, donnees.profils[1].id, { timeout: 3000 });
 });
 
@@ -259,12 +259,12 @@ test("les réglages reçus au démarrage s'appliquent : profil, thème, langue",
   await ouvrir({
     reglages: {
       profilActif: "b",
-      profils: [{ id: "a", nom: "Samuel" }, { id: "b", nom: "Nora", theme: "clair", langue: "en" }],
+      profils: [{ id: "a", nom: "Samuel" }, { id: "b", nom: "Alix", theme: "clair", langue: "en" }],
       systeme: { meteo: { active: false } },
     },
   });
   assert.equal(await page.getAttribute("html", "data-theme"), "clair");
-  assert.match(await page.textContent("#salut"), /Nora$/);
+  assert.match(await page.textContent("#salut"), /Alix$/);
   assert.equal(await page.textContent('[data-mode="bureau"] .nom'), "Desktop");
   assert.ok(!(await page.isVisible("#puce-meteo")));
 });
@@ -319,7 +319,7 @@ test("sans reprise, la ligne n'existe pas et l'intro ne joue qu'à l'allumage", 
 const PIN_1234 = { sel: "abc", empreinte: createHash("sha256").update("abc:1234").digest("hex") };
 const deuxProfils = extra => ({
   profilActif: "samuel",
-  profils: [{ id: "samuel", nom: "Samuel", pin: PIN_1234, ...extra }, { id: "nora", nom: "Nora", modes: { tv: true, gaming: true, bureau: false } }],
+  profils: [{ id: "samuel", nom: "Samuel", pin: PIN_1234, ...extra }, { id: "alix", nom: "Alix", modes: { tv: true, gaming: true, bureau: false } }],
   systeme: { meteo: { active: false } },
 });
 
@@ -356,7 +356,7 @@ test("code PIN : au démarrage, l'accueil reste fermé sans le bon code", async 
 test("code PIN : cinq erreurs bloquent la saisie", async () => {
   await ouvrir({ retour: true, reglages: deuxProfils() });
   await page.evaluate(() => { window.hub.recevoir({ type: "commande", nom: "profils" }); });
-  await page.click('[data-cle="profil-nora"]');
+  await page.click('[data-cle="profil-alix"]');
   await page.click('[data-cle="profil-samuel"]');
   for (let i = 0; i < 5; i++) { await page.keyboard.type("9999"); await page.waitForTimeout(260); }
   await page.waitForFunction(() => /Réessaie dans/.test(document.querySelector("#code-detail").textContent));
@@ -394,7 +394,7 @@ test("réglages protégés : R demande le code du profil", async () => {
 
 test("profil restreint : Bureau masqué et refusé, profils non gérables", async () => {
   const r = deuxProfils();
-  r.profilActif = "nora";
+  r.profilActif = "alix";
   await ouvrir({ retour: true, reglages: r });
   assert.ok(!(await page.isVisible('[data-mode="bureau"]')));
   await touche("3");
