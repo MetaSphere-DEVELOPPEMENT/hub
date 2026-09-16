@@ -80,6 +80,7 @@ def chemins():
         "deja-ouvert": execution / "menu-deja-ouvert",
         "minuteur": execution / "minuteur-fin",
         "telecommande": execution / "telecommande.json",
+        "telecommande-appairage": execution / "telecommande-appairage",
         "lecture": execution / "lecture.json",
     }
 
@@ -738,8 +739,15 @@ CHAMPS_TELECOMMANDE = {
     "expire": lambda v: True,
     "telephones": lambda v: True,
     "appairageLe": lambda v: True,
-    # SHA-256 du certificat racine, en paires « AB:CD:… » (AutoriteLocale.empreinte) : le
-    # téléphone demande de la comparer avec la TV avant d'installer le certificat.
+    "https": lambda v: isinstance(v, str),
+    # Le code n'est utilisable que fenêtre ouverte (voir ouvrir_appairage) ; sinon la
+    # TV dit « ouverture… » plutôt qu'un code que le service refuserait.
+    "appairageOuvert": lambda v: isinstance(v, bool),
+    "appairageJusque": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
+    # SHA-256 du certificat racine : le téléphone demande de la comparer avec la TV avant
+    # d'installer le certificat. Le début, « 3A9F 12C0 4481 7BE2 », est ce qu'on lit ;
+    # l'empreinte entière, en paires « AB:CD:… », est donnée en petit.
+    "empreinteRacineCourte": lambda v: isinstance(v, str) and re.fullmatch(r"[0-9A-F]{4}( [0-9A-F]{4}){3}", v) is not None,
     "empreinteRacine": lambda v: isinstance(v, str) and re.fullmatch(r"[0-9A-F]{2}(:[0-9A-F]{2}){31}", v) is not None,
 }
 
@@ -751,6 +759,54 @@ def etat_telecommande(c):
     if not isinstance(donnees, dict) or not isinstance(donnees.get("url"), str) or not isinstance(donnees.get("code"), str):
         return None
     return {k: donnees.get(k) if valide(donnees.get(k)) else None for k, valide in CHAMPS_TELECOMMANDE.items()}
+
+
+# La fenêtre d'appairage : hub-telecommande n'accepte un nouveau téléphone que pendant
+# que l'écran d'appairage est affiché sur la TV, c'est-à-dire tant que ce fichier a été
+# touché il y a moins de 5 minutes. Le menu le touche à l'ouverture de l'écran, toutes
+# les 30 s tant qu'il reste affiché, et l'efface en le quittant ; si le menu tombe, la
+# fenêtre se ferme seule au bout des 5 minutes.
+RETOUCHE_APPAIRAGE_S = 30
+
+
+def ouvrir_appairage(c):
+    chemin = Path(c["telecommande-appairage"])
+    try:
+        chemin.parent.mkdir(parents=True, exist_ok=True)
+        # Le service ignore un lien symbolique : on le remplace par un vrai fichier
+        # plutôt que de toucher ce qu'il désigne.
+        if chemin.is_symlink():
+            chemin.unlink()
+        descripteur = os.open(chemin, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        try:
+            os.fchmod(descripteur, 0o600)
+            os.utime(descripteur if os.utime in os.supports_fd else chemin)
+        finally:
+            os.close(descripteur)
+    except OSError as erreur:
+        print(f"hub-menu : fenêtre d'appairage non ouverte ({erreur})", file=sys.stderr)
+        return False
+    return True
+
+
+def fermer_appairage(c):
+    try:
+        Path(c["telecommande-appairage"]).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def suivre_appairage(c, affiche, touche_le, maintenant=None):
+    """Appelé à chaque tour de surveillance : rend la date du dernier toucher (None :
+    fenêtre fermée)."""
+    maintenant = maintenant or time.time()
+    if not affiche:
+        if touche_le is not None:
+            fermer_appairage(c)
+        return None
+    if touche_le is None or maintenant - touche_le >= RETOUCHE_APPAIRAGE_S or maintenant < touche_le:
+        return maintenant if ouvrir_appairage(c) else None
+    return touche_le
 
 
 # ── Enceinte réseau : ce qui joue ─────────────────────────────────────────
@@ -998,6 +1054,8 @@ def lancer():
             fenetre.present()
 
         def do_shutdown(self):
+            # Le menu se ferme (un mode démarre) : plus d'écran d'appairage à la TV.
+            fermer_appairage(c)
             if self.ecoute:
                 self.ecoute.close()
                 Path(c["socket"]).unlink(missing_ok=True)
@@ -1052,6 +1110,9 @@ def lancer():
             self.vue = vue
             self.ecouter_voix()
             self.telecommande = initial["telecommande"]
+            self.appairage_affiche, self.appairage_touche = False, None
+            # Un menu tombé pendant l'appairage a pu laisser le fichier : l'écran n'est pas affiché.
+            fermer_appairage(c)
             self.suivre_si_en_cours()
             GLib.timeout_add_seconds(2, self.surveiller_telecommande)
             self.lecture = initial["lecture"]
@@ -1080,6 +1141,7 @@ def lancer():
             return not fini
 
         def surveiller_telecommande(self):
+            self.appairage_touche = suivre_appairage(c, self.appairage_affiche, self.appairage_touche)
             etat = etat_telecommande(c)
             if etat != self.telecommande:
                 self.telecommande = etat
@@ -1145,6 +1207,12 @@ def lancer():
                     self.en_fond(releve)
             elif genre == "geocodage" and isinstance(message.get("nom"), str):
                 self.en_fond(lambda: {"type": "geocodage", "resultats": geocodage(message["nom"], message.get("langue", "fr"))})
+            elif genre == "appairage":
+                self.appairage_affiche = message.get("affiche") is True
+                self.appairage_touche = suivre_appairage(c, self.appairage_affiche, None if self.appairage_affiche else self.appairage_touche)
+                if self.appairage_affiche:
+                    # Le service publie l'ouverture en quelques secondes : on relit sans attendre le tour suivant.
+                    GLib.timeout_add_seconds(1, lambda: self.surveiller_telecommande() and False)
             elif genre == "pin-verifier":
                 demande, profils, code = message.get("demande"), message.get("profils"), message.get("code")
                 self.en_fond(lambda: {"type": "pin", "demande": demande, **verifier_pin(c, profils, code)})

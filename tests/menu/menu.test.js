@@ -480,7 +480,7 @@ test("profil restreint : Bureau masqué et refusé, profils non gérables", asyn
 });
 
 test("télécommande : QR code et code d'appairage, annonce quand un téléphone est relié", async () => {
-  const etat = { url: "http://192.168.1.40:8790/", code: "482913", expire: Date.now() + 240000, telephones: 0, appairageLe: null };
+  const etat = { url: "http://192.168.1.40:8790/", code: "482913", expire: Date.now() + 240000, telephones: 0, appairageLe: null, appairageOuvert: true };
   await ouvrir({ retour: true, telecommande: etat });
   await page.evaluate(() => window.hub.recevoir({ type: "commande", nom: "reglages" }));
   await page.click('[data-section="telecommande"]');
@@ -611,19 +611,44 @@ test("météo : un nom de ville reçu reste du texte, jamais du HTML", async () 
   assert.equal(await page.evaluate(() => window.__piege), undefined);
 });
 
-test("télécommande : l'empreinte du certificat s'affiche en groupes courts, comme texte", async () => {
+test("télécommande : le code n'est montré qu'appairage ouvert, avec le début de l'empreinte du certificat", async () => {
   const octets = Array.from({ length: 32 }, (_, i) => i.toString(16).toUpperCase().padStart(2, "0"));
-  const etat = { url: "http://192.168.1.40:8790/", code: "482913", expire: Date.now() + 240000, telephones: 0, appairageLe: null, empreinteRacine: octets.join(":") };
+  const etat = { url: "http://192.168.1.40:8790/", code: "482913", expire: Date.now() + 240000, telephones: 0, appairageLe: null,
+    appairageOuvert: false, appairageJusque: null, empreinteRacineCourte: "0001 0203 0405 0607", empreinteRacine: octets.join(":") };
   await ouvrir({ retour: true, telecommande: etat });
   await page.evaluate(() => ACTIONS.reglages("telecommande"));
-  await page.waitForSelector(".empreinte-paires");
+  await page.waitForSelector(".empreinte-courte");
+  assert.match(await page.textContent(".code-appairage"), /Ouverture de l'appairage/);
+  assert.ok(!(await page.textContent(".appairage")).includes("482"), "pas de code tant que la fenêtre est fermée");
+  assert.equal(await page.textContent(".empreinte-courte"), "0001 0203 0405 0607");
+  assert.match(await page.textContent(".empreinte-appairage"), /Empreinte du certificat \(début\)/);
   const lignes = await page.$$eval(".empreinte-paires > div", d => d.map(e => e.textContent));
   assert.deepEqual(lignes, [
     "00 01 02 03   04 05 06 07", "08 09 0A 0B   0C 0D 0E 0F",
     "10 11 12 13   14 15 16 17", "18 19 1A 1B   1C 1D 1E 1F",
   ]);
-  assert.match(await page.textContent(".empreinte-appairage"), /SHA-256/);
+  await page.evaluate(e => window.hub.recevoir({ type: "telecommande", etat: { ...e, appairageOuvert: true } }), etat);
+  assert.equal(await page.textContent(".code-appairage"), "482 913");
+  await page.evaluate(e => window.hub.recevoir({ type: "telecommande", etat: { ...e, appairageOuvert: true, empreinteRacineCourte: null, empreinteRacine: null } }), etat);
+  assert.equal(await page.locator(".empreinte-appairage, .empreinte-paires").count(), 0);
   assert.deepEqual(page.erreurs, []);
+});
+
+test("télécommande : hub-menu est prévenu quand l'écran d'appairage apparaît et disparaît", async () => {
+  await ouvrir({ retour: true, telecommande: { url: "http://192.168.1.40:8790/", code: "482913", appairageOuvert: false } });
+  const affichages = async () => (await messages("appairage")).map(m => m.affiche);
+  await page.evaluate(() => ACTIONS.reglages("apropos"));
+  assert.deepEqual(await affichages(), [], "les autres sections n'ouvrent rien");
+  await page.click('[data-section="telecommande"]');
+  assert.deepEqual(await affichages(), [true]);
+  await page.click('[data-section="enceinte"]');
+  assert.deepEqual(await affichages(), [true, false]);
+  await page.click('[data-section="telecommande"]');
+  await touche("Escape");
+  assert.deepEqual(await affichages(), [true, false, true, false], "fermer les réglages ferme la fenêtre");
+  await page.evaluate(() => ACTIONS.reglages("telecommande"));
+  await touche("a");
+  assert.deepEqual((await affichages()).at(-1), false, "le mode ambiant cache l'écran d'appairage");
 });
 
 test("mise à jour signée : sans signataire autorisé, pas de bouton Installer, et les refus sont expliqués", async () => {
