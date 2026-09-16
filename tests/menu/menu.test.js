@@ -667,3 +667,45 @@ test("mise à jour signée : sans signataire autorisé, pas de bouton Installer,
   assert.match(await page.textContent("#contenu-reglages"), /signée par Parent <parent@example\.org>/);
   assert.deepEqual(page.erreurs, []);
 });
+
+test("enceinte : code de recopie affiché, changé seulement après confirmation", async () => {
+  await ouvrir({ retour: true });
+  await page.evaluate(() => ACTIONS.reglages("enceinte"));
+  await page.waitForFunction(() => window.__messages.some(m => m.type === "recopie-code"));
+  assert.deepEqual(await messages("recopie-code"), [{ type: "recopie-code", nouveau: false }]);
+  assert.match(await page.textContent("#contenu-reglages"), /Code de recopie : …/);
+  await page.evaluate(() => window.hub.recevoir({ type: "recopie-code", code: "4821", permise: true, nouveau: false }));
+  assert.match(await page.textContent("#contenu-reglages"), /Code de recopie : 4821/);
+  assert.doesNotMatch(await page.textContent("#contenu-reglages"), /désactivée pour ce profil/);
+  await page.click('[data-cle="recopie-code-changer"]');
+  assert.match(await page.textContent("#contenu-reglages"), /devront saisir le nouveau code/);
+  assert.equal((await messages("recopie-code")).length, 1, "rien n'est changé avant la confirmation");
+  await page.click('[data-cle="recopie-code-annuler"]');
+  await page.click('[data-cle="recopie-code-changer"]');
+  await page.click('[data-cle="recopie-code-oui"]');
+  assert.deepEqual((await messages("recopie-code")).at(-1), { type: "recopie-code", nouveau: true });
+  await page.evaluate(() => window.hub.recevoir({ type: "recopie-code", code: "0937", permise: false, nouveau: true }));
+  assert.match(await page.textContent("#annonce"), /Nouveau code de recopie : 0937/);
+  assert.match(await page.textContent("#contenu-reglages"), /Recopie désactivée pour ce profil \(temps d'écran\)/);
+  await page.evaluate(() => window.hub.recevoir({ type: "recopie-code", code: "<b>1</b>", permise: true }));
+  assert.match(await page.textContent("#contenu-reglages"), /Code de recopie : indisponible/);
+  assert.deepEqual(page.erreurs, []);
+});
+
+test("recopie d'écran : pendant l'appairage, le code s'affiche en grand, puis disparaît à l'échéance", async () => {
+  await ouvrir({ retour: true, recopieCode: { code: "4821", jusqua: Date.now() / 1000 + 60 } });
+  assert.ok(await page.isVisible("#recopie-appairage"));
+  assert.equal(await page.textContent("#recopie-appairage-code"), "4821");
+  assert.match(await page.textContent("#recopie-appairage"), /Recopie d'écran.*Code à saisir sur l'appareil/);
+  await touche("a");
+  assert.ok(await page.isVisible("#recopie-appairage"), "visible aussi en mode ambiant");
+  await page.evaluate(() => window.hub.recevoir({ type: "recopie-appairage", etat: { code: "<img src=x onerror=1>", jusqua: Date.now() / 1000 + 60 } }));
+  assert.ok(!(await page.isVisible("#recopie-appairage")), "un code mal formé n'est pas affiché");
+  await page.evaluate(() => window.hub.recevoir({ type: "recopie-appairage", etat: { code: "1234", jusqua: Date.now() / 1000 + 1 } }));
+  assert.ok(await page.isVisible("#recopie-appairage"));
+  await page.waitForFunction(() => document.getElementById("recopie-appairage").hidden, null, { timeout: 4000 });
+  await page.evaluate(() => window.hub.recevoir({ type: "recopie-appairage", etat: { code: "5555", jusqua: Date.now() / 1000 + 60 } }));
+  await page.evaluate(() => window.hub.recevoir({ type: "recopie-appairage", etat: null }));
+  assert.ok(!(await page.isVisible("#recopie-appairage")), "fichier disparu : la recopie a commencé");
+  assert.deepEqual(page.erreurs, []);
+});
