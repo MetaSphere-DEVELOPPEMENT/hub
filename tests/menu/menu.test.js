@@ -16,6 +16,33 @@ const PAGE = pathToFileURL(path.join(ici, "../../installer/menu/index.html")).hr
 
 let navigateur, page;
 
+// Le faux pont joue aussi le rôle de hub-menu pour les codes PIN : il vérifie l'ancien
+// format sha256 (celui de PIN_1234) et compte les échecs comme lui (quatre libres, puis
+// 30 s). window.__pinSilencieux : hub-menu ne répond pas.
+function installerFauxPont(initial) {
+  window.__messages = [];
+  const faux = { echecs: 0, jusqua: 0 };
+  const repondre = m => {
+    if (window.__pinSilencieux) return;
+    let r;
+    if (m.type === "pin-creer") {
+      r = { resultat: "hache", pin: { algo: "essai", sel: "00", empreinte: window.hubSha256(`00:${m.code}`) } };
+    } else if (m.type === "pin-verifier") {
+      if (faux.jusqua > Date.now()) r = { resultat: "bloque", attente: Math.ceil((faux.jusqua - Date.now()) / 1000) };
+      else {
+        // eslint-disable-next-line no-undef -- les réglages de la page, déclarés par hub.js
+        const p = reglages.profils.find(x => m.profils.includes(x.id) && x.pin && window.hubSha256(`${x.pin.sel}:${m.code}`) === x.pin.empreinte);
+        if (p) { faux.echecs = 0; r = { resultat: "ok", attente: 0, profil: p.id }; }
+        else if (++faux.echecs >= 5) { faux.echecs = 0; faux.jusqua = Date.now() + 30000; r = { resultat: "refus", attente: 30 }; }
+        else r = { resultat: "refus", attente: 0 };
+      }
+    } else return;
+    setTimeout(() => window.hub.recevoir({ type: "pin", demande: m.demande, ...r }), 30);
+  };
+  window.webkit = { messageHandlers: { hub: { postMessage: texte => { const m = JSON.parse(texte); window.__messages.push(m); repondre(m); } } } };
+  window.HUB_INITIAL = initial;
+}
+
 // Le Chrome du système suffit ; HUB_NAVIGATEUR=chromium prend celui de Playwright s'il est installé.
 before(async () => {
   navigateur = await chromium.launch(process.env.HUB_NAVIGATEUR === "chromium" ? {} : { channel: "chrome" });
@@ -28,11 +55,7 @@ async function ouvrir(initial = {}) {
   page.on("pageerror", e => erreurs.push(e.message));
   page.erreurs = erreurs;
   await page.route(/open-meteo\.com/, route => route.abort());
-  await page.addInitScript(initial => {
-    window.__messages = [];
-    window.webkit = { messageHandlers: { hub: { postMessage: m => window.__messages.push(JSON.parse(m)) } } };
-    window.HUB_INITIAL = initial;
-  }, initial);
+  await page.addInitScript(installerFauxPont, initial);
   await page.goto(PAGE);
   await page.waitForTimeout(200);
 }
@@ -334,7 +357,7 @@ test("code PIN : au démarrage, l'accueil reste fermé sans le bon code", async 
   await page?.close();
   page = await navigateur.newPage({ viewport: { width: 1920, height: 1080 } });
   await page.route(/open-meteo\.com/, route => route.abort());
-  await page.addInitScript(r => { window.__messages = []; window.webkit = { messageHandlers: { hub: { postMessage: m => window.__messages.push(JSON.parse(m)) } } }; window.HUB_INITIAL = { reglages: r }; }, deuxProfils());
+  await page.addInitScript(installerFauxPont, { reglages: deuxProfils() });
   await page.goto(PAGE + "?sans-intro");
   await page.waitForFunction(() => document.querySelector("#code.ouvert"));
   assert.match(await page.textContent("#code-titre"), /Samuel/);
@@ -378,10 +401,60 @@ test("code PIN : le définir dans l'éditeur l'enregistre haché, jamais en clai
   await page.click('[data-cle="reglagesProteges-true"]');
   await page.click('[data-action="enregistrer-profil"]');
   await attendreReglages(d => !!d.profils[0].pin);
+  assert.deepEqual((await messages("pin-creer")).map(m => m.code), ["2580"], "haché par hub-menu, pas par la page");
   const profil = (await messages("reglages")).at(-1).donnees.profils[0];
   assert.ok(!JSON.stringify(profil).includes("2580"));
-  assert.equal(profil.pin.empreinte, createHash("sha256").update(`${profil.pin.sel}:2580`).digest("hex"));
+  assert.deepEqual(profil.pin, { algo: "essai", sel: "00", empreinte: createHash("sha256").update("00:2580").digest("hex") });
   assert.equal(profil.reglagesProteges, true);
+});
+
+test("code PIN : la page ne s'ouvre que sur la réponse de hub-menu, et garde l'empreinte qu'il a refaite", async () => {
+  await ouvrir({ retour: true, reglages: deuxProfils({ reglagesProteges: true }) });
+  await page.evaluate(() => { window.__pinSilencieux = true; });
+  await touche("r");
+  await page.keyboard.type("1234");
+  await page.waitForFunction(() => window.__messages.some(m => m.type === "pin-verifier"));
+  const [verif] = await messages("pin-verifier");
+  assert.deepEqual({ ...verif, demande: undefined }, { type: "pin-verifier", profils: ["samuel"], code: "1234", demande: undefined });
+  await page.waitForTimeout(400);
+  assert.deepEqual(await calques(), ["code"], "le bon code ne suffit pas sans la réponse");
+  await page.keyboard.type("5");
+  assert.equal(await page.locator("#code-points .plein").count(), 4, "pas de saisie pendant la vérification");
+  const nouveau = { algo: "pbkdf2-sha256", iterations: 600000, sel: "ab".repeat(16), empreinte: "cd".repeat(32) };
+  await page.evaluate(([demande, pin]) => window.hub.recevoir({ type: "pin", demande, resultat: "ok", attente: 0, profil: "samuel", pin }), [verif.demande, nouveau]);
+  await page.waitForFunction(() => document.querySelector("#reglages.ouvert"));
+  await page.evaluate(() => ACTIONS.fermer());
+  await touche("t");
+  await attendreReglages(d => d.profils[0].pin?.algo === "pbkdf2-sha256");
+  assert.deepEqual((await messages("reglages")).at(-1).donnees.profils[0].pin, nouveau);
+});
+
+test("code PIN : un refus avec délai de hub-menu bloque la saisie sans rien redemander", async () => {
+  await ouvrir({ retour: true, reglages: deuxProfils({ reglagesProteges: true }) });
+  await page.evaluate(() => { window.__pinSilencieux = true; });
+  await touche("r");
+  await page.keyboard.type("0000");
+  await page.waitForFunction(() => window.__messages.some(m => m.type === "pin-verifier"));
+  const [verif] = await messages("pin-verifier");
+  await page.evaluate(demande => window.hub.recevoir({ type: "pin", demande, resultat: "bloque", attente: 120 }), verif.demande);
+  await page.waitForFunction(() => /Réessaie dans 120/.test(document.querySelector("#code-detail").textContent));
+  await page.keyboard.type("1");
+  assert.equal(await page.locator("#code-points .plein").count(), 0);
+});
+
+test("code PIN : sans hub-menu (aperçu), un code PBKDF2 écrit par hub-menu s'ouvre aussi", async () => {
+  page = await navigateur.newPage({ viewport: { width: 1920, height: 1080 } });
+  await page.route(/open-meteo\.com/, route => route.abort());
+  // Vecteur produit par hub-menu.py : hacher_pin("2468", sel=bytes(range(16))).
+  const pin = { algo: "pbkdf2-sha256", iterations: 600000, sel: "000102030405060708090a0b0c0d0e0f", empreinte: "ac310cc8527c6c3a4e20d2a2246ebd77d59766dae1c5fe843d65ecf6a7e20c65" };
+  await page.addInitScript(r => localStorage.setItem("hub-reglages", JSON.stringify(r)),
+    { profilActif: "a", profils: [{ id: "a", nom: "A", pin, reglagesProteges: true }], systeme: {} });
+  await page.goto(PAGE + "?sans-intro");
+  await page.waitForFunction(() => document.querySelector("#code.ouvert"));
+  await page.keyboard.type("1357");
+  await page.waitForFunction(() => /incorrect/.test(document.querySelector("#code-detail").textContent));
+  await page.keyboard.type("2468");
+  await page.waitForFunction(() => !document.querySelector("#code.ouvert"), null, { timeout: 5000 });
 });
 
 test("réglages protégés : R demande le code du profil", async () => {

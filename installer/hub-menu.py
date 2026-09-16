@@ -22,6 +22,8 @@ Ce fichier n'importe GTK qu'au lancement : ses fonctions se testent sans écran
 (tests/test_hub_menu.py).
 """
 
+import hashlib
+import hmac
 import json
 import os
 import shutil
@@ -71,6 +73,7 @@ def chemins():
         "reglages": dossier("XDG_CONFIG_HOME", maison / ".config") / "hub" / "reglages.json",
         "dernier": dossier("XDG_STATE_HOME", maison / ".local/state") / "hub" / "dernier-choix",
         "meteo": dossier("XDG_CACHE_HOME", maison / ".cache") / "hub" / "meteo.json",
+        "pin-echecs": dossier("XDG_STATE_HOME", maison / ".local/state") / "hub" / "pin-echecs.json",
         "execution": execution,
         "socket": execution / "menu.sock",
         "deja-ouvert": execution / "menu-deja-ouvert",
@@ -147,6 +150,140 @@ def enregistrer_reglages(c, donnees):
         return False
     ecrire_atomique(c["reglages"], json.dumps(donnees, ensure_ascii=False, indent=2), droits=DROITS_REGLAGES)
     return True
+
+
+# ── Codes PIN des profils ─────────────────────────────────────────────────
+# POURQUOI ICI ET PAS DANS LA PAGE. La page comparait elle-même sha256(sel:code) à
+# l'empreinte des réglages, et comptait les échecs en mémoire : relancer le menu
+# remettait le compteur à zéro, et un téléphone appairé pouvait taper les 10 000 codes
+# par /api/commande. Maintenant la page envoie la saisie, hub-menu vérifie, et tient
+# le compte des échecs sur disque, avec un délai qui double.
+#
+# CE QUE ÇA NE FAIT PAS. Un code à 4 chiffres reste un verrou familial. Quiconque a
+# un shell sous le compte du HUB (mode Bureau, terminal) lit reglages.json et essaie
+# les 10 000 codes hors ligne : PBKDF2 le ralentit (0,24 s par essai mesurés ci-dessous,
+# soit une quarantaine de minutes sur un cœur, moins avec plusieurs ou un GPU), il ne
+# l'empêche pas ; il peut aussi effacer le compteur. Le fermer demande que les
+# empreintes et le compteur appartiennent à un autre compte que celui du Bureau
+# (service système qui vérifie pour le menu) : chantier d'architecture laissé pour
+# plus tard.
+PIN_ALGO = "pbkdf2-sha256"
+# 600 000 : recommandation OWASP 2023 pour PBKDF2-HMAC-SHA256. Mesuré le 17/09/2026
+# sur le Mac de développement (python3 -c "hashlib.pbkdf2_hmac(...)") : 0,24 s. La
+# machine du HUB n'est pas mesurée ; la vérification tourne hors du fil graphique.
+PIN_ITERATIONS = 600_000
+PIN_ITERATIONS_MAX = 10_000_000
+PIN_ESSAIS_LIBRES = 4
+PIN_DELAI_S = 30
+# Plafonné : un enfant qui s'acharne ne doit pas priver les parents du HUB une soirée.
+PIN_DELAI_MAX_S = 15 * 60
+_verrou_pin = threading.Lock()
+
+
+def code_pin_valide(code):
+    return isinstance(code, str) and len(code) == 4 and code.isascii() and code.isdigit()
+
+
+def hacher_pin(code, sel=None, iterations=None):
+    iterations = iterations or PIN_ITERATIONS
+    sel = sel if sel is not None else os.urandom(16)
+    empreinte = hashlib.pbkdf2_hmac("sha256", code.encode(), sel, iterations)
+    return {"algo": PIN_ALGO, "iterations": iterations, "sel": sel.hex(), "empreinte": empreinte.hex()}
+
+
+def pin_correct(pin, code):
+    """Deux formats : PBKDF2 (actuel) et l'ancien sha256("sel:code") calculé par la page."""
+    if not isinstance(pin, dict) or not code_pin_valide(code) or not isinstance(pin.get("empreinte"), str):
+        return False
+    if pin.get("algo") == PIN_ALGO:
+        iterations = pin.get("iterations")
+        if not isinstance(iterations, int) or isinstance(iterations, bool) or not 0 < iterations <= PIN_ITERATIONS_MAX:
+            return False
+        try:
+            sel = bytes.fromhex(pin.get("sel") or "")
+        except (TypeError, ValueError):
+            return False
+        calcule = hashlib.pbkdf2_hmac("sha256", code.encode(), sel, iterations).hex()
+    elif "algo" not in pin and isinstance(pin.get("sel"), str):
+        calcule = hashlib.sha256(f"{pin['sel']}:{code}".encode()).hexdigest()
+    else:
+        return False
+    return hmac.compare_digest(calcule, pin["empreinte"].lower())
+
+
+def pin_a_rehacher(pin):
+    return pin.get("algo") != PIN_ALGO or pin.get("iterations", 0) < PIN_ITERATIONS
+
+
+def _lire_echecs(chemin):
+    donnees = lire_json(chemin)
+    if not isinstance(donnees, dict):
+        return {"echecs": 0, "jusqua": 0}
+    echecs, jusqua = donnees.get("echecs"), donnees.get("jusqua")
+    return {"echecs": echecs if isinstance(echecs, int) and echecs >= 0 else 0,
+            "jusqua": jusqua if isinstance(jusqua, (int, float)) else 0}
+
+
+def attente_pin(chemin, maintenant=None):
+    """Secondes avant le prochain essai permis (0 : on peut essayer)."""
+    maintenant = maintenant or time.time()
+    # Une horloge revenue en arrière ne doit pas bloquer plus longtemps que le plafond.
+    reste = min(_lire_echecs(chemin)["jusqua"] - maintenant, PIN_DELAI_MAX_S)
+    return max(0, int(-(-reste // 1)))
+
+
+def noter_echec_pin(chemin, maintenant=None):
+    """Quatre essais libres, puis 30 s, 60 s, 120 s… jusqu'à 15 min après chaque échec.
+    Un seul compteur pour tout le HUB : changer de profil ne redonne pas d'essais."""
+    maintenant = maintenant or time.time()
+    etat = _lire_echecs(chemin)
+    etat["echecs"] += 1
+    depassement = etat["echecs"] - PIN_ESSAIS_LIBRES
+    if depassement > 0:
+        etat["jusqua"] = maintenant + min(PIN_DELAI_MAX_S, PIN_DELAI_S * 2 ** min(depassement - 1, 16))
+    try:
+        ecrire_atomique(chemin, json.dumps(etat), droits=0o600)
+    except OSError as erreur:
+        print(f"hub-menu : compteur d'échecs du code non enregistré ({erreur})", file=sys.stderr)
+    return attente_pin(chemin, maintenant)
+
+
+def verifier_pin(c, profils, code, maintenant=None):
+    """La page demande : ce code ouvre-t-il l'un de ces profils ? (« l'un » : n'importe
+    quel parent accorde du temps d'écran). Les empreintes sont relues sur disque, pas
+    reçues de la page. Réponse : {"resultat": "ok" | "refus" | "bloque", "attente"}, et
+    pour « ok » le profil ouvert et, si l'empreinte a été refaite, la nouvelle."""
+    chemin = c["pin-echecs"]
+    with _verrou_pin:
+        attente = attente_pin(chemin, maintenant)
+        if attente:
+            return {"resultat": "bloque", "attente": attente}
+        ids = [i for i in profils if isinstance(i, str)][:12] if isinstance(profils, list) else []
+        reglages = charger_reglages(c) or {"profils": []}
+        for p in reglages["profils"]:
+            if p.get("id") in ids and pin_correct(p.get("pin"), code):
+                try:
+                    Path(chemin).unlink(missing_ok=True)
+                except OSError:
+                    pass
+                reponse = {"resultat": "ok", "attente": 0, "profil": p["id"]}
+                if pin_a_rehacher(p["pin"]):
+                    # Migration transparente : l'ancien sha256 se retrouve en un instant ;
+                    # on profite du code en clair, juste vérifié, pour le refaire en PBKDF2.
+                    p["pin"] = hacher_pin(code)
+                    try:
+                        enregistrer_reglages(c, reglages)
+                        reponse["pin"] = p["pin"]
+                    except OSError:
+                        pass
+                return reponse
+        return {"resultat": "refus", "attente": noter_echec_pin(chemin, maintenant)}
+
+
+def creer_pin(code):
+    if not code_pin_valide(code):
+        return {"resultat": "refus"}
+    return {"resultat": "hache", "pin": hacher_pin(code)}
 
 
 def dernier_choix(c):
@@ -727,7 +864,7 @@ def temps_ecran(maintenant=None):
 
 
 def prolonger_temps(profil, minutes, maintenant=None):
-    """Accordé par un code parent vérifié dans la page (verrou familial, comme les
+    """Accordé après un code parent vérifié par verifier_pin (verrou familial, comme les
     profils) ; ici on borne seulement ce qui peut s'écrire."""
     if not isinstance(profil, str) or not 0 < len(profil) <= 64 or minutes not in (15, 30, 60) or isinstance(minutes, bool):
         return None
@@ -993,6 +1130,12 @@ def lancer():
                     self.en_fond(releve)
             elif genre == "geocodage" and isinstance(message.get("nom"), str):
                 self.en_fond(lambda: {"type": "geocodage", "resultats": geocodage(message["nom"], message.get("langue", "fr"))})
+            elif genre == "pin-verifier":
+                demande, profils, code = message.get("demande"), message.get("profils"), message.get("code")
+                self.en_fond(lambda: {"type": "pin", "demande": demande, **verifier_pin(c, profils, code)})
+            elif genre == "pin-creer":
+                demande, code = message.get("demande"), message.get("code")
+                self.en_fond(lambda: {"type": "pin", "demande": demande, **creer_pin(code)})
             elif genre == "minuteur" and isinstance(message.get("minutes"), int):
                 minutes = max(0, min(message["minutes"], 240))
                 self.en_fond(lambda: {"type": "minuteur", "fin": programmer_minuteur(c, minutes)})
