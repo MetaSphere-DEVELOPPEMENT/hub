@@ -377,6 +377,40 @@ class Page(AvecServeur):
         self.assertGreaterEqual(statut, 400)
 
 
+class Connexions(AvecServeur):
+    def test_plafond_par_adresse_puis_liberation(self):
+        self.serveur.max_par_ip = 3
+        muettes = [socket.create_connection(("127.0.0.1", self.port), timeout=5) for _ in range(3)]
+        try:
+            # Laisser le serveur accepter les trois avant la quatrième.
+            fin = time.monotonic() + 5
+            while sum(self.serveur._places.values()) < 3 and time.monotonic() < fin:
+                time.sleep(0.01)
+            with socket.create_connection(("127.0.0.1", self.port), timeout=5) as refusee:
+                refusee.sendall(b"GET / HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n")
+                try:
+                    recu = refusee.recv(100)
+                except ConnectionResetError:  # fermée avant d'avoir lu la requête
+                    recu = b""
+                self.assertEqual(recu, b"", "au-delà du plafond, fermée sans réponse")
+        finally:
+            for m in muettes:
+                m.close()
+        fin = time.monotonic() + 5
+        while self.serveur._places and time.monotonic() < fin:
+            time.sleep(0.01)
+        self.assertEqual(self.serveur._places, {}, "chaque fil rend sa place")
+        self.assertEqual(self.requete("GET", "/")[0], 200)
+
+    def test_plafond_global(self):
+        self.serveur.max_connexions = 2
+        self.assertTrue(self.serveur._reserver("10.0.0.1"))
+        self.assertTrue(self.serveur._reserver("10.0.0.2"))
+        self.assertFalse(self.serveur._reserver("10.0.0.3"))
+        self.serveur._liberer("10.0.0.1")
+        self.assertTrue(self.serveur._reserver("10.0.0.3"))
+
+
 class CommeUneApp(AvecServeur):
     """Manifeste et icônes : ce que Chrome et Safari lisent pour l'écran d'accueil."""
 
