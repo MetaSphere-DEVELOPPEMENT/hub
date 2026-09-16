@@ -9,7 +9,9 @@ qui note ce qu'on lui demande (ce poste de travail ne doit ni s'éteindre ni se 
 import importlib.machinery
 import importlib.util
 import json
+import os
 import tempfile
+import threading
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -103,6 +105,53 @@ class Appliquer(unittest.TestCase):
             return SimpleNamespace(returncode=1, stdout="", stderr="rtcwake: /dev/rtc0: no wakealarm")
         r = al.appliquer({"reveils": TOUS_LES_JOURS_7H, "extinctions": [None] * 7}, MARDI_22H, executer=refuse, etat=self.etat)
         self.assertIn("no wakealarm", r["erreur"])
+
+
+class LectureDesReglages(unittest.TestCase):
+    """root lit un fichier de l'utilisateur : ni lien, ni FIFO, ni fichier sans fin."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dossier = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_fichier_ordinaire_lu(self):
+        f = self.dossier / "reglages.json"
+        f.write_text(json.dumps({"systeme": {}}))
+        self.assertEqual(al.lire_json(f), {"systeme": {}})
+
+    def test_lien_symbolique_refuse(self):
+        vrai = self.dossier / "vrai.json"
+        vrai.write_text("{}")
+        for cible in (vrai, Path("/dev/zero")):
+            lien = self.dossier / f"lien-{cible.name}"
+            os.symlink(cible, lien)
+            self.assertIsNone(al.lire_json(lien))
+
+    def test_fifo_refusee_sans_bloquer(self):
+        fifo = self.dossier / "reglages.json"
+        os.mkfifo(fifo)
+        # Sans O_NONBLOCK, l'ouverture attendrait un écrivain pour toujours : un fil
+        # à part permet de constater le blocage au lieu de figer la suite de tests.
+        resultat = []
+        fil = threading.Thread(target=lambda: resultat.append(al.lire_json(fifo)), daemon=True)
+        fil.start()
+        fil.join(5)
+        self.assertFalse(fil.is_alive(), "lecture bloquée sur une FIFO")
+        self.assertEqual(resultat, [None])
+
+    def test_taille_bornee(self):
+        f = self.dossier / "gros.json"
+        f.write_text('"' + "x" * 300 + '"')
+        self.assertIsNone(al.lire_json(f, taille_max=100))
+        self.assertEqual(al.lire_json(f, taille_max=1000), "x" * 300)
+
+    def test_absent_ou_invalide(self):
+        self.assertIsNone(al.lire_json(self.dossier / "absent.json"))
+        (self.dossier / "casse.json").write_bytes(b"\xff{")
+        self.assertIsNone(al.lire_json(self.dossier / "casse.json"))
 
 
 class Reveil(unittest.TestCase):
