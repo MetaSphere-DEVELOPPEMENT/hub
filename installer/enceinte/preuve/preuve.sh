@@ -8,11 +8,18 @@
 # les commandes qu'elles lancent sont exécutées à la main, dans une session D-Bus avec
 # PipeWire et un Weston sans écran (UxPlay veut un Wayland pour démarrer).
 set -u
+# URL, empreinte, version et vérification lues dans hub-installer.sh. La preuve avait sa
+# propre copie et se contentait d'AFFICHER la version : elle montrait
+# « librespot 0.8.0 9c7d7561 (Built on …) » sans voir que l'installateur exigeait la
+# ligne sans suffixe, et le refus n'est apparu que sur le M720q (17/09/2026).
+eval "$(sed -n -e '/^LIBRESPOT_[A-Z0-9_]*=/p' -e '/^librespot_attendu() {/,/^}/p' /depot/installer/hub-installer.sh)"
 echo "== empreinte du paquet raspotify"
-curl -sSfL -o /tmp/r.deb "https://github.com/dtcooper/raspotify/releases/download/0.48.2/raspotify_0.48.2.librespot.v0.8.0-9c7d756_amd64.deb" || exit 1
-echo "7f2c232af89834608bc393f6f9295a22a2659fe938f65c108b78a70c8b539733  /tmp/r.deb" | sha256sum -c - || exit 1
+curl -sSfL -o /tmp/r.deb "$LIBRESPOT_DEB_URL" || exit 1
+echo "$LIBRESPOT_DEB_SHA256  /tmp/r.deb" | sha256sum -c - || exit 1
 mkdir -p /tmp/deb /opt/hub-enceinte && dpkg-deb -x /tmp/r.deb /tmp/deb && install -m 0755 /tmp/deb/usr/bin/librespot /opt/hub-enceinte/librespot
-/opt/hub-enceinte/librespot --version 2>&1 | tail -1
+/opt/hub-enceinte/librespot --version 2>/dev/null | head -n 1
+librespot_attendu /opt/hub-enceinte/librespot || { echo "✗ l'installateur refuserait ce librespot (attendu : $LIBRESPOT_VERSION)"; exit 1; }
+echo "✓ accepté par la vérification de hub-installer.sh"
 install -D -m 0755 /depot/installer/enceinte/hub_enceinte.py /usr/local/bin/hub-enceinte
 echo "== unités (systemd-analyze verify)"
 mkdir -p /tmp/u && cp /depot/installer/enceinte/*.service /tmp/u/

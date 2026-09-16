@@ -980,6 +980,18 @@ LIBRESPOT_DEB_URL="https://github.com/dtcooper/raspotify/releases/download/0.48.
 LIBRESPOT_DEB_SHA256=7f2c232af89834608bc393f6f9295a22a2659fe938f65c108b78a70c8b539733
 LIBRESPOT_VERSION="librespot 0.8.0 9c7d7561"
 
+# Les builds raspotify suffixent la ligne : « librespot 0.8.0 9c7d7561 (Built on
+# 2026-07-18, Build ID: PxD46HQ7, Profile: release) », relevé sur le M720q le 17/09/2026.
+# L'égalité exacte refusait ce binaire pourtant vérifié par son empreinte. On exige la
+# version et le commit, suivis de rien ou d'une espace : « 9c7d75610 » ne passe pas.
+# Testé par tests/test_hub_installer_librespot.py, et appelé par la preuve en conteneur.
+librespot_attendu() { # binaire
+  case "$("$1" --version 2>/dev/null | head -n 1)" in
+    "$LIBRESPOT_VERSION" | "$LIBRESPOT_VERSION "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # Le réseau de l'interface qui porte la route par défaut : ce qu'on ouvre ne doit être
 # joignable ni depuis un VPN ni depuis une interface de conteneur.
 reseau_local() {
@@ -1018,7 +1030,7 @@ etape_enceinte() {
   installer_paquets -- shairport-sync uxplay avahi-daemon libpulse0 libasound2t64 libglib2.0-bin \
     gstreamer1.0-plugins-bad gstreamer1.0-plugins-good gstreamer1.0-libav curl || return 1
 
-  if [ "$("$opt/librespot" --version 2>/dev/null | head -n 1)" = "$LIBRESPOT_VERSION" ]; then
+  if librespot_attendu "$opt/librespot"; then
     deja "$opt/librespot ($LIBRESPOT_VERSION)"
   elif [ "$POUR_DE_VRAI" = 1 ]; then
     local tmp; tmp=$(mktemp -d) || { echec "mktemp impossible"; return 1; }
@@ -1027,7 +1039,7 @@ etape_enceinte() {
     faire dpkg-deb -x "$tmp/raspotify.deb" "$tmp/paquet" &&
     faire install -D -m 0755 "$tmp/paquet/usr/bin/librespot" "$opt/librespot"
     local code=$?; rm -rf "$tmp"; [ "$code" -eq 0 ] || return 1
-    [ "$("$opt/librespot" --version 2>/dev/null | head -n 1)" = "$LIBRESPOT_VERSION" ] ||
+    librespot_attendu "$opt/librespot" ||
       { echec "$opt/librespot ne répond pas « $LIBRESPOT_VERSION »"; return 1; }
     ok "$opt/librespot ($LIBRESPOT_VERSION, .deb vérifié, paquet non installé)"
   else
