@@ -797,6 +797,18 @@ body.ambiant .ecran { opacity: 0; filter: blur(20px); transform: scale(1.05); }
 .bulle-voix { top: 14vh; bottom: auto; font-size: 1.5rem; font-weight: 600; display: flex; align-items: center; gap: .8rem; }
 .bulle-voix .ondes { display: flex; color: rgb(var(--accent)); }
 
+/* Code de recopie d'écran pendant qu'un appareil le demande : lisible depuis le canapé. */
+.recopie-appairage {
+  position: fixed; left: 50%; top: 50%; translate: -50% -50%; z-index: 40;
+  padding: 2.4rem 3.6rem; border-radius: 2rem; text-align: center;
+  background: var(--verre-feuille); -webkit-backdrop-filter: blur(30px); backdrop-filter: blur(30px);
+  box-shadow: inset 0 0 0 1px var(--liseré), 0 2rem 4rem -1rem var(--ombre);
+}
+.recopie-titre { font-size: 1.6rem; font-weight: 700; }
+.recopie-saisir { margin-top: .4rem; font-size: 1.2rem; color: var(--texte-doux); }
+.recopie-chiffres { margin-top: 1rem; font-size: 6rem; font-weight: 800; letter-spacing: .25em; font-variant-numeric: tabular-nums; color: rgb(var(--accent)); }
+.code-recopie { font-variant-numeric: tabular-nums; }
+
 /* ── Animations ──────────────────────────────────────────────────────────── */
 @keyframes apparition { from { opacity: 0; transform: translateY(-.8rem); } }
 @keyframes montee { from { opacity: 0; transform: translateY(3rem) scale(.92); } }
@@ -857,6 +869,10 @@ body.verrouille .centre, body.verrouille .pied .aides { filter: blur(18px); opac
 .etape b { display: grid; place-items: center; width: 2rem; height: 2rem; border-radius: 50%; font-size: .95rem; background: rgb(var(--accent) / .22); box-shadow: inset 0 0 0 1px rgb(var(--accent) / .6); }
 .code-appairage { margin: .6rem 0 .1rem; font-size: 3.6rem; font-weight: 700; letter-spacing: .12em; font-variant-numeric: tabular-nums; color: rgb(var(--accent)); }
 .appairage .url { font-family: "Ubuntu Sans Mono", monospace; }
+.code-appairage.attente { font-size: 1.8rem; letter-spacing: 0; opacity: .7; }
+.empreinte-appairage { margin-top: .1rem; }
+.empreinte-courte { margin-top: .2rem; font-family: "Ubuntu Sans Mono", monospace; font-size: 1.7rem; font-weight: 600; letter-spacing: .12em; }
+.empreinte-paires { font-family: "Ubuntu Sans Mono", monospace; font-size: .85rem; line-height: 1.45; letter-spacing: .04em; white-space: pre; opacity: .6; }
 
 .dialogue .aide-photo.conseil { text-align: left; color: rgb(var(--bureau)); margin-top: .7rem; }
 

@@ -9,6 +9,8 @@
 //   → { type: "geocodage", nom, langue } chercher une ville
 //   → { type: "minuteur", minutes }      programmer (ou annuler avec 0) l'extinction
 //   → { type: "infos" }                  machine, adresse IP, disque…
+//   → { type: "appairage", affiche }     l'écran d'appairage de la télécommande est (ou n'est plus) à l'écran
+//   → { type: "recopie-code", nouveau }  le code de recopie d'écran (nouveau : en tirer un autre)
 // Python répond en appelant window.hub.recevoir({ type, ... }), et y relaie aussi les
 // état de l'enceinte réseau ({ type: "lecture", etat: {source, etat, titre, artiste, pochette, ecran…} | null })
 // et les commandes vocales de hub-voix ({ type: "commande", nom } / { type: "voix", ... }).
@@ -73,7 +75,10 @@ const DEFAUTS = {
     marge: 5,
     // Enceinte réseau (installer/enceinte) : lu par hub-enceinte, qui relance le récepteur concerné.
     enceinte: { spotify: true, airplay: true, ecran: true, nom: "HUB" },
-    meteo: { active: true, ville: "Landivisiau", lat: 48.5091, lon: -4.0691 },
+    // Pas de ville par défaut : le dépôt est public, et une ville inventée afficherait la
+    // météo d'ailleurs. Choisir sa ville active la météo. Les réglages déjà enregistrés
+    // gardent la leur (fusion avec ces défauts).
+    meteo: { active: false, ville: null, lat: null, lon: null },
   },
 };
 
@@ -86,6 +91,8 @@ function el(tag, attrs = {}, ...enfants) {
   for (const [k, v] of Object.entries(attrs)) {
     if (v === false || v == null) continue;
     if (k === "class") e.className = v;
+    // « html » : pictos et icônes écrits dans ce code, jamais une donnée reçue (nom,
+    // ville, titre) — la page a accès aux fichiers et parle à hub-menu.
     else if (k === "html") e.innerHTML = v;
     else if (k === "style") e.style.cssText = v;
     else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
@@ -148,6 +155,7 @@ let reglages = (() => {
 
 function profil() { return reglages.profils.find(p => p.id === reglages.profilActif); }
 function meteoProfil() { return profil().meteo || reglages.systeme.meteo; }
+function meteoSituee(m = meteoProfil()) { return Number.isFinite(m?.lat) && Number.isFinite(m?.lon); }
 function sonsActifs() { return profil().sons ?? reglages.systeme.sons; }
 function veilleMinutes() { return profil().veille ?? reglages.systeme.veille; }
 function modeAutorise(mode, p = profil()) { return p.modes?.[mode] !== false; }
@@ -500,16 +508,19 @@ function alerteMeteo() {
 }
 
 function afficherMeteo() {
-  const actif = meteoProfil().active && meteo?.current;
+  const actif = meteoProfil().active && meteoSituee() && meteo?.current;
   $("puce-meteo").hidden = !actif;
-  $("ambiant-meteo").innerHTML = "";
+  $("ambiant-meteo").replaceChildren();
   if (!actif) return;
   const c = meteo.current;
   const nuit = c.is_day === 0;
   $("meteo-picto-puce").innerHTML = pictoMeteo(c.weather_code, nuit);
   $("meteo-temp-puce").textContent = `${Math.round(c.temperature_2m)}°`;
   $("meteo-ville-puce").textContent = meteoProfil().ville;
-  $("ambiant-meteo").innerHTML = `${pictoMeteo(c.weather_code, nuit)}<span>${Math.round(c.temperature_2m)}° · ${libelleMeteo(c.weather_code)} · ${meteoProfil().ville}</span>`;
+  // Le picto est une construction interne ; le nom de ville vient du géocodage ou du
+  // fichier de réglages : texte seulement, dans une page qui a accès aux fichiers.
+  $("ambiant-meteo").append(el("span", { html: pictoMeteo(c.weather_code, nuit) }).firstChild,
+    el("span", {}, `${Math.round(c.temperature_2m)}° · ${libelleMeteo(c.weather_code)} · ${meteoProfil().ville || ""}`));
   if (pile.at(-1) === "meteo") rendreMeteo();
   horloge();
 }
@@ -527,7 +538,7 @@ const URL_METEO = "https://api.open-meteo.com/v1/forecast?current=temperature_2m
 
 async function chargerMeteo() {
   const { active, lat, lon } = meteoProfil();
-  if (!active) return afficherMeteo();
+  if (!active || !meteoSituee()) return afficherMeteo();
   if (PONT) return envoyer({ type: "meteo", lat, lon });
   try {
     const reponse = await fetch(`${URL_METEO}&latitude=${lat}&longitude=${lon}`);
@@ -626,7 +637,7 @@ function montrerVilles(resultats) {
     liste.append(el("button", {
       class: "option", "data-nav": true, "data-cle": `ville-${v.id}`,
       onclick: () => {
-        profil().meteo = { ...meteoProfil(), ville: v.name, lat: v.latitude, lon: v.longitude };
+        profil().meteo = { ...meteoProfil(), active: true, ville: String(v.name ?? ""), lat: Number(v.latitude), lon: Number(v.longitude) };
         sauver();
         chargerMeteo();
         rendreSection();
@@ -743,6 +754,7 @@ function ouvrirCalque(id, focusPremier = true) {
   pile.push(id);
   $(id).classList.add("ouvert");
   document.body.classList.toggle("calque-ouvert", pile.length > 1);
+  majAppairage();
   if (focusPremier) {
     const precedent = focusParCalque[id];
     const liste = candidats();
@@ -758,6 +770,7 @@ function fermerCalque() {
   $(id).classList.remove("ouvert");
   if (id === "profils") document.body.classList.remove("gestion");
   document.body.classList.toggle("calque-ouvert", pile.length > 1);
+  majAppairage();
   const liste = candidats();
   const precedent = focusParCalque[pile.at(-1)];
   definirFocus(liste.includes(precedent) ? precedent : liste[0], true);
@@ -974,9 +987,9 @@ function rendreProfils() {
     liste.append(el("button", { class: "tuile-profil ajout", "data-nav": true, "data-cle": "profil-ajout", onclick: () => ouvrirEditeur(null) },
       el("span", { class: "avatar" }, "+"), t("profils.ajouter")));
   }
-  const retrouve = cle && liste.querySelector(`[data-cle="${cle}"]`);
-  if (pile.at(-1) === "profils") definirFocus(retrouve || liste.querySelector(`[data-cle="profil-${reglages.profilActif}"]`), true);
-  else focusParCalque.profils = liste.querySelector(`[data-cle="profil-${reglages.profilActif}"]`);
+  const retrouve = cle && liste.querySelector(`[data-cle="${CSS.escape(cle)}"]`);
+  if (pile.at(-1) === "profils") definirFocus(retrouve || liste.querySelector(`[data-cle="${CSS.escape(`profil-${reglages.profilActif}`)}"]`), true);
+  else focusParCalque.profils = liste.querySelector(`[data-cle="${CSS.escape(`profil-${reglages.profilActif}`)}"]`);
 }
 
 function choisirProfil(id) {
@@ -1035,7 +1048,7 @@ function rendreEditeur() {
     }));
   }
   $("aide-photo").hidden = listeAvatars.length > 0;
-  const retrouve = cle && $("editeur-profil").querySelector(`[data-cle="${cle}"]`);
+  const retrouve = cle && $("editeur-profil").querySelector(`[data-cle="${CSS.escape(cle)}"]`);
   if (retrouve && pile.at(-1) === "editeur-profil") definirFocus(retrouve, true);
 }
 function enregistrerProfil() {
@@ -1107,11 +1120,21 @@ function rendreSecurite() {
 // ── Code PIN ──────────────────────────────────────────────────────────────
 // Un verrou familial, pas un coffre-fort : il empêche d'ouvrir le profil ou les
 // réglages d'un autre, il ne chiffre rien. Le code n'est jamais stocké en clair.
+//
+// C'est hub-menu qui vérifie (→ { type: "pin-verifier", demande, profils, code }) et
+// qui hache un nouveau code (→ { type: "pin-creer", demande, code }) : il relit les
+// empreintes sur disque et compte les échecs dans un fichier, là où ni une relance du
+// menu ni une saisie scriptée depuis le téléphone ne les remettent à zéro. Réponse :
+// { type: "pin", demande, resultat: "ok" | "refus" | "bloque" | "hache", attente, pin }.
+// La page ne fait que l'afficher. Sans hub-menu (aperçu), elle vérifie elle-même.
 const ICONE_CADENAS = '<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>';
 let deverrouilles = new Set();
 let verrouAccueil = false;
 let demande = null;
-const echecsCode = {};
+// Le blocage annoncé par hub-menu, pour refuser les touches sans l'interroger à chaque chiffre.
+let blocageCode = 0;
+// Au-delà, hub-menu ne répondra plus (PBKDF2 dure moins d'une seconde) : on le dit.
+const DELAI_REPONSE_CODE_MS = 15000;
 
 function sha256(texte) {
   const k = [], h = [];
@@ -1149,8 +1172,52 @@ function sha256(texte) {
 }
 window.hubSha256 = sha256;
 
-function empreinteCode(code, sel) { return sha256(`${sel}:${code}`); }
-function nouveauSel() { return [...crypto.getRandomValues(new Uint8Array(8))].map(o => o.toString(16).padStart(2, "0")).join(""); }
+// Mêmes paramètres que hub-menu (PIN_ALGO, PIN_ITERATIONS) : un profil créé en aperçu
+// reste lisible une fois installé.
+const PIN_ITERATIONS = 600000;
+const hex = octets => [...new Uint8Array(octets)].map(o => o.toString(16).padStart(2, "0")).join("");
+
+async function pbkdf2(code, selHex, iterations) {
+  const cle = await crypto.subtle.importKey("raw", new TextEncoder().encode(code), "PBKDF2", false, ["deriveBits"]);
+  const sel = new Uint8Array(selHex.match(/../g).map(h => parseInt(h, 16)));
+  return hex(await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: sel, iterations }, cle, 256));
+}
+
+let numeroDemandeCode = 0;
+const reponsesCode = new Map();
+function demanderAuHub(message) {
+  const numero = ++numeroDemandeCode;
+  return new Promise(resoudre => {
+    const minuterie = setTimeout(() => { reponsesCode.delete(numero); resoudre(null); }, DELAI_REPONSE_CODE_MS);
+    reponsesCode.set(numero, reponse => { clearTimeout(minuterie); reponsesCode.delete(numero); resoudre(reponse); });
+    envoyer({ ...message, demande: numero });
+  });
+}
+function recevoirCode(message) { reponsesCode.get(message.demande)?.(message); }
+
+// Aperçu seulement : aucun fichier à protéger, le compteur vit en mémoire.
+const apercuCode = { echecs: 0, jusqua: 0 };
+async function verifierCodeLocal(ids, code) {
+  if (apercuCode.jusqua > Date.now()) return { resultat: "bloque", attente: Math.ceil((apercuCode.jusqua - Date.now()) / 1000) };
+  for (const id of ids) {
+    const pin = reglages.profils.find(x => x.id === id)?.pin;
+    if (!pin) continue;
+    const calcule = pin.algo === "pbkdf2-sha256" ? await pbkdf2(code, pin.sel, pin.iterations) : sha256(`${pin.sel}:${code}`);
+    if (calcule === pin.empreinte) { apercuCode.echecs = 0; return { resultat: "ok", profil: id }; }
+  }
+  if (++apercuCode.echecs < 5) return { resultat: "refus", attente: 0 };
+  apercuCode.echecs = 0;
+  apercuCode.jusqua = Date.now() + 30000;
+  return { resultat: "refus", attente: 30 };
+}
+function verifierCode(ids, code) {
+  return PONT ? demanderAuHub({ type: "pin-verifier", profils: ids, code }) : verifierCodeLocal(ids, code);
+}
+async function creerCode(code) {
+  if (PONT) return (await demanderAuHub({ type: "pin-creer", code }))?.pin || null;
+  const sel = hex(crypto.getRandomValues(new Uint8Array(16)));
+  return { algo: "pbkdf2-sha256", iterations: PIN_ITERATIONS, sel, empreinte: await pbkdf2(code, sel, PIN_ITERATIONS) };
+}
 
 function ouvrirPave(p, titre, detail) {
   $("code-titre").textContent = titre;
@@ -1182,11 +1249,10 @@ function majPoints() {
   [...$("code-points").children].forEach((point, i) => point.classList.toggle("plein", i < (demande?.saisie.length || 0)));
 }
 function taperChiffre(ch) {
-  if (!demande) return;
-  const blocage = echecsCode[demande.p.id];
-  if (blocage?.jusqua > Date.now()) {
+  if (!demande || demande.enCours) return;
+  if (blocageCode > Date.now()) {
     son("erreur");
-    $("code-detail").textContent = t("code.bloque", { s: Math.ceil((blocage.jusqua - Date.now()) / 1000) });
+    $("code-detail").textContent = t("code.bloque", { s: Math.ceil((blocageCode - Date.now()) / 1000) });
     return;
   }
   if (demande.saisie.length >= 4) return;
@@ -1196,7 +1262,7 @@ function taperChiffre(ch) {
   if (demande.saisie.length === 4) setTimeout(validerCode, 180);
 }
 function effacerChiffre() {
-  if (!demande) return;
+  if (!demande || demande.enCours) return;
   demande.saisie = demande.saisie.slice(0, -1);
   majPoints();
 }
@@ -1207,13 +1273,30 @@ function refuserCode(message) {
   demande.saisie = "";
   majPoints();
 }
-function validerCode() {
-  if (!demande) return;
+// La demande peut avoir été annulée (Échap) ou remplacée pendant qu'on attendait hub-menu.
+async function attendreHub(travail) {
+  const enCours = demande;
+  enCours.enCours = true;
+  const reponse = await travail;
+  if (demande !== enCours) return undefined;
+  enCours.enCours = false;
+  return reponse;
+}
+
+async function validerCode() {
+  if (!demande || demande.enCours) return;
   const { p, mode, saisie } = demande;
   if (mode === "verifier") {
-    // demande.verifier : un code accepté de plusieurs profils (n'importe quel parent).
-    if (demande.verifier ? demande.verifier(saisie) : p.pin && empreinteCode(saisie, p.pin.sel) === p.pin.empreinte) {
-      delete echecsCode[p.id];
+    // demande.profils : un code accepté de plusieurs profils (n'importe quel parent).
+    const ids = demande.profils || (p.pin ? [p.id] : []);
+    const reponse = await attendreHub(verifierCode(ids, saisie));
+    if (reponse === undefined) return;
+    if (reponse?.resultat === "ok") {
+      // Empreinte refaite par hub-menu (ancien format) : la garder, sinon le prochain
+      // enregistrement des réglages réécrirait l'ancienne.
+      const ouvert = reglages.profils.find(x => x.id === reponse.profil);
+      if (ouvert && reponse.pin) ouvert.pin = reponse.pin;
+      blocageCode = 0;
       deverrouilles.add(p.id);
       if (p.id === profil().id) { verrouAccueil = false; document.body.classList.remove("verrouille"); }
       const { reussite } = demande;
@@ -1223,9 +1306,11 @@ function validerCode() {
       reussite?.();
       return;
     }
-    const echec = echecsCode[p.id] ||= { n: 0, jusqua: 0 };
-    echec.n += 1;
-    if (echec.n >= 5) { echec.n = 0; echec.jusqua = Date.now() + 30000; return refuserCode(t("code.bloque", { s: 30 })); }
+    if (!reponse) return refuserCode(t("code.indisponible"));
+    if (reponse.attente > 0) {
+      blocageCode = Date.now() + reponse.attente * 1000;
+      return refuserCode(t("code.bloque", { s: reponse.attente }));
+    }
     return refuserCode(t("code.faux"));
   }
   if (mode === "nouveau") {
@@ -1240,13 +1325,18 @@ function validerCode() {
     demande.mode = "nouveau";
     return refuserCode(t("code.different"));
   }
-  const sel = nouveauSel();
+  const pin = await attendreHub(creerCode(saisie));
+  if (pin === undefined) return;
+  if (!pin) {
+    demande.mode = "nouveau";
+    return refuserCode(t("code.indisponible"));
+  }
   const { reussite } = demande;
   demande = null;
   deverrouilles.add(p.id);
   fermerCalque();
   annoncer(t("code.defini"));
-  reussite?.({ sel, empreinte: empreinteCode(saisie, sel) });
+  reussite?.(pin);
 }
 function annulerCode() {
   const annuler = demande?.annuler;
@@ -1457,8 +1547,13 @@ function rendreSection(garderFocus = true) {
 
     case "meteo":
       zone.append(
-        rangee(t("meteo.afficher"), null, options("meteo", [[true, t("oui")], [false, t("non")]], meteoProfil().active, v => { p.meteo = { ...meteoProfil(), active: v === true || v === "true" }; chargerMeteo(); })),
-        rangee(t("meteo.ville"), meteoProfil().ville, el("div", { class: "options" },
+        rangee(t("meteo.afficher"), meteoSituee() ? null : t("meteo.sans.ville"), options("meteo", [[true, t("oui")], [false, t("non")]], meteoProfil().active && meteoSituee(), v => {
+          p.meteo = { ...meteoProfil(), active: v === true || v === "true" };
+          chargerMeteo();
+          // Activer sans ville ne montrerait rien : on la demande tout de suite.
+          if (p.meteo.active && !meteoSituee()) setTimeout(chercherVille, 0);
+        })),
+        rangee(t("meteo.ville"), meteoProfil().ville || t("meteo.sans.ville"), el("div", { class: "options" },
           el("button", { class: "option", "data-nav": true, "data-cle": "chercher-ville", onclick: chercherVille }, t("meteo.chercher")))));
       break;
 
@@ -1507,6 +1602,7 @@ function rendreSection(garderFocus = true) {
   }
 
   extensions.contenus[sectionCourante]?.(zone);
+  majAppairage();
 
   if (cle && pile.at(-1) === "reglages") {
     const retrouve = zone.querySelector(`[data-cle="${CSS.escape(cle)}"]`);
@@ -1527,17 +1623,25 @@ function contenuMiseAJour() {
   } else if (e?.etape === "terminee") {
     texte = t("maj.terminee", { v: e.version || "" });
   } else if (e?.etape === "echec") {
-    texte = t(e.retour ? "maj.echec.retour" : `maj.echec.${e.raison || "installation"}`);
+    // Une raison que ce menu ne connaît pas (hub-mise-a-jour plus récent) : le message
+    // générique plutôt que la clé de traduction brute.
+    const raison = `maj.echec.${e.raison || "installation"}`;
+    texte = t(e.retour ? "maj.echec.retour" : raison in TEXTES.fr ? raison : "maj.echec.installation");
   } else if (maj.enCours) {
     texte = t("maj.recherche");
   } else if (v?.erreur) {
     texte = t(v.erreur === "configuration" ? "maj.sans.source" : "maj.injoignable");
   } else if (v) {
-    texte = v.disponible ? t("maj.disponible", { v: v.distant }) : t("maj.a.jour");
+    // verifiable absent (ancien hub-mise-a-jour) : installable, comme avant.
+    texte = !v.disponible ? t("maj.a.jour") : v.verifiable === false ? t("maj.non.verifiable", { v: v.distant }) : t("maj.disponible", { v: v.distant });
+  }
+  // Qui a signé la version en cours d'installation : dit discrètement, pas une étape de plus.
+  if (typeof e?.signataire === "string" && e.signataire && ["tests", "installation", "terminee"].includes(e.etape)) {
+    texte = `${texte} (${t("maj.signee", { s: e.signataire })})`;
   }
   if (!actif && !maj.enCours) {
     boutons.push(el("button", { class: "option", "data-nav": true, "data-cle": "maj-verifier", onclick: () => { maj.enCours = true; maj.etat = null; envoyer({ type: "maj-verifier" }); rendreSection(); } }, t("maj.rechercher")));
-    if (v?.disponible && e?.etape !== "terminee") {
+    if (v?.disponible && v.verifiable !== false && e?.etape !== "terminee") {
       boutons.push(el("button", { class: "option choisie", "data-nav": true, "data-cle": "maj-appliquer", onclick: () => { maj.etat = { etape: "verification" }; maj.suivie = true; envoyer({ type: "maj-appliquer" }); rendreSection(); } }, t("maj.installer")));
     }
   }
@@ -1576,23 +1680,54 @@ let telecommande = INITIAL.telecommande || null;
   document.head.append(script);
 })();
 
+// L'écran d'appairage, ligne par ligne : la clé de l'état publié par hub-telecommande
+// (relayé par hub-menu, CHAMPS_TELECOMMANDE), et sa mise en forme à partir de la valeur
+// et de l'état entier. Une ligne dont la valeur manque n'est pas affichée, sauf
+// « toujours ». Un champ de plus au contrat = une entrée de plus ici. Tout passe en
+// texte : ces valeurs viennent d'un autre service.
+const LIGNES_APPAIRAGE = [
+  { etape: "telecommande.etape1" },
+  { etape: "telecommande.etape2" },
+  { etape: "telecommande.etape3" },
+  // Le service n'accepte un téléphone que fenêtre ouverte : avant, un code serait refusé.
+  { cle: "code", rendre: (v, e) => e.appairageOuvert === true
+    ? el("div", { class: "code-appairage" }, String(v).replace(/(\d{3})(\d{3})/, "$1 $2"))
+    : el("div", { class: "code-appairage attente" }, t("telecommande.ouverture")) },
+  { cle: "empreinteRacineCourte", rendre: v => el("div", { class: "empreinte-appairage" },
+    el("div", { class: "aide" }, t("telecommande.empreinte.courte")),
+    el("div", { class: "empreinte-courte" }, v)) },
+  { cle: "expire", toujours: true, rendre: (_, e) => el("div", { class: "aide", id: "telecommande-expire" }, e.appairageOuvert === true ? texteExpiration() : "") },
+  { cle: "url", rendre: v => el("div", { class: "aide url" }, v) },
+  { cle: "empreinteRacine", rendre: v => el("div", { class: "empreinte-paires", title: t("telecommande.empreinte") },
+    groupesEmpreinte(v).map(ligne => el("div", {}, ligne))) },
+  { cle: "telephones", toujours: true, rendre: v => el("div", { class: "aide" }, t("telecommande.telephones", { n: v ?? 0 })) },
+];
+
+// « AB:CD:… » (32 paires) → quatre lignes de huit paires, coupées en deux groupes de
+// quatre : on compare sur le téléphone groupe par groupe, sans perdre sa ligne.
+function groupesEmpreinte(empreinte) {
+  const paires = String(empreinte).split(":");
+  const lignes = [];
+  for (let i = 0; i < paires.length; i += 8) {
+    const huit = paires.slice(i, i + 8);
+    lignes.push([huit.slice(0, 4).join(" "), huit.slice(4).join(" ")].filter(Boolean).join("   "));
+  }
+  return lignes;
+}
+
 function contenuTelecommande() {
   if (!telecommande) {
     return rangee(t("telecommande.absente"), t("telecommande.absente.detail"), null, true);
   }
   const qr = el("div", { class: "qr" });
   if (window.qrSvg) qr.innerHTML = window.qrSvg(telecommande.url, { sombre: "#000", clair: "#fff", marge: 3 });
-  const code = String(telecommande.code).replace(/(\d{3})(\d{3})/, "$1 $2");
-  return el("div", { class: "appairage" },
-    qr,
-    el("div", { class: "etapes" },
-      el("div", { class: "etape" }, el("b", {}, "1"), t("telecommande.etape1")),
-      el("div", { class: "etape" }, el("b", {}, "2"), t("telecommande.etape2")),
-      el("div", { class: "etape" }, el("b", {}, "3"), t("telecommande.etape3")),
-      el("div", { class: "code-appairage" }, code),
-      el("div", { class: "aide", id: "telecommande-expire" }, texteExpiration()),
-      el("div", { class: "aide url" }, telecommande.url),
-      el("div", { class: "aide" }, t("telecommande.telephones", { n: telecommande.telephones ?? 0 }))));
+  let numero = 0;
+  const lignes = LIGNES_APPAIRAGE.map(l => {
+    if (l.etape) return el("div", { class: "etape" }, el("b", {}, String(++numero)), t(l.etape));
+    const valeur = telecommande[l.cle];
+    return valeur == null && !l.toujours ? null : l.rendre(valeur, telecommande);
+  });
+  return el("div", { class: "appairage" }, qr, el("div", { class: "etapes" }, lignes));
 }
 function texteExpiration() {
   if (!telecommande?.expire) return "";
@@ -1601,8 +1736,18 @@ function texteExpiration() {
 }
 setInterval(() => {
   const e = document.getElementById("telecommande-expire");
-  if (e) e.textContent = texteExpiration();
+  if (e && telecommande?.appairageOuvert === true) e.textContent = texteExpiration();
 }, 1000);
+
+// hub-telecommande n'ouvre l'appairage que pendant que cet écran est à la TV : on dit à
+// hub-menu quand il apparaît et disparaît (changement de section, fermeture, mode ambiant).
+let appairageAffiche = false;
+function majAppairage() {
+  const affiche = pile.at(-1) === "reglages" && sectionCourante === "telecommande";
+  if (affiche === appairageAffiche) return;
+  appairageAffiche = affiche;
+  envoyer({ type: "appairage", affiche });
+}
 
 function recevoirTelecommande(etat) {
   const avant = telecommande;
@@ -1902,6 +2047,64 @@ function recevoirLecture(etat) {
   rendreLecture();
 }
 
+// ── Recopie d'écran : code ────────────────────────────────────────────────
+// hub-enceinte protège la recopie par un code à 4 chiffres. Réglages → Enceinte le
+// montre et permet d'en tirer un autre ; pendant qu'un appareil le demande, hub-menu
+// relaie { type: "recopie-appairage", etat: { code, jusqua } | null } et le code
+// s'affiche en grand, par-dessus tout.
+const recopie = { code: undefined, permise: null, demandeLe: 0, confirmer: false, appairage: INITIAL.recopieCode || null };
+
+function demanderCodeRecopie(nouveau = false) {
+  recopie.demandeLe = Date.now();
+  if (!PONT) { recopie.code = null; return; }
+  envoyer({ type: "recopie-code", nouveau });
+}
+function recevoirCodeRecopie(message) {
+  recopie.code = typeof message.code === "string" && /^[0-9]{4}$/.test(message.code) ? message.code : null;
+  recopie.permise = typeof message.permise === "boolean" ? message.permise : null;
+  if (message.nouveau && recopie.code) annoncer(t("enceinte.code.change", { code: recopie.code }));
+  if (pile.at(-1) === "reglages" && sectionCourante === "enceinte") rendreSection();
+}
+
+function lignesCodeRecopie(e) {
+  // Relu à l'ouverture de la section, pas à chaque option touchée.
+  if (Date.now() - recopie.demandeLe > 10000) demanderCodeRecopie();
+  const lignes = [];
+  if (e.ecran !== false && recopie.permise === false) lignes.push(el("div", { class: "aide recopie-coupee" }, t("enceinte.ecran.profil")));
+  const valeur = recopie.code === undefined ? "…" : recopie.code || t("enceinte.code.indisponible");
+  const boutons = recopie.confirmer
+    ? [el("button", { class: "option", "data-nav": true, "data-cle": "recopie-code-annuler", onclick: () => { recopie.confirmer = false; rendreSection(); } }, t("annuler")),
+      el("button", { class: "option choisie", "data-nav": true, "data-cle": "recopie-code-oui",
+        onclick: () => { recopie.confirmer = false; recopie.code = undefined; demanderCodeRecopie(true); rendreSection(); } }, t("enceinte.code.oui"))]
+    : [el("button", { class: "option", "data-nav": !!recopie.code, "data-cle": "recopie-code-changer", disabled: !recopie.code,
+        onclick: () => { recopie.confirmer = true; rendreSection(); } }, t("enceinte.code.changer"))];
+  lignes.push(rangee(el("span", { class: "code-recopie" }, t("enceinte.code", { code: valeur })),
+    t(recopie.confirmer ? "enceinte.code.confirmer" : "enceinte.code.detail"), el("div", { class: "options" }, boutons), false, true));
+  return lignes;
+}
+
+function recevoirAppairageRecopie(etat) {
+  recopie.appairage = etat && typeof etat.code === "string" && /^[0-9]{4}$/.test(etat.code) ? etat : null;
+  majAppairageRecopie();
+}
+function majAppairageRecopie() {
+  const etat = recopie.appairage && recopie.appairage.jusqua * 1000 > Date.now() ? recopie.appairage : null;
+  let panneau = $("recopie-appairage");
+  if (!etat) { if (panneau) panneau.hidden = true; return; }
+  if (!panneau) {
+    panneau = el("div", { class: "recopie-appairage", id: "recopie-appairage", role: "status" },
+      el("div", { class: "recopie-titre", id: "recopie-appairage-titre" }),
+      el("div", { class: "recopie-saisir", id: "recopie-appairage-saisir" }),
+      el("div", { class: "recopie-chiffres", id: "recopie-appairage-code" }));
+    document.body.append(panneau);
+  }
+  $("recopie-appairage-titre").textContent = t("recopie.titre");
+  $("recopie-appairage-saisir").textContent = t("recopie.saisir");
+  $("recopie-appairage-code").textContent = etat.code;
+  panneau.hidden = false;
+}
+setInterval(majAppairageRecopie, 1000);
+
 // Réglages → Enceinte réseau. Commun au HUB : c'est la même enceinte pour toute la maison.
 function contenuEnceinte() {
   const e = reglages.systeme.enceinte;
@@ -1911,6 +2114,7 @@ function contenuEnceinte() {
     bascule("spotify", "enceinte.spotify", "enceinte.spotify.detail"),
     bascule("airplay", "enceinte.airplay", "enceinte.airplay.detail"),
     bascule("ecran", "enceinte.ecran", "enceinte.ecran.detail"),
+    ...lignesCodeRecopie(e),
     rangee(t("enceinte.nom"), t("enceinte.nom.detail", { nom: e.nom || "HUB" }), el("div", { class: "options" },
       el("button", {
         class: "option", "data-nav": true, "data-cle": "enceinte-nom",
@@ -1926,6 +2130,7 @@ function contenuEnceinte() {
 }
 
 setInterval(rendreLecture, 5000);
+majAppairageRecopie();
 // Au retour de Kodi, la musique jouait peut-être déjà : on l'affiche sans l'annoncer.
 lecture = INITIAL.lecture?.source ? INITIAL.lecture : null;
 rendreLecture();
@@ -1943,6 +2148,9 @@ window.hub = {
       case "telecommande": return recevoirTelecommande(message.etat);
       case "lecture": return recevoirLecture(message.etat);
       case "maj": return recevoirMiseAJour(message);
+      case "pin": return recevoirCode(message);
+      case "recopie-code": return recevoirCodeRecopie(message);
+      case "recopie-appairage": return recevoirAppairageRecopie(message.etat);
       case "texte":
         // Texte tapé sur le téléphone : il remplit la saisie en cours, s'il y en a une.
         if (saisie && typeof message.texte === "string") { saisie.valeur = message.texte.slice(0, 32); majSaisie(); }

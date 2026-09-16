@@ -156,7 +156,7 @@ function accorderTemps(p, minutes) {
     // Le code d'un parent ne déverrouille pas le profil « parents » fictif pour la suite.
     deverrouilles.delete("parents");
   }, { detail: t("temps.accorde", { m: minutes, nom: p.nom }) });
-  demande.verifier = saisie => parents.some(x => empreinteCode(saisie, x.pin.sel) === x.pin.empreinte);
+  demande.profils = parents.map(x => x.id);
 }
 
 function ouvrirPlusDeTemps(p) {

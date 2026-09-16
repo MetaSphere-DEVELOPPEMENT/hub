@@ -22,8 +22,11 @@ Ce fichier n'importe GTK qu'au lancement : ses fonctions se testent sans écran
 (tests/test_hub_menu.py).
 """
 
+import hashlib
+import hmac
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -71,23 +74,39 @@ def chemins():
         "reglages": dossier("XDG_CONFIG_HOME", maison / ".config") / "hub" / "reglages.json",
         "dernier": dossier("XDG_STATE_HOME", maison / ".local/state") / "hub" / "dernier-choix",
         "meteo": dossier("XDG_CACHE_HOME", maison / ".cache") / "hub" / "meteo.json",
+        "pin-echecs": dossier("XDG_STATE_HOME", maison / ".local/state") / "hub" / "pin-echecs.json",
         "execution": execution,
         "socket": execution / "menu.sock",
         "deja-ouvert": execution / "menu-deja-ouvert",
         "minuteur": execution / "minuteur-fin",
         "telecommande": execution / "telecommande.json",
+        "telecommande-appairage": execution / "telecommande-appairage",
         "lecture": execution / "lecture.json",
+        "recopie-code": execution / "recopie-code.json",
     }
 
 
 # ── Fichiers ──────────────────────────────────────────────────────────────
-def ecrire_atomique(chemin, texte):
+def ecrire_atomique(chemin, texte, droits=None):
     """Un réglage à moitié écrit (coupure pendant l'écriture) ne doit jamais remplacer
-    le précédent : on écrit à côté, puis on renomme."""
+    le précédent : on écrit à côté, puis on renomme.
+
+    droits (0o600…) : posés sur le provisoire avant la première écriture, pour que le
+    contenu ne soit jamais lisible, même un instant, avec les droits de l'umask."""
     chemin = Path(chemin)
     chemin.parent.mkdir(parents=True, exist_ok=True)
     provisoire = chemin.with_name(chemin.name + ".tmp")
-    provisoire.write_text(texte, encoding="utf-8")
+    if droits is None:
+        provisoire.write_text(texte, encoding="utf-8")
+    else:
+        # Un nom par fil : la vérification d'un code (en arrière-plan) peut réécrire les
+        # réglages pendant que la page les enregistre.
+        provisoire = chemin.with_name(f"{chemin.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+        provisoire.unlink(missing_ok=True)
+        descripteur = os.open(provisoire, os.O_WRONLY | os.O_CREAT | os.O_EXCL, droits)
+        with os.fdopen(descripteur, "w", encoding="utf-8") as f:
+            os.fchmod(f.fileno(), droits)
+            f.write(texte)
     os.replace(provisoire, chemin)
 
 
@@ -108,7 +127,23 @@ def reglages_valides(donnees):
     )
 
 
+# reglages.json porte les empreintes des codes PIN : lisible par le seul utilisateur du
+# HUB. hub-allumage le lit en root, hub-temps-ecran et hub-cec en tant que cet
+# utilisateur : aucun autre compte n'en a besoin.
+DROITS_REGLAGES = 0o600
+
+
+def restreindre_droits(chemin, droits=DROITS_REGLAGES):
+    """Un fichier écrit par une version antérieure (0644 selon l'umask) est resserré."""
+    try:
+        if os.stat(chemin).st_mode & 0o777 != droits:
+            os.chmod(chemin, droits)
+    except OSError:
+        pass
+
+
 def charger_reglages(c):
+    restreindre_droits(c["reglages"])
     donnees = lire_json(c["reglages"])
     return donnees if reglages_valides(donnees) else None
 
@@ -116,8 +151,142 @@ def charger_reglages(c):
 def enregistrer_reglages(c, donnees):
     if not reglages_valides(donnees):
         return False
-    ecrire_atomique(c["reglages"], json.dumps(donnees, ensure_ascii=False, indent=2))
+    ecrire_atomique(c["reglages"], json.dumps(donnees, ensure_ascii=False, indent=2), droits=DROITS_REGLAGES)
     return True
+
+
+# ── Codes PIN des profils ─────────────────────────────────────────────────
+# POURQUOI ICI ET PAS DANS LA PAGE. La page comparait elle-même sha256(sel:code) à
+# l'empreinte des réglages, et comptait les échecs en mémoire : relancer le menu
+# remettait le compteur à zéro, et un téléphone appairé pouvait taper les 10 000 codes
+# par /api/commande. Maintenant la page envoie la saisie, hub-menu vérifie, et tient
+# le compte des échecs sur disque, avec un délai qui double.
+#
+# CE QUE ÇA NE FAIT PAS. Un code à 4 chiffres reste un verrou familial. Quiconque a
+# un shell sous le compte du HUB (mode Bureau, terminal) lit reglages.json et essaie
+# les 10 000 codes hors ligne : PBKDF2 le ralentit (0,24 s par essai mesurés ci-dessous,
+# soit une quarantaine de minutes sur un cœur, moins avec plusieurs ou un GPU), il ne
+# l'empêche pas ; il peut aussi effacer le compteur. Le fermer demande que les
+# empreintes et le compteur appartiennent à un autre compte que celui du Bureau
+# (service système qui vérifie pour le menu) : chantier d'architecture laissé pour
+# plus tard.
+PIN_ALGO = "pbkdf2-sha256"
+# 600 000 : recommandation OWASP 2023 pour PBKDF2-HMAC-SHA256. Mesuré le 17/09/2026
+# sur le Mac de développement (python3 -c "hashlib.pbkdf2_hmac(...)") : 0,24 s. La
+# machine du HUB n'est pas mesurée ; la vérification tourne hors du fil graphique.
+PIN_ITERATIONS = 600_000
+PIN_ITERATIONS_MAX = 10_000_000
+PIN_ESSAIS_LIBRES = 4
+PIN_DELAI_S = 30
+# Plafonné : un enfant qui s'acharne ne doit pas priver les parents du HUB une soirée.
+PIN_DELAI_MAX_S = 15 * 60
+_verrou_pin = threading.Lock()
+
+
+def code_pin_valide(code):
+    return isinstance(code, str) and len(code) == 4 and code.isascii() and code.isdigit()
+
+
+def hacher_pin(code, sel=None, iterations=None):
+    iterations = iterations or PIN_ITERATIONS
+    sel = sel if sel is not None else os.urandom(16)
+    empreinte = hashlib.pbkdf2_hmac("sha256", code.encode(), sel, iterations)
+    return {"algo": PIN_ALGO, "iterations": iterations, "sel": sel.hex(), "empreinte": empreinte.hex()}
+
+
+def pin_correct(pin, code):
+    """Deux formats : PBKDF2 (actuel) et l'ancien sha256("sel:code") calculé par la page."""
+    if not isinstance(pin, dict) or not code_pin_valide(code) or not isinstance(pin.get("empreinte"), str):
+        return False
+    if pin.get("algo") == PIN_ALGO:
+        iterations = pin.get("iterations")
+        if not isinstance(iterations, int) or isinstance(iterations, bool) or not 0 < iterations <= PIN_ITERATIONS_MAX:
+            return False
+        try:
+            sel = bytes.fromhex(pin.get("sel") or "")
+        except (TypeError, ValueError):
+            return False
+        calcule = hashlib.pbkdf2_hmac("sha256", code.encode(), sel, iterations).hex()
+    elif "algo" not in pin and isinstance(pin.get("sel"), str):
+        calcule = hashlib.sha256(f"{pin['sel']}:{code}".encode()).hexdigest()
+    else:
+        return False
+    return hmac.compare_digest(calcule, pin["empreinte"].lower())
+
+
+def pin_a_rehacher(pin):
+    return pin.get("algo") != PIN_ALGO or pin.get("iterations", 0) < PIN_ITERATIONS
+
+
+def _lire_echecs(chemin):
+    donnees = lire_json(chemin)
+    if not isinstance(donnees, dict):
+        return {"echecs": 0, "jusqua": 0}
+    echecs, jusqua = donnees.get("echecs"), donnees.get("jusqua")
+    return {"echecs": echecs if isinstance(echecs, int) and echecs >= 0 else 0,
+            "jusqua": jusqua if isinstance(jusqua, (int, float)) else 0}
+
+
+def attente_pin(chemin, maintenant=None):
+    """Secondes avant le prochain essai permis (0 : on peut essayer)."""
+    maintenant = maintenant or time.time()
+    # Une horloge revenue en arrière ne doit pas bloquer plus longtemps que le plafond.
+    reste = min(_lire_echecs(chemin)["jusqua"] - maintenant, PIN_DELAI_MAX_S)
+    return max(0, int(-(-reste // 1)))
+
+
+def noter_echec_pin(chemin, maintenant=None):
+    """Quatre essais libres, puis 30 s, 60 s, 120 s… jusqu'à 15 min après chaque échec.
+    Un seul compteur pour tout le HUB : changer de profil ne redonne pas d'essais."""
+    maintenant = maintenant or time.time()
+    etat = _lire_echecs(chemin)
+    etat["echecs"] += 1
+    depassement = etat["echecs"] - PIN_ESSAIS_LIBRES
+    if depassement > 0:
+        etat["jusqua"] = maintenant + min(PIN_DELAI_MAX_S, PIN_DELAI_S * 2 ** min(depassement - 1, 16))
+    try:
+        ecrire_atomique(chemin, json.dumps(etat), droits=0o600)
+    except OSError as erreur:
+        print(f"hub-menu : compteur d'échecs du code non enregistré ({erreur})", file=sys.stderr)
+    return attente_pin(chemin, maintenant)
+
+
+def verifier_pin(c, profils, code, maintenant=None):
+    """La page demande : ce code ouvre-t-il l'un de ces profils ? (« l'un » : n'importe
+    quel parent accorde du temps d'écran). Les empreintes sont relues sur disque, pas
+    reçues de la page. Réponse : {"resultat": "ok" | "refus" | "bloque", "attente"}, et
+    pour « ok » le profil ouvert et, si l'empreinte a été refaite, la nouvelle."""
+    chemin = c["pin-echecs"]
+    with _verrou_pin:
+        attente = attente_pin(chemin, maintenant)
+        if attente:
+            return {"resultat": "bloque", "attente": attente}
+        ids = [i for i in profils if isinstance(i, str)][:12] if isinstance(profils, list) else []
+        reglages = charger_reglages(c) or {"profils": []}
+        for p in reglages["profils"]:
+            if p.get("id") in ids and pin_correct(p.get("pin"), code):
+                try:
+                    Path(chemin).unlink(missing_ok=True)
+                except OSError:
+                    pass
+                reponse = {"resultat": "ok", "attente": 0, "profil": p["id"]}
+                if pin_a_rehacher(p["pin"]):
+                    # Migration transparente : l'ancien sha256 se retrouve en un instant ;
+                    # on profite du code en clair, juste vérifié, pour le refaire en PBKDF2.
+                    p["pin"] = hacher_pin(code)
+                    try:
+                        enregistrer_reglages(c, reglages)
+                        reponse["pin"] = p["pin"]
+                    except OSError:
+                        pass
+                return reponse
+        return {"resultat": "refus", "attente": noter_echec_pin(chemin, maintenant)}
+
+
+def creer_pin(code):
+    if not code_pin_valide(code):
+        return {"resultat": "refus"}
+    return {"resultat": "hache", "pin": hacher_pin(code)}
 
 
 def dernier_choix(c):
@@ -562,14 +731,83 @@ def infos():
 
 
 # ── Télécommande ──────────────────────────────────────────────────────────
+# Les champs de telecommande.json que l'écran d'appairage affiche, chacun avec ce qu'il
+# doit être ; une valeur qui ne l'est pas arrive à la page comme None. Un champ de plus
+# au contrat de hub-telecommande = une ligne ici et une dans LIGNES_APPAIRAGE (hub.js).
+CHAMPS_TELECOMMANDE = {
+    "url": lambda v: isinstance(v, str),
+    "code": lambda v: isinstance(v, str),
+    "expire": lambda v: True,
+    "telephones": lambda v: True,
+    "appairageLe": lambda v: True,
+    "https": lambda v: isinstance(v, str),
+    # Le code n'est utilisable que fenêtre ouverte (voir ouvrir_appairage) ; sinon la
+    # TV dit « ouverture… » plutôt qu'un code que le service refuserait.
+    "appairageOuvert": lambda v: isinstance(v, bool),
+    "appairageJusque": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
+    # SHA-256 du certificat racine : le téléphone demande de la comparer avec la TV avant
+    # d'installer le certificat. Le début, « 3A9F 12C0 4481 7BE2 », est ce qu'on lit ;
+    # l'empreinte entière, en paires « AB:CD:… », est donnée en petit.
+    "empreinteRacineCourte": lambda v: isinstance(v, str) and re.fullmatch(r"[0-9A-F]{4}( [0-9A-F]{4}){3}", v) is not None,
+    "empreinteRacine": lambda v: isinstance(v, str) and re.fullmatch(r"[0-9A-F]{2}(:[0-9A-F]{2}){31}", v) is not None,
+}
+
+
 def etat_telecommande(c):
     """Ce que hub-telecommande publie pour l'écran d'appairage ; None s'il ne tourne pas
     (il supprime son fichier en s'arrêtant)."""
     donnees = lire_json(c["telecommande"])
     if not isinstance(donnees, dict) or not isinstance(donnees.get("url"), str) or not isinstance(donnees.get("code"), str):
         return None
-    garder = ("url", "code", "expire", "telephones", "appairageLe")
-    return {k: donnees.get(k) for k in garder}
+    return {k: donnees.get(k) if valide(donnees.get(k)) else None for k, valide in CHAMPS_TELECOMMANDE.items()}
+
+
+# La fenêtre d'appairage : hub-telecommande n'accepte un nouveau téléphone que pendant
+# que l'écran d'appairage est affiché sur la TV, c'est-à-dire tant que ce fichier a été
+# touché il y a moins de 5 minutes. Le menu le touche à l'ouverture de l'écran, toutes
+# les 30 s tant qu'il reste affiché, et l'efface en le quittant ; si le menu tombe, la
+# fenêtre se ferme seule au bout des 5 minutes.
+RETOUCHE_APPAIRAGE_S = 30
+
+
+def ouvrir_appairage(c):
+    chemin = Path(c["telecommande-appairage"])
+    try:
+        chemin.parent.mkdir(parents=True, exist_ok=True)
+        # Le service ignore un lien symbolique : on le remplace par un vrai fichier
+        # plutôt que de toucher ce qu'il désigne.
+        if chemin.is_symlink():
+            chemin.unlink()
+        descripteur = os.open(chemin, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        try:
+            os.fchmod(descripteur, 0o600)
+            os.utime(descripteur if os.utime in os.supports_fd else chemin)
+        finally:
+            os.close(descripteur)
+    except OSError as erreur:
+        print(f"hub-menu : fenêtre d'appairage non ouverte ({erreur})", file=sys.stderr)
+        return False
+    return True
+
+
+def fermer_appairage(c):
+    try:
+        Path(c["telecommande-appairage"]).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def suivre_appairage(c, affiche, touche_le, maintenant=None):
+    """Appelé à chaque tour de surveillance : rend la date du dernier toucher (None :
+    fenêtre fermée)."""
+    maintenant = maintenant or time.time()
+    if not affiche:
+        if touche_le is not None:
+            fermer_appairage(c)
+        return None
+    if touche_le is None or maintenant - touche_le >= RETOUCHE_APPAIRAGE_S or maintenant < touche_le:
+        return maintenant if ouvrir_appairage(c) else None
+    return touche_le
 
 
 # ── Enceinte réseau : ce qui joue ─────────────────────────────────────────
@@ -596,6 +834,48 @@ def etat_lecture(c):
         if fichier.resolve().parent == dossier_pochettes and fichier.is_file():
             etat["pochette"] = fichier.resolve().as_uri()
     return etat
+
+
+# ── Recopie d'écran : le code à saisir sur l'iPhone ou le Mac ─────────────
+# hub-enceinte protège la recopie (UxPlay) par un code à 4 chiffres. Le menu ne connaît
+# ni son fichier ni ses options : il demande à hub-enceinte, avec des arguments fixés
+# ici, et ne transmet à la page qu'une valeur qui a la forme d'un code.
+CODE_RECOPIE = re.compile(r"[0-9]{4}")
+
+
+def code_recopie(nouveau=False, executer=subprocess.run):
+    """Le code actuel (hub-enceinte le crée au besoin), ou un nouveau : tous les
+    appareils devront le ressaisir. None si hub-enceinte ne répond pas un code."""
+    commande = ["hub-enceinte", "code"] + (["nouveau"] if nouveau else [])
+    try:
+        r = executer(commande, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    sortie = (r.stdout or "").strip() if getattr(r, "returncode", 1) == 0 else ""
+    return sortie if CODE_RECOPIE.fullmatch(sortie) else None
+
+
+def recopie_permise(executer=subprocess.run):
+    """hub-enceinte actif ecran : 0 permise, 1 coupée (réglage, ou temps d'écran du
+    profil) ; None si on n'a pas pu le demander."""
+    try:
+        r = executer(["hub-enceinte", "actif", "ecran"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return {0: True, 1: False}.get(getattr(r, "returncode", None))
+
+
+def etat_code_recopie(c, maintenant=None):
+    """Pendant qu'un appareil demande à recopier, hub-enceinte publie le code à afficher
+    sur la TV ; relu chaque seconde, comme lecture.json. None hors appairage."""
+    donnees = lire_json(c.get("recopie-code") or Path(c["execution"]) / "recopie-code.json")
+    if not isinstance(donnees, dict):
+        return None
+    code, jusqua = donnees.get("code"), donnees.get("jusqua")
+    if not isinstance(code, str) or not CODE_RECOPIE.fullmatch(code) \
+            or not isinstance(jusqua, (int, float)) or isinstance(jusqua, bool):
+        return None
+    return {"code": code, "jusqua": jusqua} if jusqua > (maintenant or time.time()) else None
 
 
 def reglage_enceinte(donnees):
@@ -698,7 +978,7 @@ def temps_ecran(maintenant=None):
 
 
 def prolonger_temps(profil, minutes, maintenant=None):
-    """Accordé par un code parent vérifié dans la page (verrou familial, comme les
+    """Accordé après un code parent vérifié par verifier_pin (verrou familial, comme les
     profils) ; ici on borne seulement ce qui peut s'écrire."""
     if not isinstance(profil, str) or not 0 < len(profil) <= 64 or minutes not in (15, 30, 60) or isinstance(minutes, bool):
         return None
@@ -817,6 +1097,8 @@ def lancer():
             fenetre.present()
 
         def do_shutdown(self):
+            # Le menu se ferme (un mode démarre) : plus d'écran d'appairage à la TV.
+            fermer_appairage(c)
             if self.ecoute:
                 self.ecoute.close()
                 Path(c["socket"]).unlink(missing_ok=True)
@@ -836,6 +1118,7 @@ def lancer():
                 "avatars": avatars(),
                 "telecommande": etat_telecommande(c),
                 "lecture": etat_lecture(c),
+                "recopieCode": etat_code_recopie(c),
                 "minuteurFin": minuteur_en_cours(c),
                 "reprises": reprises_kodi(Path.home() / ".kodi"),
                 "services": services_disponibles(),
@@ -871,9 +1154,13 @@ def lancer():
             self.vue = vue
             self.ecouter_voix()
             self.telecommande = initial["telecommande"]
+            self.appairage_affiche, self.appairage_touche = False, None
+            # Un menu tombé pendant l'appairage a pu laisser le fichier : l'écran n'est pas affiché.
+            fermer_appairage(c)
             self.suivre_si_en_cours()
             GLib.timeout_add_seconds(2, self.surveiller_telecommande)
             self.lecture = initial["lecture"]
+            self.recopie_code = initial["recopieCode"]
             self.reglages_enceinte = initial["reglages"]
             # Chaque seconde : un bandeau « en cours de lecture » en retard de deux
             # secondes sur le téléphone se remarque.
@@ -899,6 +1186,7 @@ def lancer():
             return not fini
 
         def surveiller_telecommande(self):
+            self.appairage_touche = suivre_appairage(c, self.appairage_affiche, self.appairage_touche)
             etat = etat_telecommande(c)
             if etat != self.telecommande:
                 self.telecommande = etat
@@ -906,6 +1194,10 @@ def lancer():
             return True
 
         def surveiller_lecture(self):
+            code = etat_code_recopie(c)
+            if code != self.recopie_code:
+                self.recopie_code = code
+                self.vers_page({"type": "recopie-appairage", "etat": code})
             etat = etat_lecture(c)
             if etat != self.lecture:
                 recopie_finie = bool(self.lecture and self.lecture.get("ecran")) and not (etat and etat.get("ecran"))
@@ -964,6 +1256,21 @@ def lancer():
                     self.en_fond(releve)
             elif genre == "geocodage" and isinstance(message.get("nom"), str):
                 self.en_fond(lambda: {"type": "geocodage", "resultats": geocodage(message["nom"], message.get("langue", "fr"))})
+            elif genre == "appairage":
+                self.appairage_affiche = message.get("affiche") is True
+                self.appairage_touche = suivre_appairage(c, self.appairage_affiche, None if self.appairage_affiche else self.appairage_touche)
+                if self.appairage_affiche:
+                    # Le service publie l'ouverture en quelques secondes : on relit sans attendre le tour suivant.
+                    GLib.timeout_add_seconds(1, lambda: self.surveiller_telecommande() and False)
+            elif genre == "recopie-code":
+                nouveau = message.get("nouveau") is True
+                self.en_fond(lambda: {"type": "recopie-code", "code": code_recopie(nouveau), "permise": recopie_permise(), "nouveau": nouveau})
+            elif genre == "pin-verifier":
+                demande, profils, code = message.get("demande"), message.get("profils"), message.get("code")
+                self.en_fond(lambda: {"type": "pin", "demande": demande, **verifier_pin(c, profils, code)})
+            elif genre == "pin-creer":
+                demande, code = message.get("demande"), message.get("code")
+                self.en_fond(lambda: {"type": "pin", "demande": demande, **creer_pin(code)})
             elif genre == "minuteur" and isinstance(message.get("minutes"), int):
                 minutes = max(0, min(message["minutes"], 240))
                 self.en_fond(lambda: {"type": "minuteur", "fin": programmer_minuteur(c, minutes)})

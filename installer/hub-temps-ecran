@@ -338,21 +338,92 @@ class SansProcessus:
 
 
 def lire_reglages(chemin):
+    return lire_reglages_etat(chemin)[0]
+
+
+def lire_reglages_etat(chemin):
+    """(réglages, "ok" | "absent" | "illisible"). Absent et illisible ne se valent pas :
+    un fichier qui manque est un HUB jamais réglé, un fichier abîmé a peut-être porté
+    des limites."""
     try:
-        return json.loads(Path(chemin).read_text(encoding="utf-8"))
+        texte = Path(chemin).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None, "absent"
+    except (OSError, UnicodeDecodeError):
+        return None, "illisible"
+    try:
+        reglages = json.loads(texte)
+    except ValueError:
+        return None, "illisible"
+    if not isinstance(reglages, dict) or not isinstance(reglages.get("profils"), list):
+        return None, "illisible"
+    return reglages, "ok"
+
+
+# ── Réglages illisibles : échouer fermé, sans enfermer le parent ─────────────
+# Avant, des réglages illisibles voulaient dire « aucune limite » : abîmer le fichier
+# suffisait à les lever. Mais appliquer à l'aveugle la limite la plus stricte punirait
+# le parent un soir de panne — le HUB ne sait pas qui est devant. Le compromis : à
+# chaque lecture réussie, on garde à côté de l'état le profil actif, sa langue et ses
+# règles ; si reglages.json devient illisible (ou disparaît), on continue avec ces
+# dernières règles connues. Le parent qui était actif reste sans limite, l'enfant garde
+# les siennes. Seul cas encore ouvert : aucune copie lisible (HUB jamais lancé en mode
+# avec ces réglages, ou les deux fichiers abîmés) — rien de connu à appliquer, on le
+# signale sur la sortie d'erreur plutôt que de bloquer le HUB sur des règles inventées.
+def chemin_secours(c):
+    return Path(c.get("secours") or Path(c["etat"]).with_name("temps-ecran-regles.json"))
+
+
+def retenir_secours(chemin, connu):
+    chemin = Path(chemin)
+    try:
+        if json.loads(chemin.read_text(encoding="utf-8")) == connu:
+            return
+    except (OSError, ValueError):
+        pass
+    try:
+        chemin.parent.mkdir(parents=True, exist_ok=True)
+        provisoire = chemin.with_name(f"{chemin.name}.{os.getpid()}.tmp")
+        descripteur = os.open(provisoire, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(descripteur, "w", encoding="utf-8") as f:
+            json.dump(connu, f, ensure_ascii=False)
+        os.replace(provisoire, chemin)
+    except OSError as erreur:
+        print(f"hub-temps-ecran : copie des règles non écrite ({erreur})", file=sys.stderr)
+
+
+def lire_secours(chemin):
+    try:
+        connu = json.loads(Path(chemin).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+    if not isinstance(connu, dict) or not isinstance(connu.get("profilActif"), str):
+        return None
+    regles = connu.get("regles")
+    langue = connu.get("langue")
+    return connu["profilActif"], regles if isinstance(regles, dict) else None, langue if langue in TEXTES else "fr"
 
 
 def profil_et_regles(c):
-    reglages = lire_reglages(c["reglages"])
-    profil = reglages.get("profilActif") if isinstance(reglages, dict) else None
+    reglages, lecture = lire_reglages_etat(c["reglages"])
+    if lecture != "ok":
+        connu = lire_secours(chemin_secours(c))
+        if connu:
+            if lecture == "illisible":
+                print(f"hub-temps-ecran : réglages illisibles, dernières règles connues du profil {connu[0]}", file=sys.stderr)
+            return connu
+        if lecture == "illisible":
+            print("hub-temps-ecran : réglages illisibles et aucune règle connue : pas de limite", file=sys.stderr)
+        return "inconnu", None, "fr"
+    profil = reglages.get("profilActif")
     profil = profil if isinstance(profil, str) else "inconnu"
     langue = "fr"
-    for p in (reglages or {}).get("profils") or []:
+    for p in reglages["profils"]:
         if isinstance(p, dict) and p.get("id") == profil and p.get("langue") in TEXTES:
             langue = p["langue"]
-    return profil, regles_du_profil(reglages, profil), langue
+    regles = regles_du_profil(reglages, profil)
+    retenir_secours(chemin_secours(c), {"profilActif": profil, "langue": langue, "regles": regles})
+    return profil, regles, langue
 
 
 def suivre(mode, c, demarrer, horloge=time.time, pas=PAS_S, avertir=avertir, terminer=terminer):
