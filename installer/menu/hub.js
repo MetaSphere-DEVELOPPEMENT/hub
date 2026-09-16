@@ -297,11 +297,56 @@ const PALETTES = {
   },
 };
 const NAPPES = [
-  { x: .18, y: .22, r: .50, vx: .021, vy: .017, phase: 0 },
-  { x: .86, y: .18, r: .44, vx: -.016, vy: .023, phase: 2 },
-  { x: .66, y: .95, r: .52, vx: .013, vy: -.019, phase: 4 },
-  { x: .10, y: .90, r: .50, vx: .019, vy: .011, phase: 1 },
+  { x: .18, y: .22, r: .50, phase: 0 },
+  { x: .86, y: .18, r: .44, phase: 2 },
+  { x: .66, y: .95, r: .52, phase: 4 },
+  { x: .10, y: .90, r: .50, phase: 1 },
 ];
+// Chaque nappe va et vient en 12 à 30 s, sur une fraction visible de l'écran. Les
+// premières versions tiraient ces cycles de vitesses (s × vx × 3…) : l'océan mettait
+// 100 à 160 s à faire un aller-retour, soit 2 % de la largeur par seconde, et vu du
+// canapé le fond paraissait immobile (constaté sur la TV le 17/09/2026). Écrits en
+// périodes, ils se lisent et se testent (tests/menu : aucune au-delà de 30 s).
+// Périodes différentes d'une nappe à l'autre : le motif ne se répète pas à l'identique.
+const MOUVEMENTS = {
+  aurore: { x: { amplitude: .18, periodes: [23, 27, 19, 29] }, y: { amplitude: .14, periodes: [17, 21, 25, 15] }, rayon: { amplitude: .1, periodes: [13, 16, 14, 18] } },
+  nebuleuse: { x: { amplitude: .16, periodes: [29, 23, 26, 20] }, y: { amplitude: .15, periodes: [21, 27, 17, 24] }, rayon: { amplitude: .12, periodes: [15, 12, 18, 14] } },
+  // La houle : large de gauche à droite, à peine en hauteur.
+  ocean: { x: { amplitude: .24, periodes: [22, 26, 18, 28] }, y: { amplitude: .07, periodes: [15, 17, 16, 19] }, rayon: { amplitude: .1, periodes: [14, 17, 13, 16] } },
+  // Les braises montent : « periodes » y est le temps d'une traversée, bas → haut.
+  braise: { x: { amplitude: .09, periodes: [16, 19, 14, 21] }, y: { montee: true, periodes: [26, 22, 30, 24] }, rayon: { amplitude: .1, periodes: [12, 15, 13, 17] } },
+};
+// En mode ambiant, tout va deux fois moins vite : on regarde l'heure, pas le fond.
+const LENTEUR_AMBIANT = .5;
+// Le canvas ne fait que 192×108 : le dessiner ne coûte rien. Mais chaque image du fond
+// oblige à recalculer tous les flous d'arrière-plan posés dessus, en 3840×2160 sur un
+// UHD 630. 30 images par seconde suffisent à un mouvement de 20 s.
+const IMAGES_FOND_PAR_SECONDE = 30;
+
+// Position (fractions de l'écran), rayon (fraction de la largeur) et éclat (0–1) de la
+// nappe i au temps s, en secondes de fond. Pure : les tests la parcourent.
+function mouvementNappe(choix, i, s) {
+  const n = NAPPES[i];
+  const m = MOUVEMENTS[choix];
+  if (!m) return { x: n.x, y: n.y, r: n.r, eclat: 1 };
+  const onde = (axe, f = Math.sin) => f(2 * Math.PI * s / m[axe].periodes[i] + n.phase) * m[axe].amplitude;
+  let y, eclat = 1;
+  if (m.y.montee) {
+    const p = ((s / m.y.periodes[i] + n.phase / (2 * Math.PI)) % 1 + 1) % 1;
+    y = 1.2 - p * 1.4;
+    // Elle s'éteint en sortant par le haut et se rallume en bas : sans ça, la nappe
+    // sautait d'un bord à l'autre à chaque tour.
+    eclat = Math.min(1, 3 * Math.sin(Math.PI * p));
+  } else {
+    y = n.y + onde("y", choix === "ocean" ? Math.sin : Math.cos);
+  }
+  return { x: n.x + onde("x"), y, r: n.r * (1 + onde("rayon")), eclat };
+}
+function periodesFond(choix) {
+  const m = MOUVEMENTS[choix];
+  return m ? Object.values(m).flatMap(axe => axe.periodes) : [];
+}
+window.hubFond = { mouvementNappe, periodesFond, LENTEUR_AMBIANT, IMAGES_FOND_PAR_SECONDE };
 
 const toile = $("fond");
 const ctx = toile.getContext("2d");
@@ -309,6 +354,10 @@ let accentCible = COULEURS_MODE.tv;
 let accentCourant = [...COULEURS_MODE.tv];
 let fondPret = false;
 let boucleFond = false;
+// Temps du fond, avancé image par image : passer en ambiant ralentit sans faire sauter
+// les nappes (multiplier l'horloge murale par la lenteur les téléportait).
+let horlogeFond = 0;
+let dernierDessin = null;
 let etoiles;
 
 function fondChoisi() {
@@ -318,48 +367,54 @@ function fondChoisi() {
 }
 
 function dessinerFond(temps) {
+  // Une image sur deux à 60 Hz ; la marge de 4 ms évite de tomber à 20 images par
+  // seconde quand la synchro arrive une milliseconde en avance.
+  if (fondPret && dernierDessin !== null && temps - dernierDessin < 1000 / IMAGES_FOND_PAR_SECONDE - 4) {
+    requestAnimationFrame(dessinerFond);
+    return;
+  }
   const choix = fondChoisi();
   const theme = racine.dataset.theme === "clair" ? "clair" : "sombre";
   const palette = (PALETTES[choix] || PALETTES.aurore)[theme];
   const reduit = profil().animations === "reduites" || matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const lent = document.body.classList.contains("ambiant") ? .4 : 1;
-  const s = reduit ? 0 : (temps / 1000) * lent;
+  const lent = document.body.classList.contains("ambiant") ? LENTEUR_AMBIANT : 1;
+  // Plafonné : après une pause (page cachée, calque), on reprend là où on était.
+  const ecoule = dernierDessin === null ? 0 : Math.min(temps - dernierDessin, 100);
+  dernierDessin = temps;
+  if (!reduit) horlogeFond += ecoule / 1000 * lent;
+  const s = reduit ? 0 : horlogeFond;
   const w = toile.width, h = toile.height;
 
-  accentCourant = melange(accentCourant, accentCible, reduit ? 1 : .03);
+  // Même vitesse de fondu de la teinte qu'à 60 images par seconde (3 % par image).
+  accentCourant = melange(accentCourant, accentCible, reduit ? 1 : 1 - Math.pow(.97, ecoule / (1000 / 60)));
   ctx.globalCompositeOperation = "source-over";
   ctx.fillStyle = palette.base;
   ctx.fillRect(0, 0, w, h);
   ctx.globalCompositeOperation = theme === "clair" ? "source-over" : "lighter";
 
   palette.nappes.forEach((teinteBase, i) => {
-    const n = NAPPES[i];
-    let x, y;
-    if (choix === "ocean") {
-      x = (n.x + Math.sin(s * n.vx * 3 + n.phase) * .3) * w;
-      y = (n.y + Math.sin(s * .15 + n.phase) * .05) * h;
-    } else if (choix === "braise") {
-      x = (n.x + Math.sin(s * n.vx * 5 + n.phase) * .1) * w;
-      y = ((n.y - (s * .012 * (i + 1)) % 1.4 + 1.4) % 1.4 - .2) * h;
-    } else {
-      x = (n.x + Math.sin(s * n.vx * 6 + n.phase) * .16) * w;
-      y = (n.y + Math.cos(s * n.vy * 6 + n.phase) * .14) * h;
-    }
-    const r = (choix === "minimal" ? 1.1 : n.r) * w * (1 + Math.sin(s * .3 + n.phase) * .08);
-    const teinter = profil().teinteMode && choix !== "minimal";
+    const minimal = choix === "minimal";
+    const m = mouvementNappe(choix, i, s);
+    const x = m.x * w;
+    const y = minimal ? -h * .3 : m.y * h;
+    const r = (minimal ? 1.1 : m.r) * w;
+    const teinter = profil().teinteMode && !minimal;
     const teinte = teinter ? melange(teinteBase, accentCourant, i === 0 ? .75 : .25) : teinteBase;
-    const force = theme === "clair" ? (i === 0 ? .6 : .5) : (i === 3 ? .35 : i === 0 ? .34 : .2);
-    const g = ctx.createRadialGradient(x, choix === "minimal" ? -h * .3 : y, 0, x, choix === "minimal" ? -h * .3 : y, r);
-    g.addColorStop(0, `rgba(${teinte.map(Math.round).join(",")},${choix === "minimal" ? (theme === "clair" ? .9 : .5) : force})`);
+    const force = (theme === "clair" ? (i === 0 ? .6 : .5) : (i === 3 ? .35 : i === 0 ? .34 : .2)) * m.eclat;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, `rgba(${teinte.map(Math.round).join(",")},${minimal ? (theme === "clair" ? .9 : .5) : force})`);
     g.addColorStop(1, `rgba(${teinte.map(Math.round).join(",")},0)`);
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, w, h);
   });
+  // Le scintillement suit le fond : une animation CSS à part, sur un calque 4K, faisait
+  // recalculer les flous du dessus à chaque image, en plus de celles du fond.
+  if (etoiles && !etoiles.hidden) etoiles.style.opacity = reduit ? "" : .775 - .225 * Math.cos(2 * Math.PI * s / 14);
 
   fondPret = true;
-  // Un fond immobile n'a pas besoin de redessiner soixante fois par seconde.
+  // Un fond immobile n'a pas besoin de redessiner trente fois par seconde.
   const immobile = reduit || choix === "minimal" || choix === "photos";
-  if (immobile && Math.abs(accentCourant[0] - accentCible[0]) < 1) { boucleFond = false; return; }
+  if (immobile && Math.abs(accentCourant[0] - accentCible[0]) < 1) { boucleFond = false; dernierDessin = null; return; }
   requestAnimationFrame(dessinerFond);
 }
 function relancerFond() {
