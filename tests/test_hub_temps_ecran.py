@@ -3,7 +3,9 @@
     python3 -m unittest tests/test_hub_temps_ecran.py
 """
 
+import contextlib
 import importlib.machinery
+import io
 import importlib.util
 import json
 import tempfile
@@ -238,6 +240,80 @@ class Suivi(unittest.TestCase):
         p.wait = wait
         self.suivre(h, p)
         self.assertLessEqual(te.lire_etat(self.c["etat"])["profils"]["lea"][MARDI]["secondes"], 60)
+
+
+class ReglagesIllisibles(unittest.TestCase):
+    """Abîmer reglages.json ne doit plus lever les limites de l'enfant, ni en imposer au parent."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        d = Path(self._tmp.name)
+        self.c = {"etat": d / "temps-ecran.json", "reglages": d / "reglages.json"}
+        self.avertissements = []
+        # Les messages attendus sur la sortie d'erreur n'encombrent pas le rapport des tests.
+        self._stderr = contextlib.redirect_stderr(io.StringIO())
+        self._stderr.__enter__()
+
+    def tearDown(self):
+        self._stderr.__exit__(None, None, None)
+        self._tmp.cleanup()
+
+    def ecrire(self, actif, texte=None):
+        self.c["reglages"].write_text(texte if texte is not None else json.dumps({"profilActif": actif, "profils": [
+            {"id": "sam", "langue": "en"},
+            {"id": "lea", "tempsEcran": {"limites": [None] * 7, "fin": "21:00"}}]}))
+
+    def lancer_a(self, heure):
+        lances = []
+        code = te.suivre("tv", self.c, horloge=Horloge(f"{MARDI} {heure}"), pas=15, demarrer=lambda: lances.append(1) or FauxProcessus(0, Horloge(f"{MARDI} {heure}")),
+                         avertir=lambda *a: self.avertissements.append(a[0]), terminer=lambda *a: None)
+        return code, lances
+
+    def test_enfant_garde_ses_limites_si_le_fichier_s_abime(self):
+        self.ecrire("lea")
+        self.assertEqual(te.profil_et_regles(self.c)[0], "lea")
+        for abime in ("{ tronqué", "[]", '{"profils": "x"}', ""):
+            self.ecrire(None, abime)
+            code, lances = self.lancer_a("21:30")
+            self.assertEqual((code, lances), (te.CODE_TEMPS_ECOULE, []), abime)
+
+    def test_enfant_garde_ses_limites_si_le_fichier_disparait(self):
+        self.ecrire("lea")
+        te.profil_et_regles(self.c)
+        self.c["reglages"].unlink()
+        self.assertEqual(self.lancer_a("21:30")[0], te.CODE_TEMPS_ECOULE)
+
+    def test_fichier_illisible_par_ses_droits(self):
+        import os
+        if os.geteuid() == 0:
+            self.skipTest("root lit tout")
+        self.ecrire("lea")
+        te.profil_et_regles(self.c)
+        self.c["reglages"].chmod(0)
+        self.assertEqual(self.lancer_a("21:30")[0], te.CODE_TEMPS_ECOULE)
+
+    def test_parent_sans_limite_n_est_pas_enferme(self):
+        self.ecrire("sam")
+        te.profil_et_regles(self.c)
+        self.ecrire(None, "{ tronqué")
+        self.assertEqual(te.profil_et_regles(self.c), ("sam", None, "en"))
+        code, lances = self.lancer_a("21:30")
+        self.assertEqual((code, lances), (0, [1]))
+
+    def test_sans_regle_connue_le_hub_ne_bloque_pas(self):
+        # Compromis documenté : rien de connu à appliquer, on ne l'invente pas.
+        self.ecrire(None, "{ tronqué")
+        self.assertEqual(te.profil_et_regles(self.c), ("inconnu", None, "fr"))
+        self.assertEqual(self.lancer_a("21:30")[1], [1])
+
+    def test_la_copie_suit_les_changements_et_reste_privee(self):
+        self.ecrire("lea")
+        te.profil_et_regles(self.c)
+        self.ecrire("sam")
+        te.profil_et_regles(self.c)
+        secours = te.chemin_secours(self.c)
+        self.assertEqual(json.loads(secours.read_text())["profilActif"], "sam")
+        self.assertEqual(secours.stat().st_mode & 0o777, 0o600)
 
 
 class Avertir(unittest.TestCase):
