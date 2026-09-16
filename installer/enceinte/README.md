@@ -60,7 +60,9 @@ aux comptes gratuits : l'appareil apparaît, mais la lecture échoue
 (`PremiumAccountRequired` dans le journal).
 
 Risque connu : Spotify change parfois son protocole et casse librespot jusqu'à la version
-suivante. Monter de version = changer l'URL et l'empreinte dans `hub-installer.sh`.
+suivante. Monter de version = changer l'URL, l'empreinte et `LIBRESPOT_VERSION` (version
+et commit, sans la date de compilation) dans `hub-installer.sh`, puis relancer la preuve :
+elle lit ces trois valeurs dans l'installateur.
 
 ### AirPlay son : shairport-sync 4.3.7 d'Ubuntu, AirPlay 1
 
@@ -182,6 +184,12 @@ docker run --rm -v "$PWD":/depot:ro hub-enceinte-preuve bash /depot/installer/en
 ```
 
 - [x] le .deb raspotify téléchargé correspond à l'empreinte ; `librespot 0.8.0 9c7d7561`
+      — **mal relevé** : la ligne complète est `librespot 0.8.0 9c7d7561 (Built on
+      2026-07-18, Build ID: PxD46HQ7, Profile: release)`. La preuve l'affichait sans la
+      comparer, l'installateur exigeait la ligne courte et a refusé ce binaire sur le
+      M720q le 17/09/2026. Depuis, la preuve échoue si la vérification de
+      `hub-installer.sh` (`librespot_attendu`, testée par
+      `tests/test_hub_installer_librespot.py`) refuse le binaire.
 - [x] `systemd-analyze verify --user` sur les quatre unités, sans erreur
 - [x] `hub-enceinte lancer spotify|airplay|ecran` : librespot écoute 5390/tcp,
       shairport-sync 5000/tcp, UxPlay 7001/tcp
