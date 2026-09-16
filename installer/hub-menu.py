@@ -82,6 +82,7 @@ def chemins():
         "telecommande": execution / "telecommande.json",
         "telecommande-appairage": execution / "telecommande-appairage",
         "lecture": execution / "lecture.json",
+        "recopie-code": execution / "recopie-code.json",
     }
 
 
@@ -835,6 +836,48 @@ def etat_lecture(c):
     return etat
 
 
+# ── Recopie d'écran : le code à saisir sur l'iPhone ou le Mac ─────────────
+# hub-enceinte protège la recopie (UxPlay) par un code à 4 chiffres. Le menu ne connaît
+# ni son fichier ni ses options : il demande à hub-enceinte, avec des arguments fixés
+# ici, et ne transmet à la page qu'une valeur qui a la forme d'un code.
+CODE_RECOPIE = re.compile(r"[0-9]{4}")
+
+
+def code_recopie(nouveau=False, executer=subprocess.run):
+    """Le code actuel (hub-enceinte le crée au besoin), ou un nouveau : tous les
+    appareils devront le ressaisir. None si hub-enceinte ne répond pas un code."""
+    commande = ["hub-enceinte", "code"] + (["nouveau"] if nouveau else [])
+    try:
+        r = executer(commande, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    sortie = (r.stdout or "").strip() if getattr(r, "returncode", 1) == 0 else ""
+    return sortie if CODE_RECOPIE.fullmatch(sortie) else None
+
+
+def recopie_permise(executer=subprocess.run):
+    """hub-enceinte actif ecran : 0 permise, 1 coupée (réglage, ou temps d'écran du
+    profil) ; None si on n'a pas pu le demander."""
+    try:
+        r = executer(["hub-enceinte", "actif", "ecran"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return {0: True, 1: False}.get(getattr(r, "returncode", None))
+
+
+def etat_code_recopie(c, maintenant=None):
+    """Pendant qu'un appareil demande à recopier, hub-enceinte publie le code à afficher
+    sur la TV ; relu chaque seconde, comme lecture.json. None hors appairage."""
+    donnees = lire_json(c.get("recopie-code") or Path(c["execution"]) / "recopie-code.json")
+    if not isinstance(donnees, dict):
+        return None
+    code, jusqua = donnees.get("code"), donnees.get("jusqua")
+    if not isinstance(code, str) or not CODE_RECOPIE.fullmatch(code) \
+            or not isinstance(jusqua, (int, float)) or isinstance(jusqua, bool):
+        return None
+    return {"code": code, "jusqua": jusqua} if jusqua > (maintenant or time.time()) else None
+
+
 def reglage_enceinte(donnees):
     enceinte = ((donnees or {}).get("systeme") or {}).get("enceinte") if isinstance(donnees, dict) else None
     return enceinte if isinstance(enceinte, dict) else {}
@@ -1075,6 +1118,7 @@ def lancer():
                 "avatars": avatars(),
                 "telecommande": etat_telecommande(c),
                 "lecture": etat_lecture(c),
+                "recopieCode": etat_code_recopie(c),
                 "minuteurFin": minuteur_en_cours(c),
                 "reprises": reprises_kodi(Path.home() / ".kodi"),
                 "services": services_disponibles(),
@@ -1116,6 +1160,7 @@ def lancer():
             self.suivre_si_en_cours()
             GLib.timeout_add_seconds(2, self.surveiller_telecommande)
             self.lecture = initial["lecture"]
+            self.recopie_code = initial["recopieCode"]
             self.reglages_enceinte = initial["reglages"]
             # Chaque seconde : un bandeau « en cours de lecture » en retard de deux
             # secondes sur le téléphone se remarque.
@@ -1149,6 +1194,10 @@ def lancer():
             return True
 
         def surveiller_lecture(self):
+            code = etat_code_recopie(c)
+            if code != self.recopie_code:
+                self.recopie_code = code
+                self.vers_page({"type": "recopie-appairage", "etat": code})
             etat = etat_lecture(c)
             if etat != self.lecture:
                 recopie_finie = bool(self.lecture and self.lecture.get("ecran")) and not (etat and etat.get("ecran"))
@@ -1213,6 +1262,9 @@ def lancer():
                 if self.appairage_affiche:
                     # Le service publie l'ouverture en quelques secondes : on relit sans attendre le tour suivant.
                     GLib.timeout_add_seconds(1, lambda: self.surveiller_telecommande() and False)
+            elif genre == "recopie-code":
+                nouveau = message.get("nouveau") is True
+                self.en_fond(lambda: {"type": "recopie-code", "code": code_recopie(nouveau), "permise": recopie_permise(), "nouveau": nouveau})
             elif genre == "pin-verifier":
                 demande, profils, code = message.get("demande"), message.get("profils"), message.get("code")
                 self.en_fond(lambda: {"type": "pin", "demande": demande, **verifier_pin(c, profils, code)})

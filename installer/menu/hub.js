@@ -10,6 +10,7 @@
 //   → { type: "minuteur", minutes }      programmer (ou annuler avec 0) l'extinction
 //   → { type: "infos" }                  machine, adresse IP, disque…
 //   → { type: "appairage", affiche }     l'écran d'appairage de la télécommande est (ou n'est plus) à l'écran
+//   → { type: "recopie-code", nouveau }  le code de recopie d'écran (nouveau : en tirer un autre)
 // Python répond en appelant window.hub.recevoir({ type, ... }), et y relaie aussi les
 // état de l'enceinte réseau ({ type: "lecture", etat: {source, etat, titre, artiste, pochette, ecran…} | null })
 // et les commandes vocales de hub-voix ({ type: "commande", nom } / { type: "voix", ... }).
@@ -2046,6 +2047,64 @@ function recevoirLecture(etat) {
   rendreLecture();
 }
 
+// ── Recopie d'écran : code ────────────────────────────────────────────────
+// hub-enceinte protège la recopie par un code à 4 chiffres. Réglages → Enceinte le
+// montre et permet d'en tirer un autre ; pendant qu'un appareil le demande, hub-menu
+// relaie { type: "recopie-appairage", etat: { code, jusqua } | null } et le code
+// s'affiche en grand, par-dessus tout.
+const recopie = { code: undefined, permise: null, demandeLe: 0, confirmer: false, appairage: INITIAL.recopieCode || null };
+
+function demanderCodeRecopie(nouveau = false) {
+  recopie.demandeLe = Date.now();
+  if (!PONT) { recopie.code = null; return; }
+  envoyer({ type: "recopie-code", nouveau });
+}
+function recevoirCodeRecopie(message) {
+  recopie.code = typeof message.code === "string" && /^[0-9]{4}$/.test(message.code) ? message.code : null;
+  recopie.permise = typeof message.permise === "boolean" ? message.permise : null;
+  if (message.nouveau && recopie.code) annoncer(t("enceinte.code.change", { code: recopie.code }));
+  if (pile.at(-1) === "reglages" && sectionCourante === "enceinte") rendreSection();
+}
+
+function lignesCodeRecopie(e) {
+  // Relu à l'ouverture de la section, pas à chaque option touchée.
+  if (Date.now() - recopie.demandeLe > 10000) demanderCodeRecopie();
+  const lignes = [];
+  if (e.ecran !== false && recopie.permise === false) lignes.push(el("div", { class: "aide recopie-coupee" }, t("enceinte.ecran.profil")));
+  const valeur = recopie.code === undefined ? "…" : recopie.code || t("enceinte.code.indisponible");
+  const boutons = recopie.confirmer
+    ? [el("button", { class: "option", "data-nav": true, "data-cle": "recopie-code-annuler", onclick: () => { recopie.confirmer = false; rendreSection(); } }, t("annuler")),
+      el("button", { class: "option choisie", "data-nav": true, "data-cle": "recopie-code-oui",
+        onclick: () => { recopie.confirmer = false; recopie.code = undefined; demanderCodeRecopie(true); rendreSection(); } }, t("enceinte.code.oui"))]
+    : [el("button", { class: "option", "data-nav": !!recopie.code, "data-cle": "recopie-code-changer", disabled: !recopie.code,
+        onclick: () => { recopie.confirmer = true; rendreSection(); } }, t("enceinte.code.changer"))];
+  lignes.push(rangee(el("span", { class: "code-recopie" }, t("enceinte.code", { code: valeur })),
+    t(recopie.confirmer ? "enceinte.code.confirmer" : "enceinte.code.detail"), el("div", { class: "options" }, boutons), false, true));
+  return lignes;
+}
+
+function recevoirAppairageRecopie(etat) {
+  recopie.appairage = etat && typeof etat.code === "string" && /^[0-9]{4}$/.test(etat.code) ? etat : null;
+  majAppairageRecopie();
+}
+function majAppairageRecopie() {
+  const etat = recopie.appairage && recopie.appairage.jusqua * 1000 > Date.now() ? recopie.appairage : null;
+  let panneau = $("recopie-appairage");
+  if (!etat) { if (panneau) panneau.hidden = true; return; }
+  if (!panneau) {
+    panneau = el("div", { class: "recopie-appairage", id: "recopie-appairage", role: "status" },
+      el("div", { class: "recopie-titre", id: "recopie-appairage-titre" }),
+      el("div", { class: "recopie-saisir", id: "recopie-appairage-saisir" }),
+      el("div", { class: "recopie-chiffres", id: "recopie-appairage-code" }));
+    document.body.append(panneau);
+  }
+  $("recopie-appairage-titre").textContent = t("recopie.titre");
+  $("recopie-appairage-saisir").textContent = t("recopie.saisir");
+  $("recopie-appairage-code").textContent = etat.code;
+  panneau.hidden = false;
+}
+setInterval(majAppairageRecopie, 1000);
+
 // Réglages → Enceinte réseau. Commun au HUB : c'est la même enceinte pour toute la maison.
 function contenuEnceinte() {
   const e = reglages.systeme.enceinte;
@@ -2055,6 +2114,7 @@ function contenuEnceinte() {
     bascule("spotify", "enceinte.spotify", "enceinte.spotify.detail"),
     bascule("airplay", "enceinte.airplay", "enceinte.airplay.detail"),
     bascule("ecran", "enceinte.ecran", "enceinte.ecran.detail"),
+    ...lignesCodeRecopie(e),
     rangee(t("enceinte.nom"), t("enceinte.nom.detail", { nom: e.nom || "HUB" }), el("div", { class: "options" },
       el("button", {
         class: "option", "data-nav": true, "data-cle": "enceinte-nom",
@@ -2070,6 +2130,7 @@ function contenuEnceinte() {
 }
 
 setInterval(rendreLecture, 5000);
+majAppairageRecopie();
 // Au retour de Kodi, la musique jouait peut-être déjà : on l'affiche sans l'annoncer.
 lecture = INITIAL.lecture?.source ? INITIAL.lecture : null;
 rendreLecture();
@@ -2088,6 +2149,8 @@ window.hub = {
       case "lecture": return recevoirLecture(message.etat);
       case "maj": return recevoirMiseAJour(message);
       case "pin": return recevoirCode(message);
+      case "recopie-code": return recevoirCodeRecopie(message);
+      case "recopie-appairage": return recevoirAppairageRecopie(message.etat);
       case "texte":
         // Texte tapé sur le téléphone : il remplit la saisie en cours, s'il y en a une.
         if (saisie && typeof message.texte === "string") { saisie.valeur = message.texte.slice(0, 32); majSaisie(); }
