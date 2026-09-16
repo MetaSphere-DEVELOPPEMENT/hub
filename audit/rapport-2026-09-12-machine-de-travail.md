@@ -1,6 +1,10 @@
 # Audit matériel — samedi 12 septembre 2026, 00h52
 
-_Mesuré sur `boudine-ThinkCentre-M720q`. Aucune installation, aucune modification._
+_Mesuré sur `(nom d'hôte masqué)`. Aucune installation, aucune modification._
+
+_Publié le 17 septembre 2026 avec les identifiants masqués à la main (nom du Wi-Fi,_
+_adresses MAC, IPv6, UUID, chemins personnels) : ils localisent la maison sans rien_
+_apprendre sur la machine. Les mesures sont inchangées._
 
 ## Système
 
@@ -66,17 +70,17 @@ _Mesuré sur `boudine-ThinkCentre-M720q`. Aucune installation, aucune modificati
 ## Réseau
 
   eno1             DOWN           
-  wlx8c883bc17904  UP             192.168.1.40/24 2a01:e0a:f54:70:c79f:61ac:5ae6:efa5/64 2a01:e0a:f54:70:5c85:60a3:c1bb:861e/64 2a01:e0a:f54:70:4ee6:158e:1401:4987/64 fe80::77d7:45b7:82bb:35e3/64 
-  br-060ae02bc718  UP             172.18.0.1/16 fe80::743f:ffff:fe52:1afe/64 
+  wlx(masqué)      UP             192.168.x.x/24 (masquée) 3 × IPv6 globale/64 (masquées) fe80::(masquée)/64 
+  br-060ae02bc718  UP             172.18.0.1/16 fe80::(masquée)/64 
   docker0          DOWN           172.17.0.1/16 
-  veth5307bdd@if2  UP             fe80::5c95:caff:fecc:cb8d/64 
-  vetha70e2aa@if2  UP             fe80::fb:edff:fe2b:f7b9/64 
+  veth5307bdd@if2  UP             fe80::(masquée)/64 
+  vetha70e2aa@if2  UP             fe80::(masquée)/64 
 
   eno1 (filaire)             DÉBRANCHÉ
-  wlx8c883bc17904 (sans fil) branché
+  wlx(masqué)     (sans fil) branché
 
-  wlx8c883bc17904  IEEE 802.11  ESSID:"Freebox-5AF049"  
-            Mode:Managed  Frequency:2.462 GHz  Access Point: 22:66:CF:92:0F:54   
+  wlx(masqué)      IEEE 802.11  ESSID:"(masqué)"  
+            Mode:Managed  Frequency:2.462 GHz  Access Point: (masqué)   
             Bit Rate=26 Mb/s   Tx-Power=20 dBm   
             Link Quality=42/70  Signal level=-68 dBm  
 
@@ -97,7 +101,7 @@ _Mesuré sur `boudine-ThinkCentre-M720q`. Aucune installation, aucune modificati
 
   NAME        TYPE  FSTYPE      MOUNTPOINT
   sda         disk              
-  ├─sda1      part  exfat       /media/boudine/ECHANGE
+  ├─sda1      part  exfat       /media/(masqué)
   └─sda2      part  crypto_LUKS 
     └─travail crypt ext4        /mnt/ssd
   nvme0n1     disk              
@@ -110,7 +114,7 @@ _Mesuré sur `boudine-ThinkCentre-M720q`. Aucune installation, aucune modificati
   /dev/nvme0n1p1  1.1G  6.2M  1.1G   1% /boot/efi
 
   volumes chiffrés déclarés :
-    travail UUID=cc58e8ef-4b49-4e8f-8c6d-3f7f2863f00d none luks,nofail
+    travail UUID=(masqué) none luks,nofail
     (« nofail » = le démarrage continue si le volume ne s'ouvre pas)
   racine chiffrée           non
 
