@@ -48,7 +48,7 @@ La branche du dépôt est **`master`**, pas `main`.
   `known_hosts` — puis
   `"source": "git@github.com:MetaSphere-DEVELOPPEMENT/hub.git"`. Une URL HTTPS demanderait
   un jeton stocké en clair : à éviter.
-- **Le Mac sur le réseau local** : `"source": "ssh://samuel@mac.local/Volumes/Projets/projets/hub"`.
+- **Le Mac sur le réseau local** : `"source": "ssh://utilisateur@mon-mac.local/chemin/vers/hub"`.
 - **Un dépôt local** (essai) : `"source": "/srv/hub.git"`. S'il n'appartient pas à
   root, git refuse de le lire en root (« dubious ownership ») :
   `git config --system --add safe.directory /srv/hub.git`. Éprouvé en VM le 15/09/2026.
