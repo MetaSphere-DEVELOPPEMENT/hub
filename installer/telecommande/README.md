@@ -51,9 +51,10 @@ systemctl --global enable hub-telecommande.service
   `/opt/hub-voix/venv/bin/python` et les modèles de `/opt/hub-voix/modeles`
   (`HUB_VOIX_DOSSIER`, `HUB_VOIX_PYTHON`, `HUB_VOIX_MODELES` pour forcer). Sans elle,
   la dictée répond « non installée » et tout le reste marche.
-- **Le menu doit afficher l'empreinte** `empreinteRacine` du fichier d'état à côté du
-  code (voir plus bas) : c'est ce que le téléphone compare avant de faire confiance
-  au certificat. Tant qu'il ne le fait pas : `hub-telecommande --empreinte`.
+- **Le menu doit afficher l'empreinte** `empreinteRacineCourte` du fichier d'état à côté
+  du code (voir plus bas) : c'est ce que le téléphone compare, dans ses propres réglages,
+  avant de faire confiance au certificat. Tant qu'il ne le fait pas :
+  `hub-telecommande --empreinte`.
 - Aucune dépendance à installer : `python3`, `openssl`, `wpctl` (paquet
   `wireplumber`) et `gnome-session-quit` sont déjà sur Ubuntu Desktop.
 
@@ -132,21 +133,42 @@ Créée au premier démarrage dans `~/.config/hub/telecommande-tls/` (dossier 07
 | `hub.key` (0600) · `hub.crt` | 397 jours, `serverAuth`, SAN : IP du HUB, `hub.local`, `nom-machine.local` |
 | `hub.json` | adresse, noms, échéance, empreinte de la racine qui l'a signé |
 
-- **Contraintes de nom critiques** sur la racine : 10/8, 172.16/12, 192.168/16,
-  169.254/16, 127/8 et `.local`. Même volée, la clé ne signe rien qu'un téléphone
-  accepterait pour un site public (test : un certificat `banque.example` signé par la
-  racine est refusé, « permitted subtree violation »).
-- Le certificat du HUB est **réémis tout seul** si l'adresse DHCP ou le nom change,
-  ou 30 jours avant l'échéance (vérifié toutes les heures) ; la racine, seule chose
-  installée sur les téléphones, ne change pas. Adresse non privée, horloge avant
-  2026 ou openssl absent : pas de HTTPS, la télécommande http continue.
+- **Contraintes de nom critiques** sur la racine, réduites au strict nécessaire :
+  l'adresse actuelle du HUB **en /32**, `hub.local` et `nom-machine.local`. Pourquoi :
+  `racine.key` est lisible par tout programme de la session (Kodi, UxPlay, Chrome…) ;
+  volée, l'ancienne racine (10/8, 172.16/12, 192.168/16, 169.254/16, 127/8, `.local`)
+  permettait d'intercepter le HTTPS du téléphone vers **toute adresse privée de
+  n'importe quel réseau** (box, NAS, wifi d'hôtel). Volée aujourd'hui, elle ne permet
+  d'usurper que le HUB — ce que `hub.key`, lisible pareil, permet déjà. Tests : un
+  certificat signé par la racine pour `banque.example`, `192.168.1.1`, `10.0.0.5` ou
+  `nas.local` est refusé (« permitted subtree violation »).
+- Écarté : supprimer `racine.key` après signature. Le certificat du HUB (397 jours)
+  ne pourrait plus être renouvelé sans réinstaller la racine, et `hub.key` reste de
+  toute façon exposée.
+- **Le prix : une autre adresse ou un autre nom de machine = une nouvelle racine**, à
+  réinstaller sur chaque téléphone (et retirer l'ancienne). **Réserver l'adresse du
+  HUB en DHCP sur la box** (bail fixe) évite de le refaire.
+- **Migration** : au démarrage, le service relit les contraintes de la racine existante
+  (`openssl x509 -text`) ; si elles diffèrent de celles attendues (racine d'avant le
+  17/09/2026, adresse ou nom changés, racine sans contraintes), il **détruit l'ancienne
+  clé, crée une nouvelle racine** et réémet le certificat. Journal : « autorité locale
+  remplacée ». **Après cette mise à jour, il faut donc réinstaller le certificat sur
+  chaque téléphone une fois** et supprimer l'ancien « HUB autorité locale » de ses
+  réglages.
+- Le certificat du HUB est **réémis tout seul** 30 jours avant l'échéance (vérifié
+  toutes les heures) ; la racine, seule chose installée sur les téléphones, ne change
+  pas alors. Adresse non privée, horloge avant 2026 ou openssl absent : pas de HTTPS, la
+  télécommande http continue.
 - 397 jours : sous la limite d'Apple (825 j) et sous celle des autorités publiques
   (398 j), si un navigateur l'étendait un jour aux racines installées à la main.
 - Réinitialiser : arrêter le service, supprimer le dossier, relancer — puis
   réinstaller la nouvelle racine sur chaque téléphone (et retirer l'ancienne).
 - Le téléchargement de la racine passe en **http** : quelqu'un sur le wifi pourrait
-  la remplacer. D'où l'empreinte SHA-256 affichée sur la TV (fichier d'état), à
-  comparer avec celle que montre le téléphone avant d'activer la confiance.
+  la remplacer. D'où l'empreinte SHA-256 affichée **sur la TV** (fichier d'état), à
+  comparer avec celle que montrent **les réglages du téléphone** (détails du certificat
+  téléchargé) avant d'activer la confiance. La page du téléphone ne l'affiche plus, et
+  `/api/certificat` ne la donne plus : venue par le même canal http que le certificat,
+  elle aurait été remplacée avec lui (vérification circulaire, audit du 17/09/2026).
 
 ## Révoquer un téléphone
 
@@ -187,7 +209,7 @@ que `hub-voix`). `Input.SendText` n'a d'effet que si un clavier est ouvert dans 
 | `POST /photo-profil` (corps JPEG brut, `Content-Type: image/jpeg`) | oui | 200 `{"ok":true,"fichier":"telephone-AAAAMMJJ-HHMMSS.jpg"}` · 400 pas un JPEG · 413 > 2 Mio · 415 |
 | `GET /manifest.webmanifest`, `/icone-32.png`, `/icone-192.png`, `/icone-512.png`, `/apple-touch-icon.png` | non | manifeste, icônes |
 | `GET /hub-racine.crt` | non | la racine en DER (`application/x-x509-ca-cert`) · 404 si HTTPS désactivé |
-| `GET /api/certificat` | non | `{"disponible","securise","https":"https://nom:8791/","empreinte"}` |
+| `GET /api/certificat` | non | `{"disponible","securise","https":"https://nom:8791/"}` (pas d'empreinte : elle ne fait foi que sur la TV) |
 | `GET /sonde` (https) | non | 204 vide, lisible en `no-cors` : prouve que le téléphone fait confiance |
 | `POST /api/transfert` `{}` | oui | `{"url":"https://nom:8791/#transfert=…"}` |
 | `POST /api/appairer` `{"transfert":"…","nom":…}` (https) | non | comme avec le code · 403 ticket faux, usé, expiré ou reçu en http |
@@ -212,17 +234,21 @@ d'adresse, **supprimé** quand le service s'arrête ou n'a pas d'adresse :
 {"url": "http://192.168.1.40:8790/", "code": "123456", "expire": 1789308639458,
  "telephones": 1, "appairageLe": 1789308300000,
  "https": "https://192.168.1.40:8791/",
- "empreinteRacine": "3A:9F:…:C2"}
+ "empreinteRacine": "3A:9F:…:C2",
+ "empreinteRacineCourte": "3A9F 12C0 4481 7BE2"}
 ```
 
 `expire` et `appairageLe` en millisecondes epoch ; `telephones` = nombre de
 téléphones appairés ; `appairageLe` change quand un téléphone vient d'être relié
 (pour afficher « Téléphone relié » sur la TV). Le menu doit relire le fichier quand il
 change (Gio.FileMonitor, ou toutes les 2 s tant que l'écran est affiché) et masquer
-QR code et code si le fichier est absent. `https` et `empreinteRacine` valent `null`
-quand le HTTPS n'est pas disponible ; sinon **afficher l'empreinte** (en petit, sous
-le code, par exemple en 8 groupes de 4 paires) : le téléphone la compare avant de
-faire confiance au certificat.
+QR code et code si le fichier est absent. `https`, `empreinteRacine` et
+`empreinteRacineCourte` valent `null` quand le HTTPS n'est pas disponible ; sinon
+**afficher `empreinteRacineCourte`** sous le code, telle quelle (les 8 premières paires
+de l'empreinte SHA-256, 4 groupes de 4 caractères hexadécimaux majuscules), avec
+« Empreinte du certificat (début) » : le téléphone la compare à celle de ses réglages
+avant de faire confiance au certificat. 64 bits suffisent contre quelqu'un du wifi et se
+lisent d'un canapé ; `empreinteRacine` (32 paires séparées par `:`) reste disponible.
 
 ### `qrcode.js`
 

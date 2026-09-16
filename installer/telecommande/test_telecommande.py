@@ -374,6 +374,8 @@ class AppairageHTTP(AvecServeur):
         self.assertEqual(etat2["code"], self.service.appairage.code)
         self.assertNotEqual(etat2["code"], etat["code"])
         self.assertEqual(etat2["telephones"], 1)
+        self.assertEqual((etat2["https"], etat2["empreinteRacine"], etat2["empreinteRacineCourte"]),
+                         (None, None, None), "sans HTTPS, pas d'empreinte")
 
 
 class Commandes(AvecServeur):
@@ -548,6 +550,8 @@ class AutoriteLocaleTLS(AvecDossier):
                                 capture_output=True, text=True, check=True).stdout
         self.assertRegex(racine, r"Name Constraints: critical")
         self.assertIn("CA:TRUE, pathlen:0", racine)
+        # Le strict nécessaire : l'adresse du HUB et ses deux noms, rien d'autre.
+        self.assertEqual(a.contraintes(), {"IP:192.168.1.40/255.255.255.255", "DNS:hub.local", "DNS:salon.local"})
         self.assertRegex(a.empreinte(), r"^([0-9A-F]{2}:){31}[0-9A-F]{2}$")
 
     def test_duree_du_certificat_sous_les_limites_d_apple(self):
@@ -563,20 +567,24 @@ class AutoriteLocaleTLS(AvecDossier):
         verifie = subprocess.run(["openssl", "verify", "-CAfile", str(a.racine_crt), "-purpose", "sslserver",
                                   str(a.crt)], capture_output=True, text=True)
         self.assertEqual(verifie.returncode, 0, verifie.stderr)
-        # La racine signe un certificat pour un site public : il doit être refusé.
+        # La clé racine volée signe pour un site public, pour une autre adresse privée
+        # (la box, un NAS, le réseau d'un hôtel) ou un autre nom .local : tout est refusé.
         d = self.dossier
-        (d / "faux.cnf").write_text("[req]\ndistinguished_name=dn\nprompt=no\n[dn]\nCN=banque.example\n"
-                                    "[v3]\nsubjectAltName=DNS:banque.example,IP:8.8.8.8\n")
-        subprocess.run(["openssl", "req", "-new", "-key", str(a.cle), "-config", str(d / "faux.cnf"),
-                        "-out", str(d / "faux.csr")], check=True, capture_output=True)
-        subprocess.run(["openssl", "x509", "-req", "-in", str(d / "faux.csr"), "-CA", str(a.racine_crt),
-                        "-CAkey", str(a.racine_cle), "-set_serial", "7", "-days", "2",
-                        "-extfile", str(d / "faux.cnf"), "-extensions", "v3", "-out", str(d / "faux.crt")],
-                       check=True, capture_output=True)
-        refuse = subprocess.run(["openssl", "verify", "-CAfile", str(a.racine_crt), str(d / "faux.crt")],
-                                capture_output=True, text=True)
-        self.assertNotEqual(refuse.returncode, 0)
-        self.assertIn("permitted subtree violation", refuse.stdout + refuse.stderr)
+        for i, alternatifs in enumerate(("DNS:banque.example,IP:8.8.8.8", "IP:192.168.1.1",
+                                         "IP:10.0.0.5", "DNS:nas.local")):
+            cn = alternatifs.split(",")[0].split(":", 1)[1]
+            (d / "faux.cnf").write_text(f"[req]\ndistinguished_name=dn\nprompt=no\n[dn]\nCN={cn}\n"
+                                        f"[v3]\nsubjectAltName={alternatifs}\n")
+            subprocess.run(["openssl", "req", "-new", "-key", str(a.cle), "-config", str(d / "faux.cnf"),
+                            "-out", str(d / "faux.csr")], check=True, capture_output=True)
+            subprocess.run(["openssl", "x509", "-req", "-in", str(d / "faux.csr"), "-CA", str(a.racine_crt),
+                            "-CAkey", str(a.racine_cle), "-set_serial", str(7 + i), "-days", "2",
+                            "-extfile", str(d / "faux.cnf"), "-extensions", "v3", "-out", str(d / "faux.crt")],
+                           check=True, capture_output=True)
+            refuse = subprocess.run(["openssl", "verify", "-CAfile", str(a.racine_crt), str(d / "faux.crt")],
+                                    capture_output=True, text=True)
+            self.assertNotEqual(refuse.returncode, 0, alternatifs)
+            self.assertIn("permitted subtree violation", refuse.stdout + refuse.stderr, alternatifs)
 
     def test_reemission_seulement_si_necessaire_racine_conservee(self):
         horloge = Horloge(time.time())
@@ -585,12 +593,71 @@ class AutoriteLocaleTLS(AvecDossier):
         racine, serie = a.empreinte(), a.crt.read_bytes()
         self.assertFalse(a.preparer("192.168.1.40"))
         self.assertEqual(a.crt.read_bytes(), serie)
-        self.assertTrue(a.preparer("192.168.1.41"), "nouvelle adresse DHCP : nouveau certificat")
-        self.assertEqual(a.empreinte(), racine, "la racine installée sur les téléphones ne change pas")
         horloge.t += 370 * 86400
         self.assertTrue(a.a_renouveler())
+        self.assertTrue(a.preparer("192.168.1.40"), "échéance proche : nouveau certificat")
+        self.assertEqual(a.empreinte(), racine, "la racine installée sur les téléphones ne change pas")
+
+    def test_nouvelle_adresse_nouvelle_racine(self):
+        # Le prix de la racine /32 : un autre bail DHCP exige de réinstaller le certificat.
+        a = self.autorite()
+        a.preparer("192.168.1.40")
+        ancienne, ancienne_cle = a.empreinte(), a.racine_cle.read_bytes()
         self.assertTrue(a.preparer("192.168.1.41"))
-        self.assertEqual(a.empreinte(), racine)
+        self.assertNotEqual(a.empreinte(), ancienne)
+        self.assertNotEqual(a.racine_cle.read_bytes(), ancienne_cle, "l'ancienne clé est détruite")
+        self.assertEqual(a.contraintes(), {"IP:192.168.1.41/255.255.255.255", "DNS:hub.local", "DNS:salon.local"})
+        verifie = subprocess.run(["openssl", "verify", "-CAfile", str(a.racine_crt), "-purpose", "sslserver",
+                                  str(a.crt)], capture_output=True, text=True)
+        self.assertEqual(verifie.returncode, 0, verifie.stderr)
+
+    def test_ancienne_racine_trop_large_remplacee(self):
+        """Migration : une racine d'avant le 17/09/2026 (tout le privé et .local)."""
+        a = self.autorite()
+        self.chemins["tls"].mkdir(parents=True, mode=0o700)
+        d = self.dossier
+        (d / "ancienne.cnf").write_text("\n".join([
+            "[req]", "distinguished_name = dn", "prompt = no", "[dn]", "O = HUB", "CN = HUB autorité locale",
+            "[v3]", "basicConstraints = critical,CA:TRUE,pathlen:0", "keyUsage = critical,keyCertSign,cRLSign",
+            "nameConstraints = critical,@c", "[c]",
+            "permitted;IP.0 = 10.0.0.0/255.0.0.0", "permitted;IP.1 = 172.16.0.0/255.240.0.0",
+            "permitted;IP.2 = 192.168.0.0/255.255.0.0", "permitted;IP.3 = 169.254.0.0/255.255.0.0",
+            "permitted;IP.4 = 127.0.0.0/255.0.0.0", "permitted;DNS.0 = local", ""]))
+        subprocess.run(["openssl", "genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:P-256",
+                        "-out", str(a.racine_cle)], check=True, capture_output=True)
+        subprocess.run(["openssl", "req", "-x509", "-new", "-key", str(a.racine_cle), "-config", str(d / "ancienne.cnf"),
+                        "-extensions", "v3", "-days", "3650", "-out", str(a.racine_crt)], check=True, capture_output=True)
+        self.assertEqual(len(a.contraintes()), 6)
+        ancienne = a.empreinte()
+        # Un ancien service avait aussi émis son certificat, encore valable des mois.
+        a.fiche.write_text(json.dumps({"adresse": "192.168.1.40", "noms": T.noms_du_hub("salon"),
+                                       "expire": time.time() + 300 * 86400, "racine": ancienne}))
+        a.crt.write_text("ancien")
+        a.cle.write_text("ancienne")
+        self.assertTrue(a.preparer("192.168.1.40"))
+        self.assertNotEqual(a.empreinte(), ancienne)
+        self.assertEqual(a.contraintes(), {"IP:192.168.1.40/255.255.255.255", "DNS:hub.local", "DNS:salon.local"})
+        self.assertEqual(json.loads(a.fiche.read_text())["racine"], a.empreinte())
+        self.assertFalse(a.preparer("192.168.1.40"), "remplacée une fois, pas à chaque démarrage")
+
+    def test_openssl_en_panne_ne_detruit_pas_la_racine(self):
+        a = self.autorite()
+        a.preparer("192.168.1.40")
+        racine = a.racine_cle.read_bytes()
+        casse = self.autorite(openssl=str(self.dossier / "openssl-absent"))
+        with self.assertRaises(T.ErreurTLS):
+            casse.preparer("192.168.1.40")
+        self.assertEqual(a.racine_cle.read_bytes(), racine)
+
+    def test_racine_sans_contraintes_remplacee(self):
+        a = self.autorite()
+        self.chemins["tls"].mkdir(parents=True, mode=0o700)
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256",
+                        "-nodes", "-keyout", str(a.racine_cle), "-subj", "/CN=nue", "-days", "2",
+                        "-out", str(a.racine_crt)], check=True, capture_output=True)
+        self.assertIsNone(a.contraintes())
+        a.preparer("192.168.1.40")
+        self.assertEqual(len(a.contraintes()), 3)
 
     def test_refus_adresse_publique_horloge_fausse_openssl_absent(self):
         with self.assertRaises(T.ErreurTLS):
@@ -600,6 +667,42 @@ class AutoriteLocaleTLS(AvecDossier):
         with self.assertRaises(T.ErreurTLS):
             self.autorite(openssl="").preparer("192.168.1.40")
         self.assertFalse(self.chemins["tls"].exists() and any(self.chemins["tls"].glob("*.key")))
+
+
+class LectureDesContraintes(unittest.TestCase):
+    """Sans openssl : la lecture du texte qu'il imprime (OpenSSL 3 et LibreSSL)."""
+
+    OPENSSL3 = """        X509v3 extensions:
+            X509v3 Basic Constraints: critical
+                CA:TRUE, pathlen:0
+            X509v3 Name Constraints: critical
+                Permitted:
+                  IP:192.168.1.40/255.255.255.255
+                  DNS:hub.local
+                  DNS:salon.local
+            X509v3 Subject Key Identifier:
+                CA:72:97
+"""
+    LIBRESSL_ANCIENNE = """            X509v3 Name Constraints: critical
+                Permitted:
+                  IP:10.0.0.0/255.0.0.0
+                  DNS:local
+                Excluded:
+                  DNS:exclu.local
+
+            X509v3 Subject Key Identifier:
+"""
+
+    def test_lecture(self):
+        self.assertEqual(T.lire_contraintes(self.OPENSSL3),
+                         T.contraintes_attendues("192.168.1.40", ["hub.local", "salon.local"]))
+        self.assertEqual(T.lire_contraintes(self.LIBRESSL_ANCIENNE), {"IP:10.0.0.0/255.0.0.0", "DNS:local"})
+        self.assertIsNone(T.lire_contraintes("            X509v3 Basic Constraints: critical\n"))
+
+    def test_empreinte_courte(self):
+        empreinte = ":".join(f"{i:02X}" for i in range(0x3A, 0x3A + 32))
+        self.assertEqual(T.empreinte_courte(empreinte), "3A3B 3C3D 3E3F 4041")
+        self.assertIsNone(T.empreinte_courte(None))
 
 
 @unittest.skipUnless(shutil.which("openssl"), "openssl absent")
@@ -691,16 +794,20 @@ class ServiceHTTPS(AvecDossier):
                 if chemin not in ("/hub-racine.crt", "/api/certificat", "/", "/manifest.webmanifest"):
                     self.assertEqual(statut, 404, chemin)
 
-    def test_certificat_racine_servi_en_http_avec_empreinte(self):
+    def test_certificat_racine_servi_en_http_empreinte_seulement_pour_la_tv(self):
         statut, h, der = self.requete("GET", "/hub-racine.crt")
         self.assertEqual((statut, h["content-type"]), (200, "application/x-x509-ca-cert"))
         self.assertEqual(der, ssl.PEM_cert_to_DER_cert(self.tls.racine_crt.read_text()))
         empreinte = ":".join(f"{o:02X}" for o in __import__("hashlib").sha256(der).digest())
+        # L'empreinte ne passe jamais par le canal http du certificat : elle ne prouverait rien.
         _s, _h, info = self.requete("GET", "/api/certificat")
-        self.assertEqual(info, {"disponible": True, "securise": False,
-                                "https": f"https://127.0.0.1:{self.https}/", "empreinte": empreinte})
+        self.assertEqual(info, {"disponible": True, "securise": False, "https": f"https://127.0.0.1:{self.https}/"})
+        _s, _h, page = self.requete("GET", "/")
+        self.assertNotIn(b'id="empreinte"', page)
         etat = json.loads(self.chemins["etat"].read_text())
         self.assertEqual((etat["https"], etat["empreinteRacine"]), (f"https://127.0.0.1:{self.https}/", empreinte))
+        self.assertEqual(etat["empreinteRacineCourte"], " ".join(
+            empreinte.replace(":", "")[i:i + 4] for i in range(0, 16, 4)))
 
     def test_csp_http_autorise_la_seule_origine_https_et_sonde(self):
         _s, h, _ = self.requete("GET", "/")

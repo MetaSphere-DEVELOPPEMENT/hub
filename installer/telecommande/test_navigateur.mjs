@@ -314,8 +314,11 @@ test("HTTPS : certificat racine installé, chaîne acceptée par Chrome, passage
     await page.locator('[data-action="options"]').tap();
     await page.locator('[data-action="securite"]').tap();
     await page.locator("#securite-statut", { hasText: "reconnu" }).waitFor();
-    const empreinte = await page.locator("#empreinte").innerText();
-    assert.equal(empreinte, b.etat().empreinteRacine, "la page montre l'empreinte que la TV affiche");
+    // L'empreinte ne vient que de la TV : la page, servie en http comme le certificat,
+    // ne la montre pas (elle serait remplacée avec lui).
+    assert.equal(await page.locator("#empreinte").count(), 0);
+    assert.doesNotMatch(await page.locator("#securite").innerText(), /[0-9A-F]{2}(:[0-9A-F]{2}){7}/);
+    assert.match(b.etat().empreinteRacineCourte, /^[0-9A-F]{4}( [0-9A-F]{4}){3}$/);
     await page.locator("#ouvrir-https").tap();
     await page.waitForURL(u => u.origin === `https://hub.local:${b.ports.https}`);
     await page.locator("#telecommande").waitFor({ state: "visible" });

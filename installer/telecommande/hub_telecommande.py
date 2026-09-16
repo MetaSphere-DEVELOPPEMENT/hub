@@ -753,10 +753,23 @@ def charger_page(chemin=None):
 # mais pas fabriquer une clé ni un certificat. openssl est « important » dans Ubuntu
 # (présent partout, même en installation minimale) ; python3-cryptography ne l'est pas.
 #
-# CE QUI LIMITE LES DÉGÂTS SI LA CLÉ FUIT. La racine porte des contraintes de nom
-# (RFC 5280, critiques) : elle ne peut signer que des adresses privées et des noms en
-# .local. Même volée, elle ne permet pas d'usurper une banque sur le téléphone qui
-# l'a installée. Chrome, Safari et OpenSSL appliquent ces contraintes.
+# CE QUI LIMITE LES DÉGÂTS SI LA CLÉ FUIT. racine.key est lisible par tout programme
+# de la session (Kodi, UxPlay, Chrome…) : elle doit donc valoir le moins possible. La
+# racine porte des contraintes de nom (RFC 5280, critiques) réduites au strict
+# nécessaire : l'adresse actuelle du HUB (/32), hub.local et nom-machine.local. Volée,
+# elle ne permet d'usurper que le HUB lui-même — ce que hub.key, forcément présente et
+# lisible pareil, permet déjà. Chrome, Safari et OpenSSL appliquent ces contraintes.
+#
+# LE PRIX. Une autre adresse (bail DHCP) ou un autre nom de machine exigent une autre
+# racine, donc de la réinstaller sur chaque téléphone : réserver l'adresse du HUB sur
+# la box. Écarté : garder la racine et supprimer sa clé après signature. Le certificat
+# serveur (397 jours) ne pourrait plus être renouvelé sans réinstaller, et hub.key
+# resterait de toute façon aussi exposée.
+#
+# MIGRATION. Les racines d'avant le 17/09/2026 couvraient 10/8, 172.16/12, 192.168/16,
+# 169.254/16, 127/8 et .local : volée, une telle clé interceptait le téléphone vers
+# toute adresse privée de n'importe quel réseau. preparer() relit les contraintes de la
+# racine existante et la remplace dès qu'elles diffèrent de celles attendues.
 DUREE_RACINE_J = 3650
 # 397 jours : sous la limite d'Apple (825 j pour un certificat serveur) et de celle,
 # plus stricte, des autorités publiques (398 j), au cas où un navigateur finirait
@@ -764,6 +777,8 @@ DUREE_RACINE_J = 3650
 # rien à refaire sur le téléphone : seule la racine y est installée.
 DUREE_CERTIFICAT_J = 397
 RENOUVELER_AVANT_S = 30 * 86400
+# Les seules adresses pour lesquelles on accepte de créer une autorité : un HUB exposé
+# sur une adresse publique n'est pas le cas prévu. 127/8 pour les essais.
 RESEAUX_PERMIS = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16",
                   "127.0.0.0/8")
 # Avant l'heure réseau, une machine peut se croire en 1970 ou en 2019 : un certificat
@@ -778,6 +793,46 @@ class ErreurTLS(Exception):
 def _nom_dns(nom):
     nom = (nom or "").strip().lower()
     return nom if re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", nom) else None
+
+
+def contraintes_attendues(adresse, noms):
+    """Les sous-arbres permis de la racine, sous la forme qu'imprime `openssl x509 -text`."""
+    return {f"IP:{adresse}/255.255.255.255", *(f"DNS:{n}" for n in noms)}
+
+
+def lire_contraintes(texte):
+    """Les sous-arbres permis lus dans la sortie de `openssl x509 -noout -text`, ou None
+    si la racine n'a pas de contraintes de nom (une telle racine est à remplacer)."""
+    lignes = texte.splitlines()
+    for i, ligne in enumerate(lignes):
+        if "Name Constraints" not in ligne:
+            continue
+        titre = len(ligne) - len(ligne.lstrip())
+        permis, section = set(), None
+        for suite in lignes[i + 1:]:
+            propre = suite.strip()
+            # Fin du bloc : ligne vide (LibreSSL) ou extension suivante, au même retrait.
+            if not propre or len(suite) - len(suite.lstrip()) <= titre:
+                break
+            if propre in ("Permitted:", "Excluded:"):
+                section = propre
+            elif section == "Permitted:":
+                permis.add(propre)
+        return permis
+    return None
+
+
+def empreinte_courte(empreinte):
+    """Les 8 premières paires de l'empreinte en 4 groupes : « 3A9F 12C0 4481 7BE2 ».
+
+    Ce que la TV affiche en grand : 64 bits suffisent contre quelqu'un du wifi (il
+    faudrait des dizaines d'années de calcul pour fabriquer un certificat de même
+    début), et c'est lisible d'un canapé. Le téléphone montre l'empreinte entière,
+    on compare son début."""
+    if not empreinte:
+        return None
+    paires = empreinte.split(":")[:8]
+    return " ".join("".join(paires[i:i + 2]) for i in range(0, 8, 2))
 
 
 def noms_du_hub(nom_machine=None):
@@ -839,22 +894,26 @@ class AutoriteLocale:
         return "0x" + secrets.token_hex(16).lstrip("0").rjust(1, "1")
 
     # -- racine ----------------------------------------------------------------------
-    def _creer_racine(self, temp):
+    def contraintes(self):
+        """Les sous-arbres permis de la racine existante (None : elle n'en a pas).
+
+        Un openssl qui échoue lève ErreurTLS au lieu de rendre None : un raté passager
+        ne doit pas détruire une racine installée sur tous les téléphones."""
+        return lire_contraintes(self._commande("x509", "-in", self.racine_crt, "-noout", "-text"))
+
+    def _creer_racine(self, temp, adresse, noms):
         nom = _nom_dns(self.nom_machine if self.nom_machine is not None
                        else socket.gethostname().split(".")[0]) or "hub"
         date = time.strftime("%Y-%m-%d", time.gmtime(self.horloge()))
-        contraintes = []
-        for i, reseau in enumerate(RESEAUX_PERMIS):
-            r = ipaddress.ip_network(reseau)
-            contraintes.append(f"permitted;IP.{i} = {r.network_address}/{r.netmask}")
-        contraintes.append("permitted;DNS.0 = local")
+        contraintes = [f"permitted;IP.0 = {adresse}/255.255.255.255"]
+        contraintes += [f"permitted;DNS.{i} = {n}" for i, n in enumerate(noms)]
         config = Path(temp) / "racine.cnf"
         config.write_text("\n".join([
             "[req]", "distinguished_name = dn", "prompt = no", "utf8 = yes", "string_mask = utf8only",
             "[dn]", "O = HUB",
             # Nom et date dans le sujet : le téléphone qui a connu deux HUB (ou une
             # réinstallation) affiche deux entrées qu'on distingue pour révoquer l'ancienne.
-            f"CN = HUB autorité locale ({nom}, {date})",
+            f"CN = HUB autorité locale ({nom}, {adresse}, {date})",
             "[v3]", "basicConstraints = critical,CA:TRUE,pathlen:0",
             "keyUsage = critical,keyCertSign,cRLSign", "subjectKeyIdentifier = hash",
             "nameConstraints = critical,@contraintes", "[contraintes]", *contraintes, ""]),
@@ -935,12 +994,22 @@ class AutoriteLocale:
         with self._verrou:
             self.dossier.mkdir(mode=0o700, parents=True, exist_ok=True)
             os.chmod(self.dossier, 0o700)
+            noms = noms_du_hub(self.nom_machine)
             with tempfile.TemporaryDirectory(dir=self.dossier) as temp:
+                if self.racine_cle.is_file() and self.racine_crt.is_file() \
+                        and self.contraintes() != contraintes_attendues(adresse, noms):
+                    # Racine d'avant le 17/09/2026 (tout le privé), autre adresse ou autre
+                    # nom : elle ne signerait pas, ou signerait trop. L'ancienne clé est
+                    # détruite ; les téléphones devront installer la nouvelle racine.
+                    journal.warning("autorité locale remplacée (adresse %s, noms %s) : réinstaller le "
+                                    "certificat sur les téléphones et retirer l'ancien", adresse, ", ".join(noms))
+                    self.racine_cle.unlink(missing_ok=True)
+                    self.racine_crt.unlink(missing_ok=True)
                 if not (self.racine_cle.is_file() and self.racine_crt.is_file()):
-                    self._creer_racine(temp)
+                    self._creer_racine(temp, adresse, noms)
                 if self.a_jour(adresse):
                     return False
-                self._emettre(temp, adresse, noms_du_hub(self.nom_machine))
+                self._emettre(temp, adresse, noms)
                 return True
 
     def a_renouveler(self):
@@ -1156,12 +1225,15 @@ class Service:
         """Ce que la TV affiche : URL (pour le QR code), code, expiration."""
         if not self.url:
             return
+        empreinte = self.tls.empreinte() if self.tls and self.tls_pret else None
         etat = {"url": self.url, "code": self.appairage.code, "expire": self.appairage.expire_ms,
                 "telephones": len(self.jetons.lister()), "appairageLe": self.appairage_le,
-                # À afficher sur la TV à côté du code : c'est ce que le téléphone compare
-                # avant de faire confiance au certificat téléchargé en http.
                 "https": self.url_https,
-                "empreinteRacine": self.tls.empreinte() if self.tls and self.tls_pret else None}
+                # À afficher sur la TV : c'est le SEUL endroit d'où l'empreinte fait foi.
+                # Le téléphone la compare à celle que montrent ses propres réglages
+                # (détails du certificat installé), jamais à ce que dit la page http.
+                "empreinteRacine": empreinte,
+                "empreinteRacineCourte": empreinte_courte(empreinte)}
         with self._verrou_etat:
             try:
                 ecrire_prive(self.chemins["etat"], json.dumps(etat))
@@ -1347,9 +1419,10 @@ def _gestionnaire(service):
             if chemin == "/api/certificat":
                 pret = bool(service.tls and service.tls_pret)
                 origine = (f"https://{self._hote()}" if self.securise else self._origine_https()) if pret else None
+                # Pas d'empreinte ici : venue par le même canal http que le certificat,
+                # elle serait remplacée avec lui. Elle ne fait foi que lue sur la TV.
                 return self._json(200, {"disponible": pret, "securise": self.securise,
-                                        "https": origine + "/" if origine else None,
-                                        "empreinte": service.tls.empreinte() if pret else None})
+                                        "https": origine + "/" if origine else None})
             if chemin == "/manifest.webmanifest":
                 return self._repondre(200, service.ressources.manifeste,
                                       "application/manifest+json; charset=utf-8")
