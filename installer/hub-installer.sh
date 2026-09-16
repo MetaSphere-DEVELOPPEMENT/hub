@@ -432,9 +432,18 @@ etape_kodi() {
   # par JSON-RPC (localhost:9090). Kodi n'écoute que si le contrôle par les programmes
   # de CETTE machine est autorisé ; celui depuis le réseau reste fermé, rien d'autre
   # que le HUB n'a à piloter Kodi.
+  #
+  # Les services réseau de Kodi, fermés explicitement plutôt que laissés à leur défaut :
+  # un clic dans ses menus devant la TV ouvrirait un serveur web (8080), un serveur ou
+  # un lecteur UPnP, ou un second récepteur AirPlay — sans code, et que le pare-feu
+  # bloquerait sans que personne comprenne pourquoi. L'enceinte réseau du HUB tient
+  # déjà le rôle d'AirPlay. Identifiants de Kodi 21 (system/settings/settings.xml,
+  # étiquette 21.3-Omega) ; zeroconf n'annoncerait plus que ces services fermés.
   poser "$DEPOT/hub-kodi-lire" /usr/local/bin/hub-kodi-lire 0755 || return 1
   local reglages="$MAISON/.kodi/userdata/guisettings.xml"
-  local voulus=(services.esenabled=true services.esallinterfaces=false)
+  local voulus=(services.esenabled=true services.esallinterfaces=false
+                services.webserver=false services.upnp=false services.upnpserver=false
+                services.upnprenderer=false services.airplay=false services.zeroconf=false)
   if python3 "$DEPOT/kodi/regler-guisettings.py" verifier "$reglages" "${voulus[@]}" 2>/dev/null; then
     deja "Kodi : contrôle par les programmes locaux autorisé, réseau fermé"
   elif pgrep -u "$UTILISATEUR" -x kodi.bin >/dev/null 2>&1; then
@@ -445,7 +454,7 @@ etape_kodi() {
     faire runuser -u "$UTILISATEUR" -- mkdir -p "$(dirname "$reglages")" &&
     faire runuser -u "$UTILISATEUR" -- python3 - appliquer "$reglages" "${voulus[@]}" \
       <"$DEPOT/kodi/regler-guisettings.py" || return 1
-    ok "Kodi : contrôle par les programmes locaux autorisé (JSON-RPC sur localhost:9090), réseau fermé"
+    ok "Kodi : contrôle par les programmes locaux autorisé (JSON-RPC sur localhost:9090), réseau fermé (web, UPnP, AirPlay, zeroconf)"
   fi
 }
 
