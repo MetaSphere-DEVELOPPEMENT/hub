@@ -43,8 +43,10 @@ set -uo pipefail
 DEPOT="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"   # le dossier installer/
 VERSION_ATTENDUE="26.04"
 SESSION_HUB="gnome-kiosk-script-wayland"
-# Source par défaut de la mise à jour depuis le menu : le dépôt du projet. Écrite
-# seulement si /etc/hub/mise-a-jour.json n'existe pas.
+# Source par défaut de la mise à jour depuis le menu : le dépôt public du projet, lu
+# en HTTPS sans compte. Écrite seulement si /etc/hub/mise-a-jour.json n'existe pas.
+# Qu'il soit public ne suffit pas à lui faire confiance : seuls les commits signés
+# par /etc/hub/signataires-autorises sont installés (étape 9).
 SOURCE_MISE_A_JOUR='{"source": "https://github.com/MetaSphere-DEVELOPPEMENT/hub.git", "branche": "master"}'
 JOURNAL="/var/log/hub-installer.log"
 POUR_DE_VRAI=0
@@ -708,11 +710,39 @@ etape_mise_a_jour() {
   else
     faire "créer /etc/hub/mise-a-jour.json : $SOURCE_MISE_A_JOUR"
   fi
-  # Le dépôt est privé : sans clé de déploiement, la vérification échouera, et le menu
-  # le dira. Ce n'est pas un échec de l'installation.
-  if grep -q 'github.com' /etc/hub/mise-a-jour.json 2>/dev/null &&
-     [ ! -e /root/.ssh/id_ed25519 ] && ! grep -q '"git@' /etc/hub/mise-a-jour.json 2>/dev/null; then
-    alerte "dépôt GitHub privé : poser une deploy key en lecture seule (mise-a-jour/README.md)"
+
+  # Chaîne de confiance des mises à jour : hub-mise-a-jour n'installe qu'un commit signé
+  # par une clé de /etc/hub/signataires-autorises. Ce fichier n'est posé depuis le dépôt
+  # que s'il est absent ou sans aucune clé — première installation, faite par le
+  # propriétaire depuis un support qu'il contrôle ; sans clé, aucune mise à jour n'a pu
+  # passer, rien n'est donc à protéger — ou quand l'installateur tourne depuis un commit dont
+  # hub-mise-a-jour vient de vérifier la signature : ce commit s'exécute déjà en root,
+  # le laisser changer les clés ne donne rien de plus, et c'est ainsi qu'une clé se
+  # remplace sans passer devant le HUB. Lancé à la main depuis un clone quelconque, il
+  # ne remplace jamais un fichier existant. Un dépôt sans aucune clé ne vide jamais un
+  # fichier qui en contient : ce serait bloquer toutes les mises à jour suivantes.
+  local sig_depot="$maj/signataires-autorises" sig=/etc/hub/signataires-autorises
+  local une_cle='^[[:space:]]*[^#[:space:]]' verifiee=0
+  if [ -n "${HUB_MISE_A_JOUR_VERIFIEE:-}" ] &&
+     [ "$(git -C "$DEPOT/.." rev-parse HEAD 2>/dev/null)" = "$HUB_MISE_A_JOUR_VERIFIEE" ]; then
+    verifiee=1
+  fi
+  if [ ! -f "$sig_depot" ]; then
+    alerte "absent du dépôt : $sig_depot ($sig inchangé)"
+  elif { [ ! -e "$sig" ] && [ ! -L "$sig" ]; } || cmp -s "$sig_depot" "$sig" ||
+       { [ -f "$sig" ] && [ ! -L "$sig" ] && ! grep -Eq "$une_cle" "$sig"; }; then
+    poser "$sig_depot" "$sig" 0644 || return 1
+  elif [ "$verifiee" = 1 ] && grep -Eq "$une_cle" "$sig_depot"; then
+    poser "$sig_depot" "$sig" 0644 || return 1
+  elif [ "$verifiee" = 1 ]; then
+    alerte "le dépôt ne liste aucune clé : $sig conservé tel quel"
+  else
+    deja "$sig conservé (remplacé seulement par une mise à jour vérifiée, ou à la main : mise-a-jour/README.md)"
+  fi
+  local sig_lu="$sig"
+  [ -e "$sig" ] || sig_lu="$sig_depot"
+  if ! grep -Eq "$une_cle" "$sig_lu" 2>/dev/null; then
+    alerte "aucun signataire autorisé : les mises à jour depuis le menu seront refusées (mise-a-jour/README.md)"
   fi
 }
 
