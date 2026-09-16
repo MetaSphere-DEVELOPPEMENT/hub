@@ -25,6 +25,13 @@ autoinstall:
     hostname: hub-essai
     realname: Samuel Boudine
     username: samuel
+    # MOT DE PASSE D'ESSAI, PUBLIC : ce hachage est celui de « hub », publié exprès.
+    # Il ne sert qu'à sudo dans la VM jetable, dont le SSH n'est redirigé que sur
+    # 127.0.0.1 et refuse les mots de passe (voir plus bas). Un emplacement rempli
+    # par script obligerait à écrire ce script : aucun du dépôt ne construit
+    # cidata.iso aujourd'hui, et le secret ne protégerait rien.
+    # Il ne doit JAMAIS finir sur la vraie machine : la clé USB tire le sien
+    # (cle/construire-cle.sh → sortie/MOT-DE-PASSE.txt, hors git).
     password: "$6$m9rgabDsc/KawOms$cJzBPxzBMhAgjpbiLJeCVOAM.U6dVpvICkinMUKYqVz1eWkkIZ7Ubcb9rkgR7HVQ1I6/SxsRllFgfk4LyASrF."
 
   # Le seul moyen d'entrer dans la machine virtuelle pour y lancer l'installateur
