@@ -434,9 +434,18 @@ etape_kodi() {
   # par JSON-RPC (localhost:9090). Kodi n'écoute que si le contrôle par les programmes
   # de CETTE machine est autorisé ; celui depuis le réseau reste fermé, rien d'autre
   # que le HUB n'a à piloter Kodi.
+  #
+  # Les services réseau de Kodi, fermés explicitement plutôt que laissés à leur défaut :
+  # un clic dans ses menus devant la TV ouvrirait un serveur web (8080), un serveur ou
+  # un lecteur UPnP, ou un second récepteur AirPlay — sans code, et que le pare-feu
+  # bloquerait sans que personne comprenne pourquoi. L'enceinte réseau du HUB tient
+  # déjà le rôle d'AirPlay. Identifiants de Kodi 21 (system/settings/settings.xml,
+  # étiquette 21.3-Omega) ; zeroconf n'annoncerait plus que ces services fermés.
   poser "$DEPOT/hub-kodi-lire" /usr/local/bin/hub-kodi-lire 0755 || return 1
   local reglages="$MAISON/.kodi/userdata/guisettings.xml"
-  local voulus=(services.esenabled=true services.esallinterfaces=false)
+  local voulus=(services.esenabled=true services.esallinterfaces=false
+                services.webserver=false services.upnp=false services.upnpserver=false
+                services.upnprenderer=false services.airplay=false services.zeroconf=false)
   if python3 "$DEPOT/kodi/regler-guisettings.py" verifier "$reglages" "${voulus[@]}" 2>/dev/null; then
     deja "Kodi : contrôle par les programmes locaux autorisé, réseau fermé"
   elif pgrep -u "$UTILISATEUR" -x kodi.bin >/dev/null 2>&1; then
@@ -447,7 +456,7 @@ etape_kodi() {
     faire runuser -u "$UTILISATEUR" -- mkdir -p "$(dirname "$reglages")" &&
     faire runuser -u "$UTILISATEUR" -- python3 - appliquer "$reglages" "${voulus[@]}" \
       <"$DEPOT/kodi/regler-guisettings.py" || return 1
-    ok "Kodi : contrôle par les programmes locaux autorisé (JSON-RPC sur localhost:9090), réseau fermé"
+    ok "Kodi : contrôle par les programmes locaux autorisé (JSON-RPC sur localhost:9090), réseau fermé (web, UPnP, AirPlay, zeroconf)"
   fi
 }
 
@@ -496,27 +505,9 @@ etape_telecommande() {
   poser "$tel/hub-telecommande.service" /usr/local/lib/systemd/user/hub-telecommande.service 0644 || return 1
   activer_unite_globale hub-telecommande.service || return 1
 
-  # ufw est inactif sur une Ubuntu neuve. S'il a été activé, on ouvre le port au seul
-  # réseau de l'interface qui porte la route par défaut : la télécommande n'a rien à
-  # faire joignable depuis un VPN ou une interface de conteneur.
-  if command -v ufw >/dev/null && LC_ALL=C ufw status 2>/dev/null | grep -q '^Status: active'; then
-    local iface reseau
-    iface=$(ip -4 route show default 2>/dev/null | awk '{print $5; exit}')
-    reseau=$(ip -4 -o addr show dev "${iface:-lo}" 2>/dev/null | awk '{print $4; exit}' |
-             python3 -c 'import ipaddress,sys; print(ipaddress.ip_interface(sys.stdin.read().strip()).network)' 2>/dev/null)
-    # 8790 : la page http (QR code) ; 8791 : son double HTTPS, pour la dictée.
-    local port
-    for port in 8790 8791; do
-      if [ -z "$reseau" ]; then
-        alerte "ufw actif mais réseau local introuvable : port $port non ouvert, la télécommande sera bloquée"
-      elif LC_ALL=C ufw status 2>/dev/null | grep -Eq "^$port/tcp[[:space:]]+ALLOW[[:space:]]+$reseau\b"; then
-        deja "ufw : $port/tcp ouvert à $reseau"
-      else
-        faire ufw allow from "$reseau" to any port "$port" proto tcp || return 1
-        ok "ufw : $port/tcp ouvert à $reseau seulement"
-      fi
-    done
-  fi
+  # Le pare-feu (ports de la télécommande compris) est activé à l'étape de l'enceinte
+  # réseau, une fois tous les ports connus : voir pare_feu. L'activer ici, avant elle,
+  # couperait Spotify et AirPlay le temps de l'installation.
 }
 
 # ── 7. Démarrage automatique sur le HUB ───────────────────────────────────────
@@ -1031,9 +1022,97 @@ reseau_local() {
     python3 -c 'import ipaddress,sys; print(ipaddress.ip_interface(sys.stdin.read().strip()).network)' 2>/dev/null
 }
 
+# ── Pare-feu ──────────────────────────────────────────────────────────────────
+# ufw est inactif sur une Ubuntu neuve : tout ce qui écoute (recopie d'écran, AirPlay,
+# télécommande, SSH) était joignable de partout où la machine l'est. On l'active avec
+# le refus en entrée, et on n'ouvre qu'au réseau local.
+#
+# Par ADRESSE SOURCE, pas par interface. `ufw allow in on eno1` couvrirait IPv4 et IPv6
+# d'une règle, mais aussi tout ce qui arrive par cette interface — y compris depuis
+# Internet en IPv6 global si le pare-feu IPv6 de la box laisse entrer (réglage de la
+# Freebox, à vérifier). Les sources retenues : le réseau IPv4 local, et fe80::/10, les
+# adresses de lien IPv6, qui ne franchissent jamais un routeur (mDNS en IPv6, iPhone qui
+# joint le HUB par son adresse de lien). Un appareil qui ne parlerait qu'en IPv6 global
+# est refusé : iOS et Android essaient aussi l'IPv4.
+#
+# Rejouable : `ufw allow` d'une règle existante ne fait rien, `ufw show added` liste les
+# règles même pare-feu inactif. Échappatoire pour qui gère son pare-feu lui-même :
+# HUB_PARE_FEU=non.
+PARE_FEU_LIEN=fe80::/10
+
+pare_feu_ouvrir() { # source port/proto…
+  local source="$1" regle port proto
+  shift
+  for regle in "$@"; do
+    port=${regle%/*}; proto=${regle#*/}
+    if LC_ALL=C ufw show added 2>/dev/null | grep -Fxq "ufw allow from $source to any port $port proto $proto"; then
+      deja "ufw : $regle ouvert à $source"
+    else
+      faire ufw allow from "$source" to any port "$port" proto "$proto" || return 1
+      ok "ufw : $regle ouvert à $source seulement"
+    fi
+  done
+}
+
+pare_feu() { # port/proto…
+  if [ "${HUB_PARE_FEU:-}" = non ]; then
+    alerte "HUB_PARE_FEU=non : pare-feu laissé tel quel ; ports à ouvrir au réseau local : 22/tcp $*"
+    return 0
+  fi
+  installer_paquets -- ufw || return 1
+  local reseau; reseau=$(reseau_local)
+  if [ -z "$reseau" ]; then
+    # Activer sans savoir quoi ouvrir couperait SSH, la télécommande et l'enceinte.
+    alerte "réseau local introuvable (pas de route IPv4 par défaut) : pare-feu NON activé"
+    alerte "  relancer l'installateur une fois le réseau branché"
+    return 0
+  fi
+  if ! grep -q '^IPV6=yes' /etc/default/ufw 2>/dev/null; then
+    alerte "IPV6 n'est pas à yes dans /etc/default/ufw : ufw ne filtrerait pas l'IPv6"
+  fi
+  # SSH D'ABORD, et avant `ufw enable` : les sessions en cours depuis ailleurs que le
+  # réseau local (VPN, autre sous-réseau) reçoivent leur propre règle, sinon la
+  # prochaine reconnexion serait refusée. sshd-session (OpenSSH 10) ou sshd tient la
+  # connexion ; son port local est celui où sshd écoute vraiment.
+  pare_feu_ouvrir "$reseau" 22/tcp || return 1
+  pare_feu_ouvrir "$PARE_FEU_LIEN" 22/tcp || return 1
+  local local_ pair ip port
+  while read -r local_ pair; do
+    [ -n "$pair" ] || continue
+    port=${local_##*:}; ip=${pair%:*}; ip=${ip#[}; ip=${ip%]}; ip=${ip%%\%*}
+    case $ip in ::ffff:*.*) ip=${ip#::ffff:} ;; esac
+    if python3 -c 'import ipaddress,sys; a=ipaddress.ip_address(sys.argv[1]); sys.exit(0 if a in ipaddress.ip_network(sys.argv[2]) or a.is_link_local or a.is_loopback else 1)' "$ip" "$reseau" 2>/dev/null; then
+      continue
+    fi
+    alerte "session SSH en cours depuis $ip, hors du réseau local : on la garde ouverte"
+    pare_feu_ouvrir "$ip" "$port/tcp" || return 1
+  done < <(ss -Htnp state established 2>/dev/null | awk '/"sshd/ {print $3, $4}')
+
+  pare_feu_ouvrir "$reseau" "$@" || return 1
+  pare_feu_ouvrir "$PARE_FEU_LIEN" "$@" || return 1
+
+  if LC_ALL=C ufw status 2>/dev/null | grep -q '^Status: active'; then
+    deja "ufw actif (politique d'entrée laissée telle quelle)"
+  else
+    faire ufw default deny incoming || return 1
+    faire ufw default allow outgoing || return 1
+    faire ufw --force enable || return 1
+    ok "ufw actif : entrée refusée sauf réseau local $reseau et $PARE_FEU_LIEN"
+  fi
+}
+
 etape_enceinte() {
   etape "14. Enceinte réseau (Spotify Connect, AirPlay, recopie d'écran)"
   local src="$DEPOT/enceinte" lib=/usr/local/lib/hub/enceinte opt=/opt/hub-enceinte
+  # Pare-feu en tête d'étape : il protège aussi SSH et la télécommande, et ne doit pas
+  # dépendre du téléchargement de librespot plus bas. Ports fixés dans hub_enceinte.py
+  # (PORT_*) et hub_telecommande.py ; 5353/udp : mDNS, pour que les téléphones trouvent
+  # le HUB. Son échec est compté, l'enceinte s'installe quand même.
+  local ports=()
+  [ -f "$DEPOT/telecommande/hub_telecommande.py" ] && ports+=(8790/tcp 8791/tcp)
+  [ -f "$src/hub_enceinte.py" ] &&
+    ports+=(5353/udp 5390/tcp 5000/tcp 6001:6010/udp 7000:7002/tcp 7000:7002/udp)
+  pare_feu "${ports[@]}"
   if [ ! -f "$src/hub_enceinte.py" ] || [ ! -f "$src/hub-enceinte.service" ]; then
     deja "aucune enceinte réseau dans le dépôt ($src) — étape sautée"
     return 0
@@ -1090,24 +1169,17 @@ etape_enceinte() {
     activer_unite_globale "$u.service" || return 1
   done
 
-  # Même règle que la télécommande : ufw inactif par défaut ; actif, on n'ouvre qu'au
-  # réseau local. Ports fixés dans hub_enceinte.py (PORT_*).
-  if command -v ufw >/dev/null && LC_ALL=C ufw status 2>/dev/null | grep -q '^Status: active'; then
-    local reseau regle port proto
-    reseau=$(reseau_local)
-    if [ -z "$reseau" ]; then
-      alerte "ufw actif mais réseau local introuvable : Spotify et AirPlay seront bloqués"
-      return 0
-    fi
-    for regle in 5353/udp 5390/tcp 5000/tcp 6001:6010/udp 7000:7002/tcp 7000:7002/udp; do
-      port=${regle%/*}; proto=${regle#*/}
-      if LC_ALL=C ufw status 2>/dev/null | grep -Eq "^$port/$proto[[:space:]]+ALLOW[[:space:]]+$reseau\b"; then
-        deja "ufw : $regle ouvert à $reseau"
-      else
-        faire ufw allow from "$reseau" to any port "$port" proto "$proto" || return 1
-        ok "ufw : $regle ouvert à $reseau seulement"
-      fi
-    done
+  # Le code de la recopie d'écran, tiré dès l'installation pour que le menu l'affiche
+  # avant la première recopie (sinon UxPlay le tire à son premier lancement).
+  # Pas par `faire` : il recopierait le code dans le journal de l'installateur.
+  if [ -s "$MAISON/.config/hub/enceinte/code-recopie" ]; then
+    deja "code de la recopie d'écran"
+  elif [ "$POUR_DE_VRAI" = 1 ]; then
+    runuser -u "$UTILISATEUR" -- env -u XDG_CONFIG_HOME HOME="$MAISON" python3 "$lib/hub_enceinte.py" code >/dev/null 2>&1 ||
+      { echec "code de la recopie d'écran non tiré (hub-enceinte code)"; return 1; }
+    ok "code de la recopie d'écran tiré (Réglages → Enceinte réseau, ou : hub-enceinte code)"
+  else
+    faire "tirer le code de la recopie d'écran (hub-enceinte code, en $UTILISATEUR)"
   fi
 }
 
