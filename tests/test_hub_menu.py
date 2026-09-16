@@ -164,7 +164,24 @@ class Telecommande(AvecDossier):
         hub_menu.ecrire_atomique(self.c["telecommande"], json.dumps(
             {"url": "http://192.168.1.50:8790/", "code": "123456", "expire": 5, "telephones": 1, "appairageLe": None, "secret": "x"}))
         self.assertEqual(hub_menu.etat_telecommande(self.c),
-                         {"url": "http://192.168.1.50:8790/", "code": "123456", "expire": 5, "telephones": 1, "appairageLe": None})
+                         {"url": "http://192.168.1.50:8790/", "code": "123456", "expire": 5, "telephones": 1, "appairageLe": None,
+                          "empreinteRacine": None})
+
+    def test_empreinte_du_certificat_transmise_si_bien_formee(self):
+        empreinte = ":".join(["AB", "0C"] * 16)
+        base = {"url": "http://192.168.1.50:8790/", "code": "123456"}
+        hub_menu.ecrire_atomique(self.c["telecommande"], json.dumps({**base, "empreinteRacine": empreinte}))
+        self.assertEqual(hub_menu.etat_telecommande(self.c)["empreinteRacine"], empreinte)
+        for mauvaise in (None, 42, "AB:CD", empreinte.lower(), empreinte + ":00", "<b>" + empreinte[3:]):
+            hub_menu.ecrire_atomique(self.c["telecommande"], json.dumps({**base, "empreinteRacine": mauvaise}))
+            self.assertIsNone(hub_menu.etat_telecommande(self.c)["empreinteRacine"], mauvaise)
+
+    def test_la_vraie_telecommande_publie_ce_format(self):
+        # Le format vient de hub_telecommande.AutoriteLocale.empreinte : si elle change,
+        # ce test le dit avant que la TV n'affiche plus rien.
+        source = (RACINE / "installer" / "telecommande" / "hub_telecommande.py").read_text(encoding="utf-8")
+        self.assertIn('":".join(f"{o:02X}" for o in hashlib.sha256(der).digest())', source)
+        self.assertIn('"empreinteRacine":', source)
 
     def test_texte_envoye_du_telephone(self):
         self.assertEqual(hub_menu.message_voix("texte:Brest".encode()), {"type": "texte", "texte": "Brest"})

@@ -486,6 +486,7 @@ test("télécommande : QR code et code d'appairage, annonce quand un téléphone
   await page.click('[data-section="telecommande"]');
   await page.waitForFunction(() => document.querySelector(".qr svg"));
   assert.equal(await page.textContent(".code-appairage"), "482 913");
+  assert.equal(await page.locator(".empreinte-appairage").count(), 0, "sans certificat prêt, pas de ligne vide");
   await page.evaluate(e => window.hub.recevoir({ type: "telecommande", etat: { ...e, telephones: 1, appairageLe: Date.now() } }), etat);
   assert.match(await page.textContent("#annonce"), /Téléphone relié/);
   assert.match(await page.textContent(".appairage"), /Téléphones reliés : 1/);
@@ -608,4 +609,19 @@ test("météo : un nom de ville reçu reste du texte, jamais du HTML", async () 
   assert.equal(await page.locator("#ambiant-meteo svg").count(), 1, "le picto, lui, reste un dessin");
   assert.match(await page.textContent("#ambiant-meteo"), /onerror/);
   assert.equal(await page.evaluate(() => window.__piege), undefined);
+});
+
+test("télécommande : l'empreinte du certificat s'affiche en groupes courts, comme texte", async () => {
+  const octets = Array.from({ length: 32 }, (_, i) => i.toString(16).toUpperCase().padStart(2, "0"));
+  const etat = { url: "http://192.168.1.50:8790/", code: "482913", expire: Date.now() + 240000, telephones: 0, appairageLe: null, empreinteRacine: octets.join(":") };
+  await ouvrir({ retour: true, telecommande: etat });
+  await page.evaluate(() => ACTIONS.reglages("telecommande"));
+  await page.waitForSelector(".empreinte-paires");
+  const lignes = await page.$$eval(".empreinte-paires > div", d => d.map(e => e.textContent));
+  assert.deepEqual(lignes, [
+    "00 01 02 03   04 05 06 07", "08 09 0A 0B   0C 0D 0E 0F",
+    "10 11 12 13   14 15 16 17", "18 19 1A 1B   1C 1D 1E 1F",
+  ]);
+  assert.match(await page.textContent(".empreinte-appairage"), /SHA-256/);
+  assert.deepEqual(page.erreurs, []);
 });
