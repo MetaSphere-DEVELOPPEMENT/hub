@@ -26,6 +26,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -728,14 +729,28 @@ def infos():
 
 
 # ── Télécommande ──────────────────────────────────────────────────────────
+# Les champs de telecommande.json que l'écran d'appairage affiche, chacun avec ce qu'il
+# doit être ; une valeur qui ne l'est pas arrive à la page comme None. Un champ de plus
+# au contrat de hub-telecommande = une ligne ici et une dans LIGNES_APPAIRAGE (hub.js).
+CHAMPS_TELECOMMANDE = {
+    "url": lambda v: isinstance(v, str),
+    "code": lambda v: isinstance(v, str),
+    "expire": lambda v: True,
+    "telephones": lambda v: True,
+    "appairageLe": lambda v: True,
+    # SHA-256 du certificat racine, en paires « AB:CD:… » (AutoriteLocale.empreinte) : le
+    # téléphone demande de la comparer avec la TV avant d'installer le certificat.
+    "empreinteRacine": lambda v: isinstance(v, str) and re.fullmatch(r"[0-9A-F]{2}(:[0-9A-F]{2}){31}", v) is not None,
+}
+
+
 def etat_telecommande(c):
     """Ce que hub-telecommande publie pour l'écran d'appairage ; None s'il ne tourne pas
     (il supprime son fichier en s'arrêtant)."""
     donnees = lire_json(c["telecommande"])
     if not isinstance(donnees, dict) or not isinstance(donnees.get("url"), str) or not isinstance(donnees.get("code"), str):
         return None
-    garder = ("url", "code", "expire", "telephones", "appairageLe")
-    return {k: donnees.get(k) for k in garder}
+    return {k: donnees.get(k) if valide(donnees.get(k)) else None for k, valide in CHAMPS_TELECOMMANDE.items()}
 
 
 # ── Enceinte réseau : ce qui joue ─────────────────────────────────────────

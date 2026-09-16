@@ -1667,23 +1667,48 @@ let telecommande = INITIAL.telecommande || null;
   document.head.append(script);
 })();
 
+// L'écran d'appairage, ligne par ligne : la clé de l'état publié par hub-telecommande
+// (relayé par hub-menu, CHAMPS_TELECOMMANDE) et sa mise en forme. Une ligne dont la
+// valeur manque n'est pas affichée, sauf « toujours ». Un champ de plus au contrat =
+// une entrée de plus ici. Tout passe en texte : ces valeurs viennent d'un autre service.
+const LIGNES_APPAIRAGE = [
+  { etape: "telecommande.etape1" },
+  { etape: "telecommande.etape2" },
+  { etape: "telecommande.etape3" },
+  { cle: "code", rendre: v => el("div", { class: "code-appairage" }, String(v).replace(/(\d{3})(\d{3})/, "$1 $2")) },
+  { cle: "expire", toujours: true, rendre: () => el("div", { class: "aide", id: "telecommande-expire" }, texteExpiration()) },
+  { cle: "url", rendre: v => el("div", { class: "aide url" }, v) },
+  { cle: "empreinteRacine", rendre: v => el("div", { class: "empreinte-appairage" },
+    el("div", { class: "aide" }, t("telecommande.empreinte")),
+    el("div", { class: "empreinte-paires" }, groupesEmpreinte(v).map(ligne => el("div", {}, ligne)))) },
+  { cle: "telephones", toujours: true, rendre: v => el("div", { class: "aide" }, t("telecommande.telephones", { n: v ?? 0 })) },
+];
+
+// « AB:CD:… » (32 paires) → quatre lignes de huit paires, coupées en deux groupes de
+// quatre : on compare sur le téléphone groupe par groupe, sans perdre sa ligne.
+function groupesEmpreinte(empreinte) {
+  const paires = String(empreinte).split(":");
+  const lignes = [];
+  for (let i = 0; i < paires.length; i += 8) {
+    const huit = paires.slice(i, i + 8);
+    lignes.push([huit.slice(0, 4).join(" "), huit.slice(4).join(" ")].filter(Boolean).join("   "));
+  }
+  return lignes;
+}
+
 function contenuTelecommande() {
   if (!telecommande) {
     return rangee(t("telecommande.absente"), t("telecommande.absente.detail"), null, true);
   }
   const qr = el("div", { class: "qr" });
   if (window.qrSvg) qr.innerHTML = window.qrSvg(telecommande.url, { sombre: "#000", clair: "#fff", marge: 3 });
-  const code = String(telecommande.code).replace(/(\d{3})(\d{3})/, "$1 $2");
-  return el("div", { class: "appairage" },
-    qr,
-    el("div", { class: "etapes" },
-      el("div", { class: "etape" }, el("b", {}, "1"), t("telecommande.etape1")),
-      el("div", { class: "etape" }, el("b", {}, "2"), t("telecommande.etape2")),
-      el("div", { class: "etape" }, el("b", {}, "3"), t("telecommande.etape3")),
-      el("div", { class: "code-appairage" }, code),
-      el("div", { class: "aide", id: "telecommande-expire" }, texteExpiration()),
-      el("div", { class: "aide url" }, telecommande.url),
-      el("div", { class: "aide" }, t("telecommande.telephones", { n: telecommande.telephones ?? 0 }))));
+  let numero = 0;
+  const lignes = LIGNES_APPAIRAGE.map(l => {
+    if (l.etape) return el("div", { class: "etape" }, el("b", {}, String(++numero)), t(l.etape));
+    const valeur = telecommande[l.cle];
+    return valeur == null && !l.toujours ? null : l.rendre(valeur);
+  });
+  return el("div", { class: "appairage" }, qr, el("div", { class: "etapes" }, lignes));
 }
 function texteExpiration() {
   if (!telecommande?.expire) return "";
