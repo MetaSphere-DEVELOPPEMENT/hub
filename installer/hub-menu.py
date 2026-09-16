@@ -81,13 +81,26 @@ def chemins():
 
 
 # ── Fichiers ──────────────────────────────────────────────────────────────
-def ecrire_atomique(chemin, texte):
+def ecrire_atomique(chemin, texte, droits=None):
     """Un réglage à moitié écrit (coupure pendant l'écriture) ne doit jamais remplacer
-    le précédent : on écrit à côté, puis on renomme."""
+    le précédent : on écrit à côté, puis on renomme.
+
+    droits (0o600…) : posés sur le provisoire avant la première écriture, pour que le
+    contenu ne soit jamais lisible, même un instant, avec les droits de l'umask."""
     chemin = Path(chemin)
     chemin.parent.mkdir(parents=True, exist_ok=True)
     provisoire = chemin.with_name(chemin.name + ".tmp")
-    provisoire.write_text(texte, encoding="utf-8")
+    if droits is None:
+        provisoire.write_text(texte, encoding="utf-8")
+    else:
+        # Un nom par fil : la vérification d'un code (en arrière-plan) peut réécrire les
+        # réglages pendant que la page les enregistre.
+        provisoire = chemin.with_name(f"{chemin.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+        provisoire.unlink(missing_ok=True)
+        descripteur = os.open(provisoire, os.O_WRONLY | os.O_CREAT | os.O_EXCL, droits)
+        with os.fdopen(descripteur, "w", encoding="utf-8") as f:
+            os.fchmod(f.fileno(), droits)
+            f.write(texte)
     os.replace(provisoire, chemin)
 
 
@@ -108,7 +121,23 @@ def reglages_valides(donnees):
     )
 
 
+# reglages.json porte les empreintes des codes PIN : lisible par le seul utilisateur du
+# HUB. hub-allumage le lit en root, hub-temps-ecran et hub-cec en tant que cet
+# utilisateur : aucun autre compte n'en a besoin.
+DROITS_REGLAGES = 0o600
+
+
+def restreindre_droits(chemin, droits=DROITS_REGLAGES):
+    """Un fichier écrit par une version antérieure (0644 selon l'umask) est resserré."""
+    try:
+        if os.stat(chemin).st_mode & 0o777 != droits:
+            os.chmod(chemin, droits)
+    except OSError:
+        pass
+
+
 def charger_reglages(c):
+    restreindre_droits(c["reglages"])
     donnees = lire_json(c["reglages"])
     return donnees if reglages_valides(donnees) else None
 
@@ -116,7 +145,7 @@ def charger_reglages(c):
 def enregistrer_reglages(c, donnees):
     if not reglages_valides(donnees):
         return False
-    ecrire_atomique(c["reglages"], json.dumps(donnees, ensure_ascii=False, indent=2))
+    ecrire_atomique(c["reglages"], json.dumps(donnees, ensure_ascii=False, indent=2), droits=DROITS_REGLAGES)
     return True
 
 

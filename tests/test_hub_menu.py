@@ -58,6 +58,23 @@ class Reglages(AvecDossier):
         hub_menu.enregistrer_reglages(self.c, {"profils": [{"id": "a"}]})
         self.assertEqual([p.name for p in self.c["reglages"].parent.iterdir()], ["reglages.json"])
 
+    def test_reglages_lisibles_par_l_utilisateur_seul(self):
+        # Les empreintes des codes PIN y sont : ni le groupe ni les autres comptes.
+        import os
+        ancien = os.umask(0o002)
+        try:
+            hub_menu.enregistrer_reglages(self.c, {"profils": [{"id": "a"}]})
+        finally:
+            os.umask(ancien)
+        self.assertEqual(self.c["reglages"].stat().st_mode & 0o777, 0o600)
+
+    def test_un_fichier_existant_trop_ouvert_est_resserre(self):
+        self.c["reglages"].parent.mkdir(parents=True)
+        self.c["reglages"].write_text(json.dumps({"profils": [{"id": "a"}]}))
+        self.c["reglages"].chmod(0o644)
+        self.assertIsNotNone(hub_menu.charger_reglages(self.c))
+        self.assertEqual(self.c["reglages"].stat().st_mode & 0o777, 0o600)
+
     def test_dernier_choix_ignore_eteindre_et_web(self):
         hub_menu.retenir(self.c, "bureau")
         hub_menu.retenir(self.c, "eteindre")
