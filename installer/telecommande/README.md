@@ -137,6 +137,9 @@ la télécommande n'est ouverte ni à un invité, ni à une page web étrangère
   lecture, poignée de main TLS comprise.
 - **Connexions bornées** : 32 à la fois par port, 8 par adresse IP ; au-delà, la
   connexion est fermée sans ouvrir de fil. Avant, chaque connexion muette coûtait un fil.
+- **Photos bornées** : au plus 50 photos `telephone-*.jpg` et 50 Mio en tout dans le
+  dossier des profils, jamais s'il resterait moins de 512 Mio libres (507 `quota` ou
+  `espace`). Les photos déposées à la main ne comptent pas.
 - **Ticket de transfert** http → https : 256 bits, usage unique, 2 minutes, accepté
   sur l'origine https seulement ; il voyage dans le fragment de l'URL (jamais envoyé
   au serveur par le navigateur) et la page l'efface de l'adresse avant tout.
@@ -225,7 +228,7 @@ que `hub-voix`). `Input.SendText` n'a d'effet que si un clavier est ouvert dans 
 | `POST /api/commande` `{"nom":"gauche"}` ou `{"nom":"texte","texte":"Dune"}` | oui | 200 `{"ok","cible","raison"?,"volume"?}` · 400 hors liste · 401 |
 | `GET /api/etat` | oui | `{"ok":true,"contexte":"menu"\|"kodi"\|"bureau"\|null}` |
 | `POST /api/oublier` `{}` | oui | révoque le jeton présenté |
-| `POST /photo-profil` (corps JPEG brut, `Content-Type: image/jpeg`) | oui | 200 `{"ok":true,"fichier":"telephone-AAAAMMJJ-HHMMSS.jpg"}` · 400 pas un JPEG · 413 > 2 Mio · 415 |
+| `POST /photo-profil` (corps JPEG brut, `Content-Type: image/jpeg`) | oui | 200 `{"ok":true,"fichier":"telephone-AAAAMMJJ-HHMMSS.jpg"}` · 400 pas un JPEG · 413 > 2 Mio · 415 · 507 `{"erreur":"quota"\|"espace"}` |
 | `GET /manifest.webmanifest`, `/icone-32.png`, `/icone-192.png`, `/icone-512.png`, `/apple-touch-icon.png` | non | manifeste, icônes |
 | `GET /hub-racine.crt` | non | la racine en DER (`application/x-x509-ca-cert`) · 404 si HTTPS désactivé |
 | `GET /api/certificat` | non | `{"disponible","securise","https":"https://nom:8791/"}` (pas d'empreinte : elle ne fait foi que sur la TV) |
@@ -238,7 +241,8 @@ que `hub-voix`). `Input.SendText` n'a d'effet que si un clavier est ouvert dans 
 
 Le téléphone recadre au centre en carré de 512 px et réencode en JPEG qualité 0,88
 (aperçu rond avant l'envoi). Le serveur n'accepte que des octets commençant par
-`FF D8 FF`, écrit de façon atomique dans `~/Images/HUB/profils/telephone-AAAAMMJJ-HHMMSS.jpg`
+`FF D8 FF`, dans la limite des quotas (50 photos du téléphone, 50 Mio, 512 Mio libres au
+moins, 507 sinon), écrit de façon atomique dans `~/Images/HUB/profils/telephone-AAAAMMJJ-HHMMSS.jpg`
 (suffixe `-2`, `-3`… si deux photos arrivent dans la même seconde, jamais
 d'écrasement), puis envoie le datagramme `avatars` au socket du menu s'il existe.
 
@@ -427,6 +431,24 @@ Node 22) :
   remplacé par le fichier « Télé. », page en https vérifié, vrai Vosk → datagrammes
   `voix:entendu:télé`, `tv`, `voix:repos` au menu** (sans Vosk, un faux reconnaisseur
   vérifie la capture et la durée envoyée).
+
+Le 17 septembre 2026, sur un Mac (Python 3.9.6 lié à LibreSSL 2.8.3, OpenSSL 3.6.4 de
+Homebrew en ligne de commande) — correctifs de l'audit de sécurité du même jour :
+
+- `python3 -m unittest installer/telecommande/test_telecommande.py` : 88 tests, dont
+  fenêtre d'appairage, délai global croissant (au plus 15 essais simulés par fenêtre de
+  5 min en changeant d'adresse à chaque essai), quotas de photos (envois simultanés
+  compris), plafond de connexions, racine /32 (certificats pour d'autres adresses
+  privées et d'autres noms `.local` refusés par `openssl verify`), migration d'une
+  racine d'avant le 17/09 et d'une racine sans contraintes. **6 tests `ServiceHTTPS`
+  échouent sur ce Mac, avant comme après** : le module `ssl` de Python y est lié à
+  LibreSSL 2.8.3, qui refuse les contraintes de nom IP (« unsupported name constraint
+  type »). Sur le HUB (OpenSSL 3), ils sont à relancer.
+- Contre-épreuve à la main avec OpenSSL 3.6.4 (`openssl s_client -verify_return_error`)
+  contre `banc_essai.py --https` : chaîne acceptée pour `hub.local` et `127.0.0.1`,
+  refusée pour `autre.local` et `127.0.0.2`.
+- `test_navigateur.mjs` mis à jour (l'empreinte absente de la page) mais **pas relancé**
+  (ni Chrome ni playwright sur cette machine).
 
 **Pas prouvé :** un vrai téléphone sur le vrai réseau du HUB — ni l'installation de
 la racine sur Android ou iPhone (écrans de réglages décrits d'après la documentation),

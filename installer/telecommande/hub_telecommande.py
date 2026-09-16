@@ -91,6 +91,14 @@ ECHECS_AVANT_RENOUVELLEMENT = 20
 # un code deviné ne sert à rien. Le menu (re)touche le fichier tant que l'écran est
 # affiché ; oublié, le fichier ne vaut plus rien au bout de ce délai.
 FENETRE_APPAIRAGE_S = 5 * 60
+# Au-delà de ce nombre de photos ou de cette taille (celles écrites par ce service
+# seulement), on refuse : un téléphone appairé ne doit pas pouvoir remplir le disque.
+# Une photo de profil pèse 60 à 150 Ko : 50 photos, c'est des années de profils.
+PHOTOS_MAX = 50
+PHOTOS_TAILLE_MAX = 50 * 1024 * 1024
+# Et jamais quand il resterait moins que ceci : Kodi, les journaux et les mises à jour
+# ont besoin du disque plus que la dixième photo de profil.
+ESPACE_LIBRE_MIN = 512 * 1024 * 1024
 # Des fils de connexion bornés : sans plafond, un appareil qui ouvre des milliers de
 # connexions muettes fait créer autant de fils (mémoire, puis plus rien ne répond).
 # 8 par adresse : un téléphone en ouvre 2 ou 3 à la fois (page, sonde, icônes).
@@ -1280,6 +1288,7 @@ class Service:
         self.hotes_admis = frozenset()
         self.appairage_le = None
         self._verrou_etat = threading.Lock()
+        self._verrou_photos = threading.Lock()
         self.fenetre = FenetreAppairage(chemins.get("appairage"), horloge=horloge)
         self._fenetre_ouverte = False
         self.appairage = Appairage(horloge=horloge, au_changement=self.ecrire_etat,
@@ -1377,11 +1386,35 @@ class Service:
         Path(self.chemins["etat"]).unlink(missing_ok=True)
 
 
-def enregistrer_photo(dossier, octets, maintenant):
+class PhotoRefusee(Exception):
+    """raison : « quota » (trop de photos du téléphone) ou « espace » (disque presque plein)."""
+
+
+def _espace_libre(dossier):
+    return shutil.disk_usage(dossier).free
+
+
+def enregistrer_photo(dossier, octets, maintenant, espace_libre=_espace_libre):
     """Nom du fichier écrit. Le nom vient d'ici, jamais du téléphone : aucun chemin
-    fourni par le réseau ne touche le disque."""
+    fourni par le réseau ne touche le disque. PhotoRefusee au-delà des quotas.
+
+    L'appelant sérialise les envois : sinon dix envois simultanés passeraient tous le
+    contrôle du quota avant qu'aucun n'écrive."""
     dossier = Path(dossier)
     dossier.mkdir(parents=True, exist_ok=True)
+    # Seules les photos de ce service comptent : celles copiées à la main dans le
+    # dossier ne doivent pas bloquer, ni être comptées contre le téléphone.
+    nombre, taille = 0, 0
+    for photo in dossier.glob("telephone-*.jpg"):
+        try:
+            taille += photo.stat().st_size
+            nombre += 1
+        except OSError:
+            continue
+    if nombre >= PHOTOS_MAX or taille + len(octets) > PHOTOS_TAILLE_MAX:
+        raise PhotoRefusee("quota")
+    if espace_libre(dossier) - len(octets) < ESPACE_LIBRE_MIN:
+        raise PhotoRefusee("espace")
     base = time.strftime("telephone-%Y%m%d-%H%M%S", time.localtime(maintenant))
     provisoire = dossier / f".{base}.{secrets.token_hex(4)}.tmp"
     fd = os.open(provisoire, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
@@ -1721,7 +1754,11 @@ def _gestionnaire(service):
             if len(octets) != longueur or not octets.startswith(b"\xff\xd8\xff"):
                 return self._json(400, {"erreur": "jpeg"})
             try:
-                nom = enregistrer_photo(service.chemins["photos"], octets, service.horloge())
+                with service._verrou_photos:
+                    nom = enregistrer_photo(service.chemins["photos"], octets, service.horloge())
+            except PhotoRefusee as refus:
+                journal.warning("photo refusée (%s)", refus)
+                return self._json(507, {"erreur": str(refus)})
             except OSError as erreur:
                 journal.error("photo non enregistrée : %s", erreur)
                 return self._json(500, {"erreur": "disque"})
