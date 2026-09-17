@@ -1189,7 +1189,7 @@ function rendreSecurite() {
         brouillon.modes = suivant;
         rendreEditeur();
       },
-    }, `${actif ? "✓ " : ""}${t(cle)}`));
+    }, t(cle)));
   }
   $("editeur-restreint").hidden = !restreint;
   // Une restriction ne tient que si on ne peut pas simplement passer sur un profil libre.

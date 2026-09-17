@@ -151,3 +151,39 @@ test("contrastes : les couleurs d'état (jauge, pluie) sont des jetons du thème
   assert.doesNotMatch(ext.match(/\.jauge-temps[^\n]*\n/g).join(""), /#[0-9a-f]{3,6}/i);
   assert.doesNotMatch(readFileSync(path.join(MENU, "hub.js"), "utf8"), /color:\s*rgb\(90 170 255\)/);
 });
+
+// Audit du 17/09/2026 : anneaux de 1,5 à 2 px d'accent semi-transparent, option choisie
+// distinguée par la seule couleur (1,48:1 en sombre, 1,25:1 en clair).
+test("sélection : anneau épais et décalé sur toute cible, coche sur l'option choisie", async () => {
+  for (const theme of ["sombre", "clair"]) {
+    await page?.close();
+    await ouvrir(reglages({}, { theme }));
+    const cibles = ['[data-mode="gaming"]', '[data-cle="service-netflix"]', "#puce-profil", '[data-action="reglages"]', '[data-action="arret"]'];
+    await page.evaluate(() => ACTIONS.reglages("apparence"));
+    await page.waitForTimeout(300);
+    for (const sel of [...cibles, '[data-cle="theme-clair"]', '[data-cle="section-fond"]']) {
+      const anneau = await page.evaluate(s => {
+        const e = document.querySelector(s);
+        if (!e.closest(".calque")) { fermerTout(); }
+        definirFocus(e, true);
+        const cs = getComputedStyle(e), rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+        const v = cs.outlineColor.match(/[\d.]+/g).map(Number);
+        const lin = x => { x /= 255; return x <= .03928 ? x / 12.92 : ((x + .055) / 1.055) ** 2.4; };
+        const L = ([r, g, b]) => .2126 * lin(r) + .7152 * lin(g) + .0722 * lin(b);
+        const fond = getComputedStyle(document.documentElement).backgroundColor.match(/[\d.]+/g).map(Number);
+        const [a, b] = [L(v), L(fond)];
+        const r = { style: cs.outlineStyle, largeur: parseFloat(cs.outlineWidth) / rem, decalage: parseFloat(cs.outlineOffset) / rem, contraste: (Math.max(a, b) + .05) / (Math.min(a, b) + .05) };
+        if (e.closest(".calque") === null) ACTIONS.reglages("apparence");
+        return r;
+      }, sel);
+      assert.equal(anneau.style, "solid", `${theme} ${sel}`);
+      assert.ok(anneau.largeur >= .15 && anneau.decalage > 0, `${theme} ${sel} : ${JSON.stringify(anneau)}`);
+      assert.ok(anneau.contraste >= 3, `${theme} ${sel} : anneau à ${anneau.contraste.toFixed(2)}:1 sur le fond`);
+    }
+    const coches = await page.evaluate(() => {
+      const c = document.querySelector("#contenu-reglages .option.choisie"), n = c.parentElement.querySelector(".option:not(.choisie)");
+      return [getComputedStyle(c, "::before").content, getComputedStyle(n, "::before").content];
+    });
+    assert.deepEqual(coches, ['"✓"', "none"], theme);
+  }
+});

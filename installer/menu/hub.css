@@ -25,6 +25,12 @@
   /* Initiales des avatars : encre foncée sur la couleur du profil. En blanc, sur turquoise
      ou ambre, elles tombaient à 2,05–2,2:1 (1,5:1 en thème clair). */
   --encre-avatar: #06070c;
+  /* Anneau de sélection : épais (en rem, il suit la taille réglée), clair sur fond sombre,
+     décalé du bord pour se détacher de la cible. Mesuré le 17/09/2026 : 1,5 à 2 px d'accent
+     semi-transparent, moins de la moitié du périmètre à 3:1 de l'état non sélectionné. */
+  --anneau: #fff;
+  --anneau-epaisseur: .18rem;
+  --anneau-decalage: .14rem;
   --verre: rgba(255, 255, 255, .055);
   --verre-fort: rgba(255, 255, 255, .11);
   --verre-feuille: rgba(14, 16, 26, .62);
@@ -77,6 +83,7 @@
   --attention: #955800;
   --alerte: #b8322f;
   --depasse: #a8480f;
+  --anneau: #0e1322;
   --verre: rgba(255, 255, 255, .42);
   --verre-fort: rgba(255, 255, 255, .72);
   --verre-feuille: rgba(248, 250, 255, .74);
@@ -223,7 +230,7 @@ body.calque-ouvert .ecran { transform: scale(.975); opacity: .35; }
 .puce.focus {
   color: var(--texte);
   background: var(--verre-fort);
-  box-shadow: inset 0 0 0 1.5px rgb(var(--accent) / .8), 0 0 1.52rem -.3rem rgb(var(--accent) / .55);
+  box-shadow: 0 0 1.52rem -.3rem rgb(var(--accent) / .55);
   transform: scale(1.07);
 }
 .avatar {
@@ -321,7 +328,7 @@ body.avec-reprises .salut h1 { font-size: var(--t-5); }
   transition: opacity .3s, transform .45s var(--ressort);
 }
 .reprise .lecture svg { width: .72rem; height: .72rem; fill: currentColor; margin-left: .11rem; }
-.reprise.focus { opacity: 1; transform: translateY(-.27rem) scale(1.07); box-shadow: inset 0 0 0 2px rgb(var(--c)), 0 1.06rem 2.12rem -.61rem rgb(var(--c) / .55); }
+.reprise.focus { opacity: 1; transform: translateY(-.27rem) scale(1.07); box-shadow: 0 1.06rem 2.12rem -.61rem rgb(var(--c) / .55); }
 .reprise.focus .lecture { opacity: 1; transform: none; }
 
 /* ── Intro à l'allumage ──────────────────────────────────────────────────── */
@@ -541,9 +548,14 @@ kbd.fleche { font-family: system-ui, sans-serif; font-size: var(--t-2); line-hei
 .bouton.focus {
   color: var(--focus-texte);
   background: rgb(var(--c) / .2);
-  box-shadow: inset 0 0 0 1.5px rgb(var(--c) / .8), 0 0 1.67rem -.23rem rgb(var(--c) / .55);
+  box-shadow: 0 0 1.67rem -.23rem rgb(var(--c) / .55);
   transform: scale(1.07);
 }
+/* Toute cible sélectionnée porte le même anneau, sur tout son périmètre (WCAG 2.4.13) : le
+   contour suit l'arrondi, ne touche pas aux ombres ni aux lueurs, et grandit avec la cible. */
+[data-nav].focus { outline: var(--anneau-epaisseur) solid var(--anneau); outline-offset: var(--anneau-decalage); }
+.tuile-profil.focus { outline: none; }
+.tuile-profil.focus .avatar { outline: var(--anneau-epaisseur) solid var(--anneau); outline-offset: var(--anneau-decalage); }
 .bouton.danger { --c: var(--arret); }
 .bouton.minuteur { color: var(--texte); box-shadow: inset 0 0 0 1px rgb(var(--arret) / .5); font-variant-numeric: tabular-nums; }
 
@@ -620,7 +632,7 @@ kbd.fleche { font-family: system-ui, sans-serif; font-size: var(--t-2); line-hei
 }
 .entree svg { width: .99rem; height: .99rem; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 .entree.courante { color: var(--texte); background: var(--verre); }
-.entree.focus { color: var(--focus-texte); background: rgb(var(--accent) / .22); box-shadow: inset 0 0 0 1.5px rgb(var(--accent) / .75); transform: translateX(.23rem); }
+.entree.focus { color: var(--focus-texte); background: rgb(var(--accent) / .22); transform: translateX(.23rem); }
 
 .contenu { padding: 1.5rem 1.8rem; overflow: hidden; position: relative; }
 .contenu h3 { font-size: var(--t-4); font-weight: 700; letter-spacing: -.02em; margin-bottom: .8rem; }
@@ -650,7 +662,10 @@ kbd.fleche { font-family: system-ui, sans-serif; font-size: var(--t-2); line-hei
   white-space: nowrap;
 }
 .option.choisie { color: var(--texte); background: rgb(var(--accent) / .22); box-shadow: inset 0 0 0 1px rgb(var(--accent) / .55); }
-.option.focus { color: var(--focus-texte); box-shadow: inset 0 0 0 2px rgb(var(--accent)), 0 0 1.21rem -.23rem rgb(var(--accent) / .6); transform: scale(1.06); }
+/* L'option choisie ne se distinguait que par sa couleur (1,48:1 en sombre, 1,25:1 en clair) :
+   une coche la dit sans la couleur (WCAG 1.4.1). */
+.option.choisie::before { content: "✓"; margin-right: .35em; }
+.option.focus { color: var(--focus-texte); box-shadow: 0 0 1.21rem -.23rem rgb(var(--accent) / .6); transform: scale(1.06); }
 
 .vignettes { display: grid; grid-template-columns: repeat(3, 1fr); gap: .76rem; }
 .vignette-fond {
@@ -675,7 +690,7 @@ kbd.fleche { font-family: system-ui, sans-serif; font-size: var(--t-2); line-hei
   font-size: var(--t-2); font-weight: 800;
   color: #06070c; background: rgb(var(--accent));
 }
-.vignette-fond.focus { transform: scale(1.06); box-shadow: inset 0 0 0 2.5px rgb(var(--accent)), 0 .76rem 1.82rem -.46rem rgb(var(--accent) / .55); }
+.vignette-fond.focus { transform: scale(1.06); box-shadow: 0 .76rem 1.82rem -.46rem rgb(var(--accent) / .55); }
 .apercu-aurore { background: radial-gradient(60% 80% at 25% 30%, #1d8f86, transparent), radial-gradient(50% 70% at 80% 20%, #3b2d8f, transparent), #06070c; }
 .apercu-nebuleuse { background: radial-gradient(55% 70% at 30% 60%, #7a2d8f, transparent), radial-gradient(45% 60% at 75% 35%, #c2477a, transparent), radial-gradient(1px 1px at 20% 20%, #fff, transparent), #07050d; }
 .apercu-ocean { background: radial-gradient(70% 60% at 50% 110%, #0a6fb0, transparent), radial-gradient(50% 60% at 15% 20%, #0f3b73, transparent), #030a14; }
@@ -737,10 +752,11 @@ body.gestion .tuile-profil .avatar { position: relative; }
   transition: background-color .3s var(--souple);
 }
 .champ .indice { font-size: var(--t-1); color: var(--texte-pale); font-weight: 500; }
-.champ.focus { box-shadow: inset 0 0 0 2px rgb(var(--accent)), 0 0 1.21rem -.3rem rgb(var(--accent) / .6); }
+.champ.focus { box-shadow: 0 0 1.21rem -.3rem rgb(var(--accent) / .6); }
 .nuancier { display: flex; gap: .61rem; justify-content: center; margin-top: .91rem; }
 .nuance { width: 2.12rem; height: 2.12rem; border-radius: 50%; background: rgb(var(--c)); box-shadow: inset 0 0 0 2px rgb(255 255 255 / .25); transition: transform .4s var(--ressort); }
 .nuance.choisie { box-shadow: inset 0 0 0 3px #fff; }
+.nuance.choisie::after, .choix-photo.choisie::after { content: "✓"; display: grid; place-items: center; height: 100%; font-size: var(--t-2); font-weight: 800; color: #06070c; text-shadow: 0 0 .3rem #fff; }
 .nuance.focus { transform: scale(1.2); box-shadow: inset 0 0 0 3px #fff, 0 0 1.21rem rgb(var(--c)); }
 .avatar.avec-photo { background-size: cover; background-position: center; color: transparent; text-shadow: none; }
 .galerie-avatars { display: flex; flex-wrap: wrap; gap: .53rem; justify-content: center; max-height: 6.37rem; overflow: hidden; }
@@ -795,7 +811,7 @@ body.gestion .tuile-profil .avatar { position: relative; }
 }
 .touche.large { grid-column: span 3; font-size: var(--t-2); }
 .touche.moyenne { grid-column: span 2; font-size: var(--t-2); }
-.touche.focus { background: rgb(var(--accent) / .3); box-shadow: inset 0 0 0 2px rgb(var(--accent)); transform: scale(1.1); }
+.touche.focus { background: rgb(var(--accent) / .3); transform: scale(1.1); }
 
 /* ── Météo détaillée ─────────────────────────────────────────────────────── */
 .meteo-tete { display: flex; align-items: center; gap: 1.52rem; }
@@ -943,7 +959,7 @@ body.sans-animation *, body.sans-animation *::before, body.sans-animation *::aft
 .points i.plein { background: rgb(var(--accent)); box-shadow: 0 0 .76rem rgb(var(--accent) / .7); transform: scale(1.15); }
 .pave { display: grid; grid-template-columns: repeat(3, 1fr); gap: .53rem; }
 .touche-code { height: 2.88rem; border-radius: .76rem; font-size: var(--t-4); font-weight: 600; text-align: center; background: var(--verre); box-shadow: inset 0 0 0 1px var(--liseré); transition: transform .3s var(--ressort), background-color .2s; }
-.touche-code.focus { background: rgb(var(--accent) / .28); box-shadow: inset 0 0 0 2px rgb(var(--accent)); transform: scale(1.08); }
+.touche-code.focus { background: rgb(var(--accent) / .28); transform: scale(1.08); }
 
 /* Estompé plutôt que flouté : un flou de 18 px sur la moitié de l'écran, sous le fond animé. */
 body.verrouille .centre, body.verrouille .pied .aides { opacity: .15; pointer-events: none; }
@@ -998,7 +1014,7 @@ body.verrouille .centre, body.verrouille .pied .aides { opacity: .15; pointer-ev
 .tuile-service.focus {
   opacity: 1;
   transform: translateY(-.23rem) scale(1.1);
-  box-shadow: inset 0 0 0 2px rgb(255 255 255 / .9), 0 .91rem 1.97rem -.61rem rgb(var(--accent) / .6);
+  box-shadow: 0 .91rem 1.97rem -.61rem rgb(var(--accent) / .6);
 }
 .tuile-service.lance { transform: scale(1.2); }
 .tuile-service.indisponible { filter: grayscale(.85); opacity: .5; }
