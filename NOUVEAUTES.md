@@ -7,6 +7,12 @@ lisibles depuis le canapé : le menu affiche cette première section sous « Ins
 **La première section doit porter le numéro du fichier `VERSION`.** Un test le vérifie
 (`tests/test_version.py`). Marche à suivre pour publier : `installer/mise-a-jour/README.md`.
 
+## 1.0.8 — 18 septembre 2026
+
+Les mises à jour échouaient à l'étape des tests sur un HUB déjà installé : un test
+exigeait que le menu affiche le numéro du dépôt, alors qu'il doit afficher celui de la
+version installée, forcément plus ancienne pendant une mise à jour.
+
 ## 1.0.7 — 18 septembre 2026
 
 L'image du mode, à droite de l'accueil, n'est presque plus rognée : la lueur du fond ne

@@ -79,10 +79,29 @@ class Numero(unittest.TestCase):
         self.assertNotIn("##", quoi, "le titre de section ne doit pas se retrouver dans le résumé")
 
     def test_le_menu_affiche_ce_numero(self):
-        # infos() est ce que la page reçoit pour Réglages → À propos.
-        infos = hub_menu.infos()
+        """infos() est ce que la page reçoit pour Réglages → À propos.
+
+        Sans HUB installé (ici, et sur un Mac), c'est le numéro du dépôt. Sur une vraie
+        machine, le fichier posé par l'installateur fait foi : la version INSTALLÉE, qui
+        est justement plus ancienne que le dépôt pendant une mise à jour. Comparer le
+        menu au dépôt faisait échouer les tests de CHAQUE mise à jour sur le HUB, donc
+        bloquait l'installation (constaté le 18/09/2026, « 1.0.2 != 1.0.7 »)."""
+        with tempfile.TemporaryDirectory() as d:
+            with unittest.mock.patch.object(hub_menu, "VERSION_INSTALLEE", Path(d) / "absent"):
+                infos = hub_menu.infos()
         self.assertEqual(infos["version"], numero_du_depot())
         self.assertEqual(infos["nouveautes"], hub_menu.nouveautes(NOUVEAUTES))
+
+    def test_le_menu_affiche_la_version_installee_pas_celle_du_depot(self):
+        """Une version installée plus ancienne que le dépôt reste celle affichée : c'est
+        ce qui tourne. Le dépôt ne sert qu'à combler ce qui manque."""
+        with tempfile.TemporaryDirectory() as d:
+            chemin = Path(d) / "VERSION"
+            chemin.write_text("0.9.1\nabc1234\n2026-01-02\n")
+            with unittest.mock.patch.object(hub_menu, "VERSION_INSTALLEE", chemin):
+                infos = hub_menu.infos()
+        self.assertEqual(infos["version"], "0.9.1")
+        self.assertEqual(infos["commit"], "abc1234")
 
 
     def test_fichier_installe_sans_numero_complete_par_le_depot(self):
