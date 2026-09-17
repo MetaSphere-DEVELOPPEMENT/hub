@@ -22,7 +22,11 @@
 <div id="photos" hidden></div>
 <!-- Les traits fins des motifs (sol, ondes, étoiles, poussière), plus nets que le fond. -->
 <canvas id="fond-lignes" width="960" height="540" hidden></canvas>
-<!-- Motif cinéma : le pictogramme du mode choisi, en grand, qui pivote lentement. -->
+<!-- Motif cinéma : l'image du mode choisi, à droite, fondue dans le fond. Les trois sont
+     dans la page dès le départ (hub.js les y pose) : elles sont locales et ne se chargent
+     qu'une fois. Le pictogramme en filigrane, qui pivote lentement, reprend si l'une
+     manque ou ne se charge pas. -->
+<div id="visuel-mode" hidden></div>
 <div id="filigrane" hidden><svg viewBox="0 0 32 32"></svg></div>
 <canvas class="grain" id="grain"></canvas>
 <div class="vignette"></div>
