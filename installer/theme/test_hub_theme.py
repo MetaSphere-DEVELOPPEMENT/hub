@@ -524,6 +524,24 @@ class Plymouth(unittest.TestCase):
                 self.assertEqual(canaux, 4)
                 self.assertGreater(largeur, 0)
 
+    def test_tailles_proportionnelles_a_l_ecran(self):
+        # En pixels fixes, le logo faisait 4 % de la hauteur en 4K et le message 16 px.
+        with tempfile.TemporaryDirectory() as d:
+            dossier = Path(d) / "hub"
+            ht.generer_plymouth(dossier, self_apparence())
+            script = (dossier / "hub.script").read_text()
+            self.assertIn("hauteur_ecran = Window.GetHeight();", script)
+            self.assertIn(f"hauteur_ecran * {ht.PLYMOUTH_LOGO}", script)
+            self.assertIn(f"hauteur_ecran * {ht.PLYMOUTH_POINT}", script)
+            self.assertIn(f'"Sans " + Math.Int(hauteur_ecran * {ht.PLYMOUTH_MESSAGE})', script)
+            self.assertNotIn("{", script.split("SetBackgroundTopColor")[0])
+            # Images dessinées pour la 4K : Plymouth ne fait que les réduire.
+            _, hauteur, _, _ = lire_png(dossier / "hub.png")
+            self.assertGreaterEqual(hauteur, round(2160 * ht.PLYMOUTH_LOGO) - 2)
+            cote, _, _, _ = lire_png(dossier / "point.png")
+            self.assertGreaterEqual(cote, round(2160 * ht.PLYMOUTH_POINT))
+            self.assertGreaterEqual(2160 * ht.PLYMOUTH_MESSAGE, 48)
+
 
 def self_apparence():
     return ht.Apparence(theme="sombre", couleur=ht.COULEURS_PROFIL["violet"], fond="aurore", fond_uri="", base="#06070c")
