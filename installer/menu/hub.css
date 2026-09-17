@@ -170,6 +170,41 @@ body:not([data-motif="nappes"]) #fond { filter: none; }
 }
 #filigrane svg, .apercu-filigrane svg { display: block; width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: .65; stroke-linecap: round; stroke-linejoin: round; }
 :root[data-theme="clair"] #filigrane { color: #0e1322; opacity: .07; }
+
+/* L'image du mode choisi, à la place du filigrane (motif cinéma). Elle ne doit montrer
+   aucun bord : la boîte déborde en haut, en bas et à droite, et le seul côté qui entre
+   dans l'écran — la gauche, du côté du héros — est fondu par un masque en dégradé. Le
+   masque et le cadrage sont fixes : peints une fois dans le calque, ils ne coûtent rien
+   par image du fond (les nappes, les ondes et le halo continuent dessous et autour).
+   Les trois images sont posées en même temps, seule celle du mode choisi est opaque :
+   changer de mode croise deux opacités, que le compositeur fait sans repeindre. */
+#visuel-mode {
+  position: fixed;
+  top: -6vh; bottom: -6vh; right: -3vh;
+  width: 104vh;
+  pointer-events: none;
+  -webkit-mask-image: linear-gradient(90deg, transparent, rgb(0 0 0 / .3) 28%, #000 64%);
+  mask-image: linear-gradient(90deg, transparent, rgb(0 0 0 / .3) 28%, #000 64%);
+}
+/* Les images sont en 1168×784, sujet à droite et tiers gauche vide : cadrées à droite,
+   c'est ce tiers-là que le débordement mange, jamais le sujet. */
+#visuel-mode img {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: cover;
+  object-position: 100% 50%;
+  opacity: 0;
+  transition: opacity .16s linear;
+}
+#visuel-mode img.visible { opacity: .92; }
+/* Thème clair : les images sont sombres. Posées telles quelles, elles feraient une tache
+   noire sur le fond pâle. On les efface presque (elles ne restent qu'en ombre colorée du
+   mode) et on allonge le fondu de gauche : aucun rectangle, aucune arête. */
+:root[data-theme="clair"] #visuel-mode {
+  -webkit-mask-image: linear-gradient(90deg, transparent, rgb(0 0 0 / .22) 34%, #000 78%);
+  mask-image: linear-gradient(90deg, transparent, rgb(0 0 0 / .22) 34%, #000 78%);
+}
+:root[data-theme="clair"] #visuel-mode img.visible { opacity: .24; }
 #photos {
   position: fixed; inset: 0;
   overflow: hidden;
@@ -718,6 +753,16 @@ kbd.fleche { font-family: system-ui, sans-serif; font-size: var(--t-2); line-hei
 /* Même place que sur l'écran : centré à 77,5 % × 40 %, 76 % de la hauteur. */
 .apercu-filigrane { position: absolute; left: 56.1%; top: 2%; width: 42.75%; height: 76%; color: #fff; opacity: .13; transform: rotate(-1deg); }
 :root[data-theme="clair"] .apercu-filigrane { color: #0e1322; opacity: .07; }
+/* La vignette du motif cinéma montre ce qu'on verra : l'image du mode choisi, cadrée et
+   fondue comme à l'écran (les proportions de #visuel-mode sur un 16/9). */
+.apercu-visuel {
+  position: absolute; top: -6%; right: -1.7%; width: 58.5%; height: 112%;
+  object-fit: cover; object-position: 100% 50%;
+  opacity: .92;
+  -webkit-mask-image: linear-gradient(90deg, transparent, rgb(0 0 0 / .3) 28%, #000 64%);
+  mask-image: linear-gradient(90deg, transparent, rgb(0 0 0 / .3) 28%, #000 64%);
+}
+:root[data-theme="clair"] .apercu-visuel { opacity: .24; }
 /* Le nom sur un fond sombre : lisible sur n'importe quel aperçu, clair ou chargé. */
 .vignette-fond .libelle {
   position: absolute; left: .45rem; bottom: .4rem;

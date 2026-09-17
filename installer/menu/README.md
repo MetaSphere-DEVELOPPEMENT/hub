@@ -4,6 +4,18 @@ La page (`index.html`, `hub.js`, `hub.css`, et les extensions `temps-ecran.js`,
 `allumage.js`, `cadre.js`, `fluidite.js`) est affichée plein écran par `hub-menu`
 (WebKitGTK 6.0). Les tests sont dans `tests/menu`.
 
+## Les images des modes
+
+`images/mode-tv.webp`, `images/mode-jeux.webp` et `images/mode-bureau.webp` sont les
+images fournies par le propriétaire du HUB, commitées dans ce dépôt public : l'accueil
+montre celle du mode choisi à droite (motif cinéma). WebP, 1168 × 784, paysage, sujet à
+droite sur fond noir avec un dégradé vers le noir à gauche — c'est ce dégradé qui les fait
+se fondre dans le fond sombre. Pour en changer : remplacer le fichier en gardant le nom, le
+format et ces proportions (un fichier plus haut ou plus large est recadré à droite, le tiers
+gauche est mangé). Une image absente ou illisible n'est pas une panne : le pictogramme du
+mode en filigrane reprend sa place. Les noms sont écrits une seule fois, dans `VISUELS_MODE`
+(`hub.js`).
+
 ## Mesurer la fluidité
 
 ### D'où l'on part
@@ -35,7 +47,7 @@ la TV**) :
 | Motif | Toile floue | Toile des traits (960 px de large, transparente) | Calque en plus |
 |---|---|---|---|
 | nappes (celui d'avant) | 192×108, 5 remplissages | — | — |
-| cinéma (défaut d'un profil neuf) | 320×180, 4 remplissages | 3 cercles | filigrane : `transform` seule |
+| cinéma (défaut d'un profil neuf) | 320×180, 4 remplissages | 3 cercles | image du mode : calque fixe, masque peint une fois |
 | aurore boréale | 320×180, ~320 bandes de 3 px | 150 étoiles (sombre) | — |
 | profondeur | 320×180, 3 remplissages | ~45 traits, 3 orbes | — |
 | faisceaux | 320×180, 9 coins | 90 grains de poussière | — |
@@ -45,6 +57,14 @@ cadre photo), ralentit en ambiant et se fige en animations réduites. Aucun filt
 animé ; le `saturate()` de la toile ne reste que sur les nappes. L'accueil n'a plus aucun
 `backdrop-filter` : les trois cartes de verre en recalculaient chacune un à chaque image du
 fond. La toile des traits ajoute un envoi de 960×540 pixels par image au GPU.
+
+L'image du mode (17/09/2026) remplace le filigrane, qui était le seul calque que le fond
+déplaçait à chaque image : elle, elle ne bouge pas. Son coût est un calque de plus à
+recomposer par-dessus le fond, large de 104vh sur la droite de l'écran — soit, en 4K, une
+texture de 2 246 × 2 420 pixels mélangée à chaque image. Rien n'y est recalculé : le
+cadrage, le dégradé de masque et l'opacité sont fixes, le changement de mode ne croise que
+deux opacités (160 ms), et les trois images sont décodées une fois pour toutes au
+chargement (≈ 92 Ko de WebP, ≈ 11 Mo décodés). Aucun `filter`, aucun masque animé.
 
 - [ ] motif cinéma, accueil immobile 30 s : ____ images/s, pire seconde ____
 - [ ] motif aurore boréale (le plus de dessin) : ____ images/s ; CPU WebKitWebProcess ____ %
@@ -66,6 +86,11 @@ Mac (Apple M4)**, 3840×2160, fond océan, images par seconde sur 5 s :
 Ce n'est **ni WebKitGTK, ni l'UHD 630, ni un rendu GPU** : ces chiffres comparent deux
 versions de la page entre elles, ils ne disent rien de la TV. L'accueil reste lent
 dans ce rendu logiciel : le coût du plein écran 4K y domine tout le reste.
+
+Même mesure, motif cinéma cette fois, avant et après l'image du mode (17/09/2026, même
+Chromium, 3840×2160, sur 6 s) : accueil immobile 17,1 → 17,3 images/s, et après trois
+changements de mode 17,5 → 17,3. L'écart est dans le bruit de cette machine : le calque en
+plus ne se voit pas ici, ce qui ne dit toujours rien de l'UHD 630.
 
 ### Sur le M720q
 
@@ -190,6 +215,10 @@ Les trois définitions donnent les mêmes proportions : tout est en rem de 100vm
 ### À vérifier sur la TV
 
 - [ ] WebKitGTK 2.52 : `color-mix()`, `outline` qui suit `border-radius`, `:root[data-taille]`
+- [ ] image du mode : `mask-image` en dégradé et `object-fit: cover` rendus par WebKitGTK ;
+      aucune arête à gauche vue du canapé ; le fondu au changement de mode reste court
+- [ ] image du mode en thème clair : assez présente pour se voir, assez effacée pour ne pas
+      faire une tache sur le fond pâle
 - [ ] lecture réelle à 3 m en M et en XL ; zone sûre de la TV à 5 et 8 %
 - [ ] cadre photo : horloge sur une photo très claire (le dégradé du coin suffit-il ?)
 - [ ] télécommande réelle : la touche maintenue envoie-t-elle `repeat` (pas de rotation) ?

@@ -153,6 +153,28 @@ test("contrastes : thème clair et initiales des avatars à 4,5:1 au moins", asy
   }
 });
 
+// L'image du mode (installer/menu/images) occupe la moitié droite de l'accueil : le héros
+// reste à gauche, l'heure et le profil passent au-dessus d'elle. Mesuré sur les trois
+// images, dans les deux thèmes, fond figé. Le titre du héros est un texte d'affiche : 3:1
+// suffirait (WCAG 1.4.3), on le tient au même seuil que le reste.
+test("contrastes : le héros et l'en-tête au-dessus de chaque image de mode, sombre et clair", async () => {
+  const faibles = [], mesures = [];
+  for (const theme of ["sombre", "clair"]) {
+    for (const [mode, image] of [["tv", "tv"], ["gaming", "jeux"], ["bureau", "bureau"]]) {
+      await page?.close();
+      await ouvrir({ ...reglages({}, { theme, animations: "reduites", motif: "cinema" }), reprises: REPRISES });
+      await page.evaluate(m => definirFocus(document.querySelector(`.onglet[data-mode="${m}"]`), true), mode);
+      await page.waitForTimeout(250);
+      assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll("#visuel-mode img.visible")].map(i => i.dataset.visuel)), [image],
+        `${theme} ${mode} : ce n'est pas l'image du mode qui est montrée`);
+      const m = await contrastes(["#heros-titre", ".heure", "#nom-profil", ...TEXTES_ACCUEIL]);
+      mesures.push(...m.map(x => ({ theme, image, ...x })));
+      faibles.push(...m.filter(x => x.ratio < 4.5).map(x => ({ theme, image, ...x })));
+    }
+  }
+  assert.deepEqual(faibles, [], JSON.stringify(mesures));
+});
+
 test("contrastes : les couleurs d'état (jauge, pluie) sont des jetons du thème, pas des couleurs en dur", () => {
   const ext = readFileSync(path.join(MENU, "extensions.css"), "utf8");
   assert.doesNotMatch(ext.match(/\.jauge-temps[^\n]*\n/g).join(""), /#[0-9a-f]{3,6}/i);

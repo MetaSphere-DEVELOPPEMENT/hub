@@ -782,6 +782,35 @@ const ctx = toile.getContext("2d");
 const toileLignes = $("fond-lignes");
 const ctxLignes = toileLignes.getContext("2d");
 const filigrane = $("filigrane");
+const visuelMode = $("visuel-mode");
+// Les images des modes, à droite de l'accueil : une par mode, fournies par le propriétaire
+// et commitées dans le dépôt (installer/menu/images, README). Elles sont locales : on les
+// pose toutes les trois dans la page au chargement, une fois pour toutes, et changer de
+// mode ne fait ensuite que croiser deux opacités — rien à relire, rien à redécoder.
+const VISUELS_MODE = { tv: "images/mode-tv.webp", jeux: "images/mode-jeux.webp", bureau: "images/mode-bureau.webp" };
+let visuelChoisi = "tv";
+for (const [nom, source] of Object.entries(VISUELS_MODE)) {
+  const image = el("img", { "data-visuel": nom, src: source, alt: "", decoding: "async" });
+  // Image absente du dossier, ou illisible : elle quitte la page et le pictogramme en
+  // filigrane reprend sa place. Le menu ne doit jamais montrer un trou à droite.
+  image.addEventListener("error", () => { image.remove(); rafraichirVisuel(); });
+  visuelMode.append(image);
+}
+// Le visuel du mode : l'image du mode choisi seule visible, le filigrane en repli.
+function rafraichirVisuel(motif = motifChoisi()) {
+  const cinema = motif === "cinema";
+  const image = visuelMode.querySelector(`img[data-visuel="${visuelChoisi}"]`);
+  for (const img of visuelMode.children) img.classList.toggle("visible", cinema && img === image);
+  visuelMode.hidden = !cinema || !image;
+  filigrane.hidden = !cinema || !!image;
+}
+// La vignette du motif cinéma, dans les réglages, montre ce qu'on verra : l'image du mode
+// choisi (déjà chargée, la même adresse), ou le pictogramme en filigrane à défaut.
+function apercuVisuel() {
+  const image = visuelMode.querySelector(`img[data-visuel="${visuelChoisi}"]`);
+  return image ? el("img", { class: "apercu-visuel", src: image.getAttribute("src"), alt: "" })
+    : el("span", { class: "apercu-filigrane", html: filigrane.innerHTML });
+}
 let accentCible = COULEURS_MODE.tv;
 let accentCourant = [...COULEURS_MODE.tv];
 let fondPret = false;
@@ -829,9 +858,10 @@ function preparerToiles(motif, theme, couleur) {
     toileLignes.width = LARGEUR_LIGNES;
     toileLignes.height = hauteurLignes;
   }
-  filigrane.hidden = motif !== "cinema";
+  rafraichirVisuel(motif);
   document.body.dataset.motif = motif;
-  // La couleur de base du fond, pour le voile du bas qui passe sur le filigrane (hub.css).
+  // La couleur de base du fond, pour le voile du bas qui passe sur l'image du mode et le
+  // filigrane (hub.css) : c'est lui qui noie le bas de l'image sous les rangées.
   racine.style.setProperty("--fond-base", rvbHex((PALETTES[couleur] || PALETTES.aurore)[theme].base).join(" "));
 }
 addEventListener("resize", () => { preparation = ""; relancerFond(); });
@@ -970,7 +1000,10 @@ function accentuer(nom) {
   const couleur = COULEURS_MODE[nom] || COULEURS_MODE.tv;
   accentCible = couleur;
   racine.style.setProperty("--accent", (racine.dataset.theme === "clair" ? couleur.map(v => Math.round(v * .78)) : couleur).join(" "));
+  // L'image du mode, à droite (motif cinéma) : un fondu court d'une image à l'autre.
+  if (VISUELS_MODE[nom] && nom !== visuelChoisi) { visuelChoisi = nom; rafraichirVisuel(); }
   // Le filigrane du motif cinéma : le pictogramme du mode, le même que dans son onglet.
+  // Il ne se voit que sans image, mais il la suit : elle peut manquer à tout moment.
   const picto = document.querySelector(`#modes .onglet[data-accent="${nom}"] svg`);
   if (picto && filigrane.dataset.picto !== nom) {
     filigrane.dataset.picto = nom;
@@ -2182,7 +2215,7 @@ function rendreSection(garderFocus = true) {
         let apercu;
         if (m === "photos") apercu = el("span", { class: "apercu-photos", html: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="m3 16 5-5 4 4 3-3 6 6"/></svg>' });
         else apercu = apercuFond(m, couleur || "aurore", theme);
-        if (m === "cinema") apercu = el("span", { class: "apercu-cinema" }, apercu, el("span", { class: "apercu-filigrane", html: $("filigrane").innerHTML }));
+        if (m === "cinema") apercu = el("span", { class: "apercu-cinema" }, apercu, apercuVisuel());
         motifs.append(vignette(`motif-${m}`, motif === m, t(m === "minimal" || m === "photos" ? `fond.${m}` : `motif.${m}`), apercu, () => {
           if (m === "photos" && !(INITIAL.photos || []).length) { son("erreur"); return annoncer(t("fond.photos.aucune")); }
           valider(() => {

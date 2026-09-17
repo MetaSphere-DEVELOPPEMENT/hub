@@ -25,12 +25,14 @@ function fauxPont(initial) {
   window.webkit = { messageHandlers: { hub: { postMessage: t => window.__messages.push(JSON.parse(t)) } } };
   window.HUB_INITIAL = initial;
 }
-async function ouvrir(initial = {}, requete = "") {
+async function ouvrir(initial = {}, requete = "", avant = null) {
   page = await navigateur.newPage({ viewport: { width: 1920, height: 1080 } });
   page.erreurs = [];
   page.on("pageerror", e => page.erreurs.push(e.message));
   await page.route(/open-meteo\.com/, r => r.abort());
   await page.addInitScript(fauxPont, { retour: true, ...initial });
+  // « avant » voit la page avant son chargement : compter les requêtes, en refuser une.
+  if (avant) await avant(page);
   await page.goto(PAGE + "?sans-intro" + requete);
   await page.waitForTimeout(300);
 }
@@ -62,7 +64,8 @@ test("compatibilité : un profil enregistré avec « fond » seul garde les napp
 test("compatibilité : un HUB neuf et un profil créé partent du motif cinéma, couleur aurore, teinte du mode", async () => {
   await ouvrir({});
   assert.deepEqual(await page.evaluate(() => [window.hubFond.motifChoisi(), window.hubFond.fondChoisi(), profil().teinteMode]), ["cinema", "aurore", true]);
-  assert.equal(await page.evaluate(() => document.getElementById("filigrane").hidden), false);
+  // L'image du mode prend la place du filigrane, qui reste en repli.
+  assert.deepEqual(await page.evaluate(() => [document.getElementById("visuel-mode").hidden, document.getElementById("filigrane").hidden]), [false, true]);
   await page.close();
   await ouvrir(profil({ fond: "ocean" }));
   await page.evaluate(() => ouvrirEditeur(null));
@@ -222,6 +225,59 @@ test("héros : il suit l'onglet, garde le dernier mode sur une tuile, et le fili
   await page.click("#lancer");
   await page.waitForFunction(() => window.__messages.some(m => m.type === "choix"), null, { timeout: 3000 });
   assert.deepEqual(await page.evaluate(() => window.__messages.filter(m => m.type === "choix")), [{ type: "choix", mode: "bureau" }]);
+  assert.deepEqual(page.erreurs, []);
+});
+
+// L'image du mode, à droite de l'accueil : une photo par mode, posée dans le dépôt
+// (installer/menu/images). Elles sont locales : chargées une fois au départ, jamais
+// relues en changeant de mode.
+const visuelVisible = () => page.evaluate(() => {
+  const v = document.getElementById("visuel-mode");
+  const vue = [...v.children].filter(i => i.classList.contains("visible")).map(i => i.dataset.visuel);
+  return { cache: v.hidden, vue, filigrane: document.getElementById("filigrane").hidden, images: v.children.length };
+});
+
+test("image du mode : celle du mode choisi s'affiche à droite, change avec l'onglet, chargée une seule fois", async () => {
+  const demandes = [];
+  await ouvrir(profil({ motif: "cinema", dernier: "tv" }), "",
+    p => p.on("request", r => { if (/\/images\/mode-/.test(r.url())) demandes.push(r.url().split("/").pop()); }));
+  assert.deepEqual(await visuelVisible(), { cache: false, vue: ["tv"], filigrane: true, images: 3 });
+  await touche("ArrowRight");
+  assert.deepEqual(await visuelVisible(), { cache: false, vue: ["jeux"], filigrane: true, images: 3 });
+  await touche("ArrowRight");
+  assert.deepEqual(await visuelVisible(), { cache: false, vue: ["bureau"], filigrane: true, images: 3 });
+  await touche("ArrowLeft", "ArrowLeft", "ArrowRight");
+  assert.deepEqual(await visuelVisible(), { cache: false, vue: ["jeux"], filigrane: true, images: 3 });
+  // Préchargement : les trois images, une fois chacune, et rien de plus après six changements.
+  assert.deepEqual(demandes.sort(), ["mode-bureau.webp", "mode-jeux.webp", "mode-tv.webp"]);
+  // Le fondu d'une image à l'autre reste court, et le masque ne bouge jamais.
+  const fondu = await page.evaluate(() => {
+    const cs = getComputedStyle(document.querySelector("#visuel-mode img"));
+    return { durees: cs.transitionDuration.split(",").map(parseFloat), propriete: cs.transitionProperty };
+  });
+  assert.ok(Math.max(...fondu.durees) <= .2, `fondu ${fondu.durees}`);
+  assert.equal(fondu.propriete, "opacity");
+  // Un autre motif n'a ni image ni filigrane.
+  await page.evaluate(() => { profil().motif = "rubans"; appliquerTout(); });
+  await page.waitForTimeout(150);
+  assert.deepEqual(await visuelVisible(), { cache: true, vue: [], filigrane: true, images: 3 });
+  assert.deepEqual(page.erreurs, []);
+});
+
+test("image du mode : animations réduites, aucun fondu ; image absente, le pictogramme en filigrane reprend", async () => {
+  await ouvrir(profil({ motif: "cinema", dernier: "tv", animations: "reduites" }));
+  const duree = await page.evaluate(() => parseFloat(getComputedStyle(document.querySelector("#visuel-mode img")).transitionDuration));
+  assert.ok(duree <= .01, `fondu en animations réduites : ${duree} s`);
+  // Une image qui manque du dossier, ou illisible : elle quitte la page, le filigrane revient.
+  await page.close();
+  await ouvrir(profil({ motif: "cinema", dernier: "tv" }), "", p => p.route(/mode-jeux\.webp/, r => r.abort()));
+  assert.deepEqual(await visuelVisible(), { cache: false, vue: ["tv"], filigrane: true, images: 2 });
+  await touche("ArrowRight");
+  assert.deepEqual(await visuelVisible(), { cache: true, vue: [], filigrane: false, images: 2 });
+  assert.equal(await page.evaluate(() => document.getElementById("filigrane").dataset.picto), "jeux");
+  assert.ok(await page.evaluate(() => document.querySelector("#filigrane svg").innerHTML.length > 0), "le pictogramme du mode est bien dessiné");
+  await touche("ArrowLeft");
+  assert.deepEqual(await visuelVisible(), { cache: false, vue: ["tv"], filigrane: true, images: 2 });
   assert.deepEqual(page.erreurs, []);
 });
 
