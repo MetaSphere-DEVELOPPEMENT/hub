@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=HUB — mode ambiant du bureau
+Comment=Affiche l'horloge, la météo et le cadre photo du HUB quand le bureau reste inactif
+Exec=/usr/local/bin/hub-veille-bureau
+OnlyShowIn=ubuntu;
+NoDisplay=true
