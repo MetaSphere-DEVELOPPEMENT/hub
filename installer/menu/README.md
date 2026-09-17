@@ -178,6 +178,59 @@ restent au-dessus de 4,5:1 sur les trois jeux, les cinq motifs et les deux thèm
 - [ ] sur la TV : le bord gauche de l'image reste-t-il invisible, sans arête ni cadre ?
 - [ ] sur la TV, thème clair : l'image se voit-elle sans faire une tache sur le fond pâle ?
 
+### La lueur qui rognait l'image (18/09/2026, après la 1.0.3)
+
+Retour sur la TV, une fois la 1.0.3 installée : « est-ce que la lueur du haut et de gauche
+ne prend pas trop d'espace sur l'image ? Les éléments sont un peu cachés. Peut-être revoir
+ça, voir si c'est mieux sans lueur colorée quand il y a une image, ou très fine. » Les deux
+dégradés qui éteignaient l'image sur ses bords (jusqu'à 24 % de sa hauteur en haut, 54 % de
+sa largeur à gauche) ne laissaient que **32,7 %** de la boîte en vraie photo — tout le reste,
+c'était la lueur du motif. Or ces images sont composées avec de l'espace à gauche
+justement pour se poser là.
+
+Quatre états comparés, en 1920×1080, sur le mode Bureau avec le jeu 3 et sur Jeux avec le
+jeu 2 (captures dans le rapport). « Vraie photo » = la part de la boîte que changer de
+palette ne change pas ; les contrastes sont mesurés comme dans `tests/menu/lisibilite.test.js`
+(seuils : 4,5:1 pour un texte, 3:1 pour un pictogramme).
+
+| État | Vraie photo | Pire texte de l'en-tête | Verdict |
+|---|---|---|---|
+| a · la 1.0.3 | 32,7 % | date 4,58:1 (sombre) | le sujet est coupé en haut et à gauche |
+| b · fondu très fin (haut 5 %, gauche 22 %) | 68,2 % | **date 3,21:1** (jeu 3, mode TV) | la photo est claire juste sous la date : refusé |
+| c · aucun fondu (haut 2 %, gauche 8 %) | 84 % | date 3,21:1 | et un **bord net** apparaît, à gauche et en haut |
+| **d · retenue** | **58,7 %** | date 7,52:1 (sombre), 5,27:1 (clair) | sujet entier, aucun bord, tout au-dessus des seuils |
+
+La retenue garde des fondus, mais courts — la photo est entière dès 3 % de sa hauteur
+(25 px) et 30 % de sa largeur (337 px, contre 565) — et confie la lisibilité de l'en-tête à
+une **ombre de 10,5 % de la hauteur de la boîte**, à la couleur de base du fond et non à la
+teinte du motif : on voit la photo, en retrait, plutôt qu'une lueur colorée à sa place.
+L'ombre est dans la boîte, donc le fondu de gauche l'efface du côté du héros, et elle
+disparaît avec l'image quand le profil a choisi « Aucun » ou « Filigrane ».
+
+Ce que l'en-tête y gagne, en thème sombre (pire des trois jeux → meilleur) :
+
+| Texte | 1.0.6 | 1.0.7 |
+|---|---|---|
+| heure | 8,13:1 | **9,89:1** |
+| date | 4,58:1 | **7,52:1** |
+| nom du profil | 4,61:1 | **10,00:1** |
+| pictogramme Internet | 4,40:1 | **9,46:1** |
+
+En thème clair, la photo étant plus sombre que le fond, l'en-tête y perd un peu mais reste
+au large : date 7,13 → 5,27:1, pictogramme Internet 5,09 → 4,38:1 (seuil 3:1), heure
+14,22 → 11,30:1. Deux réglages ont été dictés par la mesure et non par l'œil : le fondu de
+gauche s'arrête à 30 % et non 22 %, parce que les titres de rangées (« Continuer à
+regarder », « Streaming ») font toute la largeur de l'écran et tombaient à 4,22:1 en clair ;
+et le fondu du bas descend à 88 % au lieu de 80 %, ce que le pied de l'écran supporte.
+
+La vignette des réglages a été remise d'aplomb du même coup : elle portait encore les
+dégradés et l'opacité d'avant la 1.0.3.
+
+- [ ] sur la TV : le sujet est-il entier, en haut comme à gauche ?
+- [ ] sur la TV : l'ombre de l'en-tête se voit-elle comme une bande, ou passe-t-elle inaperçue ?
+- [ ] sur la TV : toujours aucune arête à gauche de l'image, sur les trois jeux ?
+- [ ] sur la TV : l'heure et la date restent-elles nettes sur la bobine dorée du jeu 2 ?
+
 ### Mesure indicative, hors TV
 
 `cd tests/menu && HUB_NAVIGATEUR=chromium node mesurer-rendu.mjs [copie du dépôt]`,

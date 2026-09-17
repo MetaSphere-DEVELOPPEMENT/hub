@@ -474,13 +474,16 @@ test("image du mode : le jeu se choisit dans les réglages, s'enregistre, et « 
 // palette à l'autre (jeu 3, mode TV : .27 sur l'aurore, .55 sur la braise). Aujourd'hui,
 // en sombre, les deux captures sont identiques au pixel près.
 const ZONE_IMAGE = { x: 1637, y: 350, largeur: 283, hauteur: 380 };
+// Toute la boîte de l'image, telle qu'elle tient dans l'écran : #visuel-mode fait 104vh de
+// large et déborde de 3vh à droite, de 6vh à 94vh en hauteur.
+const BOITE_IMAGE = { x: 829, y: 65, largeur: 1091, hauteur: 950 };
 async function coeurDeLImage(jeu, mode, theme, fond) {
   await page?.close();
   await ouvrir(profil({ motif: "cinema", fond, theme, visuels: jeu, animations: "reduites" }));
   await page.evaluate(m => definirFocus(document.querySelector(`.onglet[data-mode="${m}"]`), true), mode);
   await page.waitForTimeout(400);
   const png = (await page.screenshot()).toString("base64");
-  return page.evaluate(async ([png, z]) => {
+  const mesure = await page.evaluate(async ([png, z]) => {
     const i = new Image(); i.src = "data:image/png;base64," + png; await i.decode();
     const c = document.createElement("canvas"); c.width = z.largeur; c.height = z.hauteur;
     const x = c.getContext("2d");
@@ -502,6 +505,18 @@ async function coeurDeLImage(jeu, mode, theme, fond) {
       saturation: +(sat / n).toFixed(3),
     };
   }, [png, ZONE_IMAGE]);
+  return { ...mesure, png };
+}
+// Part de la boîte qui est de la vraie photo : les pixels que changer de palette ne change
+// pas. Le reste, ce sont les bords où la photo s'éteint et où l'on voit la lueur du fond.
+async function partDeVraiePhoto(a, b) {
+  return page.evaluate(async ([x, y, z]) => {
+    const lire = async b64 => { const i = new Image(); i.src = "data:image/png;base64," + b64; await i.decode(); const c = document.createElement("canvas"); c.width = z.largeur; c.height = z.hauteur; const t = c.getContext("2d"); t.drawImage(i, z.x, z.y, z.largeur, z.hauteur, 0, 0, z.largeur, z.hauteur); return t.getImageData(0, 0, z.largeur, z.hauteur).data; };
+    const A = await lire(x), B = await lire(y);
+    let pures = 0, n = 0;
+    for (let i = 0; i < A.length; i += 4) { n++; if (A[i] === B[i] && A[i + 1] === B[i + 1] && A[i + 2] === B[i + 2]) pures++; }
+    return pures / n;
+  }, [a, b, BOITE_IMAGE]);
 }
 const ecartMoyen = (A, B) => {
   let s = 0;
@@ -520,6 +535,12 @@ test("image du mode : le fond passe derrière elle — sa couleur ne déteint pa
       // Sa propre étendue de lumière, pas celle d'un voile uni. Le pire des trois jeux
       // (le bureau du jeu 1, une pièce sombre) mesure 2,2 ; il était à 1,6 sous le voile.
       assert.ok(aurore.contraste >= 2, `${jeu} ${mode} : image délavée (contraste ${aurore.contraste}:1)`);
+      // Second retour de la TV (1.0.3) : « est-ce que la lueur du haut et de gauche ne prend
+      // pas trop d'espace sur l'image ? Les éléments sont un peu cachés ». Les fondus des
+      // bords n'en laissaient que 32,7 % ; ils en laissent 58,7 % aujourd'hui. Le seuil est
+      // à 50 % : de quoi refuser un retour en arrière sans casser au premier réglage fin.
+      const part = await partDeVraiePhoto(aurore.png, braise.png);
+      assert.ok(part >= .5, `${jeu} ${mode} : la lueur du fond mange l'image (${(part * 100).toFixed(1)} % de vraie photo)`);
     }
   }
   // En clair, l'image est volontairement retenue pour ne pas peser sur un fond pâle : le
