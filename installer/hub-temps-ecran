@@ -65,7 +65,22 @@ def chemins():
     return {
         "etat": Path(os.environ.get("XDG_STATE_HOME") or maison / ".local/state") / "hub" / "temps-ecran.json",
         "reglages": Path(os.environ.get("XDG_CONFIG_HOME") or maison / ".config") / "hub" / "reglages.json",
+        # Écrit par hub-veille-bureau pendant que le mode ambiant couvre le bureau.
+        "ambiant": Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}") / "hub" / "ambiant-bureau",
     }
+
+
+def ambiant_bureau_affiche(chemin, proc=Path("/proc")):
+    """Le mode ambiant ne s'ouvre qu'après plusieurs minutes sans clavier ni souris et se
+    ferme au premier geste : c'est un écran de veille, pas du temps d'écran. Le fichier
+    porte le numéro du processus ; un fichier laissé par une surveillance tombée, ou un
+    numéro repris par un autre programme, ne met pas le décompte en pause."""
+    try:
+        pid = int(Path(chemin).read_text().strip())
+        ligne = (Path(proc) / str(pid) / "cmdline").read_bytes()
+    except (OSError, ValueError):
+        return False
+    return b"hub-menu" in ligne and b"--ambiant" in ligne
 
 
 # ── Règles ────────────────────────────────────────────────────────────────
@@ -426,7 +441,7 @@ def profil_et_regles(c):
     return profil, regles, langue
 
 
-def suivre(mode, c, demarrer, horloge=time.time, pas=PAS_S, avertir=avertir, terminer=terminer):
+def suivre(mode, c, demarrer, horloge=time.time, pas=PAS_S, avertir=avertir, terminer=terminer, en_pause=None):
     profil, regles, langue = profil_et_regles(c)
     maintenant = horloge()
     jour = jour_de(lire_etat(c["etat"]), profil, maintenant)
@@ -446,6 +461,8 @@ def suivre(mode, c, demarrer, horloge=time.time, pas=PAS_S, avertir=avertir, ter
         maintenant = horloge()
         # Plafonné : une mise en veille ou un changement d'heure ne compte pas des heures.
         ecoule = min(max(0, maintenant - dernier), pas * 2)
+        if en_pause and en_pause():
+            ecoule = 0
         dernier = maintenant
         jour = modifier_etat(c["etat"], lambda e: ajouter(e, profil, mode, ecoule, maintenant), maintenant)
         if fini:
@@ -497,7 +514,7 @@ def main(arguments):
         return 2
     genre, mode, programme = commande
     if genre == "bureau":
-        return suivre("bureau", c, demarrer=SansProcessus)
+        return suivre("bureau", c, demarrer=SansProcessus, en_pause=lambda: ambiant_bureau_affiche(c["ambiant"]))
     try:
         return suivre(mode, c, demarrer=lambda: subprocess.Popen(programme, start_new_session=True))
     except OSError as erreur:

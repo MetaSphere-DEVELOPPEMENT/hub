@@ -340,6 +340,14 @@ poser_version() {
 }
 
 # ── 3. Session et menu ────────────────────────────────────────────────────────
+# Le mode ambiant du HUB sur le bureau Ubuntu (installer/veille/README.md). Avec le menu :
+# il lance « hub-menu --ambiant » et la page qui va avec. L'autostart ne porte pas
+# X-GNOME-Autostart-Phase : GNOME 50 ignorerait l'entrée (ARCHITECTURE.md, pièges).
+poser_veille_bureau() {
+  poser "$DEPOT/veille/hub-veille-bureau" /usr/local/bin/hub-veille-bureau 0755 || return 1
+  poser "$DEPOT/veille/hub-veille-bureau.desktop" /etc/xdg/autostart/hub-veille-bureau.desktop 0644 || return 1
+}
+
 etape_session() {
   etape "3. Session HUB et menu"
   # gnome-kiosk-script-session fournit la session Wayland plein écran : Ubuntu 26.04
@@ -367,6 +375,7 @@ etape_session() {
   # Le script que gnome-kiosk-script-session exécute. S'il manque, la session en crée
   # un d'exemple et ouvre un éditeur de texte sur la TV.
   poser "$DEPOT/gnome-kiosk-script" "$MAISON/.local/bin/gnome-kiosk-script" 0755 "$UTILISATEUR" || return 1
+  poser_veille_bureau || return 1
 
   # Les réglages appartiennent au menu, qui les écrit. On prépare leur dossier au nom
   # de l'utilisateur, et on ne touche jamais au fichier : le relancer après un
