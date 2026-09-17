@@ -256,7 +256,7 @@ test("profils : créer un profil au clavier, puis l'utiliser", async () => {
   await page.click('[data-action="enregistrer-profil"]');
   await attendreReglages(d => d.profils.length === 2);
   const donnees = (await messages("reglages")).at(-1).donnees;
-  assert.deepEqual(donnees.profils.map(p => p.nom), ["Samuel", "Camille"]);
+  assert.deepEqual(donnees.profils.map(p => p.nom), ["Profil 1", "Camille"]);
   await page.click(`[data-cle="profil-${donnees.profils[1].id}"]`);
   assert.match(await page.textContent("#salut"), /Camille$/);
   await page.waitForFunction(id => window.__messages.filter(m => m.type === "reglages").at(-1)?.donnees.profilActif === id, donnees.profils[1].id, { timeout: 3000 });
@@ -267,7 +267,7 @@ test("photo de profil : choisie dans l'éditeur, affichée partout, liste rafra�
   await ouvrir({ retour: true, avatars: [] });
   await touche("p");
   await page.click('[data-action="gerer-profils"]');
-  await page.click('[data-cle="profil-samuel"]');
+  await page.click('[data-cle="profil-profil-1"]');
   assert.deepEqual((await messages("avatars")).length, 1, "l'éditeur redemande la liste des photos");
   assert.ok(await page.isVisible("#aide-photo"));
   await page.evaluate(p => window.hub.recevoir({ type: "avatars", liste: [p] }), photo);
@@ -392,7 +392,7 @@ test("code PIN : le définir dans l'éditeur l'enregistre haché, jamais en clai
   await ouvrir({ retour: true });
   await touche("p");
   await page.click('[data-action="gerer-profils"]');
-  await page.click('[data-cle="profil-samuel"]');
+  await page.click('[data-cle="profil-profil-1"]');
   await page.click('[data-cle="code-definir"]');
   await page.keyboard.type("2580");
   await page.waitForFunction(() => /seconde fois/.test(document.querySelector("#code-detail").textContent));
@@ -708,4 +708,20 @@ test("recopie d'écran : pendant l'appairage, le code s'affiche en grand, puis d
   await page.evaluate(() => window.hub.recevoir({ type: "recopie-appairage", etat: null }));
   assert.ok(!(await page.isVisible("#recopie-appairage")), "fichier disparu : la recopie a commencé");
   assert.deepEqual(page.erreurs, []);
+});
+
+test("profil par défaut neutre ; des réglages existants gardent leurs profils et le profil actif", async () => {
+  await ouvrir();
+  assert.equal(await page.textContent("#nom-profil"), "Profil 1");
+  assert.match(await page.textContent("#salut"), /Profil 1$/);
+  await page.close();
+  await ouvrir({ reglages: { profilActif: "ancien", profils: [{ id: "autre", nom: "Alix" }, { id: "ancien", nom: "Dominique" }], systeme: { meteo: { active: false } } } });
+  assert.equal(await page.textContent("#nom-profil"), "Dominique");
+  await page.evaluate(() => { window.hub.recevoir({ type: "commande", nom: "reglages" }); });
+  await page.click('[data-section="apparence"]');
+  await page.click('[data-cle="theme-clair"]');
+  await page.waitForFunction(() => window.__messages.some(m => m.type === "reglages"), null, { timeout: 5000 });
+  const donnees = (await messages("reglages")).at(-1).donnees;
+  assert.equal(donnees.profilActif, "ancien");
+  assert.deepEqual(donnees.profils.map(p => [p.id, p.nom]), [["autre", "Alix"], ["ancien", "Dominique"]]);
 });
