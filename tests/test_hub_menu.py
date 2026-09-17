@@ -389,5 +389,28 @@ class Messages(unittest.TestCase):
         self.assertTrue(i["disqueLibre"].endswith("Go"))
 
 
+class Fluidite(AvecDossier):
+    def test_compteur_demande_par_variable_ou_par_fichier(self):
+        self.c["mesurer-fluidite"] = self.c["execution"] / "mesurer-fluidite"
+        self.assertFalse(hub_menu.mesure_fluidite_demandee(self.c, {}))
+        self.assertTrue(hub_menu.mesure_fluidite_demandee(self.c, {"HUB_FPS": "1"}))
+        self.assertFalse(hub_menu.mesure_fluidite_demandee(self.c, {"HUB_FPS": "0"}))
+        self.c["execution"].mkdir(parents=True)
+        self.c["mesurer-fluidite"].touch()
+        self.assertTrue(hub_menu.mesure_fluidite_demandee(self.c, {}))
+        # Des chemins sans l'entrée (anciens appelants) : pas de compteur, pas d'erreur.
+        self.assertFalse(hub_menu.mesure_fluidite_demandee({}, {}))
+
+    def test_releve_de_la_page_en_une_ligne_de_nombres(self):
+        ligne = hub_menu.ligne_fps({"type": "fps", "ecran": "accueil", "moyenne": 29.7, "min": 24, "longues": 3, "pire": 118, "fenetre": 5})
+        self.assertEqual(ligne, "hub-menu : fluidité accueil — 29.7 images/s, pire seconde 24, 3 images > 50 ms (pire 118 ms) sur 5.0 s")
+        self.assertIsNone(hub_menu.ligne_fps({"type": "fps", "moyenne": "beaucoup"}))
+        self.assertIn("fluidité ? —", hub_menu.ligne_fps({"ecran": "x\nfaux", "moyenne": 1, "min": 1, "longues": 0, "pire": 1, "fenetre": 1}))
+
+    def test_ligne_de_rendu_omet_ce_qui_manque(self):
+        self.assertEqual(hub_menu.ligne_rendu({"webkit": "2.52.6", "acceleration": "always", "gsk": None, "ecran": "3840x2160", "frequence": "30.00 Hz"}),
+                         "hub-menu : rendu webkit=2.52.6 ; acceleration=always ; ecran=3840x2160 ; frequence=30.00 Hz")
+
+
 if __name__ == "__main__":
     unittest.main()
