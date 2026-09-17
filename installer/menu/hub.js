@@ -41,7 +41,9 @@ const COULEURS_PROFIL = {
 };
 
 const DEFAUTS_PROFIL = {
-  nom: "Samuel",
+  // Neutre : le dépôt est public. Un reglages.json existant garde ses profils, leurs
+  // identifiants et son profilActif (voir la fusion plus bas) ; seul un HUB neuf part de là.
+  nom: "Profil 1",
   couleur: "turquoise",
   theme: "sombre",
   fond: "aurore",
@@ -64,8 +66,8 @@ const DEFAUTS_PROFIL = {
 };
 const DEFAUTS = {
   version: 1,
-  profilActif: "samuel",
-  profils: [{ id: "samuel", ...DEFAUTS_PROFIL }],
+  profilActif: "profil-1",
+  profils: [{ id: "profil-1", ...DEFAUTS_PROFIL }],
   systeme: {
     voix: true,
     sons: true,
