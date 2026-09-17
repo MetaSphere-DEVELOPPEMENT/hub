@@ -81,6 +81,7 @@ class Reglages(AvecDossier):
         hub_menu.retenir(self.c, "bureau")
         hub_menu.retenir(self.c, "eteindre")
         hub_menu.retenir(self.c, "web")
+        hub_menu.retenir(self.c, "redemarrer")
         self.assertEqual(hub_menu.dernier_choix(self.c), "bureau")
 
 
@@ -126,6 +127,43 @@ class Meteo(AvecDossier):
         def coupe(url):
             raise OSError
         self.assertEqual(hub_menu.geocodage("Brest", "fr", telecharger=coupe), [])
+
+
+class Arret(AvecDossier):
+    """Le menu d'arrêt : éteindre et redémarrer passent par la sortie standard (le script
+    de session appelle systemctl), la veille par hub-menu lui-même."""
+
+    def test_redemarrer_est_un_mode_rendu_au_script_de_session(self):
+        self.assertIn("redemarrer", hub_menu.MODES)
+        self.assertEqual(hub_menu.lire_message_page('{"type":"choix","mode":"redemarrer"}'),
+                         {"type": "choix", "mode": "redemarrer"})
+        # Le repli sans WebKit garde ses quatre boutons : les modes et l'extinction.
+        self.assertEqual(hub_menu.MODES[:4], ("tv", "gaming", "bureau", "eteindre"))
+
+    def test_veille_appelle_systemctl_suspend_ecrit_en_toutes_lettres(self):
+        commandes = []
+        executer = lambda cmd, **_: commandes.append(cmd) or SimpleNamespace(returncode=0, stderr="")
+        self.assertEqual(hub_menu.mettre_en_veille(executer=executer), {"resultat": "ok"})
+        self.assertEqual(commandes, [["systemctl", "suspend"]])
+
+    def test_veille_refusee_par_systemd_ne_pretend_rien(self):
+        executer = lambda cmd, **_: SimpleNamespace(returncode=1, stderr="Access denied\n")
+        reponse = hub_menu.mettre_en_veille(executer=executer)
+        self.assertEqual(reponse["resultat"], "echec")
+        self.assertIn("Access denied", reponse["raison"])
+
+    def test_veille_sans_systemctl_ne_leve_pas(self):
+        def absent(cmd, **_):
+            raise OSError("systemctl introuvable")
+        self.assertEqual(hub_menu.mettre_en_veille(executer=absent)["resultat"], "echec")
+
+    def test_la_fenetre_du_mode_ambiant_refuse_la_veille_et_le_dit(self):
+        self.assertFalse(hub_menu.message_permis("veille", ambiant=True))
+        self.assertEqual(hub_menu.refus_ambiant("veille"),
+                         {"type": "veille", "resultat": "refus", "raison": "ambiant"})
+        # Choisir un mode n'attend pas de réponse : rien à dire, comme avant.
+        self.assertIsNone(hub_menu.refus_ambiant("choix"))
+        self.assertTrue(hub_menu.message_permis("veille", ambiant=False))
 
 
 class Minuteur(AvecDossier):

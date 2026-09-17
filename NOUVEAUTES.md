@@ -7,6 +7,14 @@ lisibles depuis le canapé : le menu affiche cette première section sous « Ins
 **La première section doit porter le numéro du fichier `VERSION`.** Un test le vérifie
 (`tests/test_version.py`). Marche à suivre pour publier : `installer/mise-a-jour/README.md`.
 
+## 1.0.4 — 18 septembre 2026
+
+Le bouton Éteindre ouvre un menu au lieu d'un interrupteur : éteindre, redémarrer, mettre
+le HUB en veille (l'écran s'éteint, la télécommande réveille), passer en écran permanent
+(Always-On Display : horloge, météo et cadre photo, sans rien arrêter) ou changer de
+profil. Chaque entrée dit en une ligne ce qu'elle fait, Annuler est sélectionné d'emblée,
+et éteindre comme redémarrer demandent confirmation.
+
 ## 1.0.3 — 18 septembre 2026
 
 Les cercles qui s'agrandissaient sur l'accueil « Cinéma » ont disparu : le fond vit
@@ -14,7 +22,6 @@ maintenant par ses seules nappes de couleur, sans rien qui traverse l'image.
 
 L'image du mode, à droite, n'est plus recouverte par la couleur du fond : elle passe
 devant lui et garde ses vraies couleurs, nette de trois mètres.
-
 ## 1.0.2 — 17 septembre 2026
 
 Un HUB installé avant les numéros de version affichait « version inconnue » à côté de

@@ -189,16 +189,128 @@ test("depuis un onglet, Bas atteint le streaming puis les boutons du pied, Haut 
   assert.ok(["tv", "gaming", "bureau"].includes(await focus()));
 });
 
-test("éteindre demande confirmation, Annuler est sélectionné d'abord", async () => {
+// Le bouton Éteindre du pied ouvre un menu d'actions, pas un interrupteur. Annuler ouvre
+// la liste et la garde à chaque ouverture : la mémoire de focus des calques ramènerait
+// sinon sur la dernière entrée choisie, et un OK parti trop vite couperait la machine.
+test("arrêt : six actions expliquées, Annuler sélectionné à chaque ouverture", async () => {
   await ouvrir();
   await touche("e");
   assert.deepEqual(await calques(), ["arret"]);
-  await touche("Enter");
+  const entrees = await page.evaluate(() => [...document.querySelectorAll("#arret [data-nav]")].map(e => ({
+    cle: e.dataset.cle, nom: e.querySelector(".action-nom").textContent, detail: e.querySelector(".action-detail").textContent,
+  })));
+  assert.deepEqual(entrees.map(e => e.cle),
+    ["arret-annuler", "arret-eteindre", "arret-redemarrer", "arret-veille", "arret-ambiant", "arret-profils"]);
+  assert.deepEqual(entrees.filter(e => !e.nom.trim() || !e.detail.trim()), [], "chaque action porte son nom et sa ligne d'explication");
+  assert.match(entrees[4].nom, /Always-On Display/);
+  assert.equal(await focus(), "arret-annuler");
+  await touche("ArrowDown", "ArrowDown");
+  assert.equal(await focus(), "arret-redemarrer", "les flèches parcourent la liste");
+  await touche("Escape");
   assert.deepEqual(await calques(), []);
+  await touche("e");
+  assert.equal(await focus(), "arret-annuler", "rouvert, le menu repart d'Annuler");
+  await touche("Enter");
+  assert.deepEqual(await calques(), [], "Annuler ramène à l'accueil");
   assert.deepEqual(await messages("choix"), []);
-  await touche("e", "ArrowRight", "Enter");
-  await attendreChoix();
-  assert.deepEqual(await messages("choix"), [{ type: "choix", mode: "eteindre" }]);
+});
+
+test("arrêt : éteindre et redémarrer confirment avant d'envoyer leur mode", async () => {
+  for (const [cle, mode, titre] of [["arret-eteindre", "eteindre", /Éteindre le HUB/], ["arret-redemarrer", "redemarrer", /Redémarrer le HUB/]]) {
+    await page?.close();
+    await ouvrir();
+    await touche("e");
+    await page.click(`[data-cle="${cle}"]`);
+    assert.deepEqual(await calques(), ["arret", "arret-confirmer"], cle);
+    assert.match(await page.textContent("#arret-confirmer-titre"), titre);
+    assert.equal(await focus(), "arret-confirmer-annuler");
+    await touche("Enter");
+    assert.deepEqual(await calques(), ["arret"], "Annuler revient au menu, sans rien couper");
+    assert.deepEqual(await messages("choix"), []);
+    await page.click(`[data-cle="${cle}"]`);
+    await touche("ArrowRight", "Enter");
+    await attendreChoix();
+    assert.deepEqual(await messages("choix"), [{ type: "choix", mode }]);
+  }
+});
+
+test("arrêt : mettre en veille passe en ambiant et demande la veille à hub-menu", async () => {
+  await ouvrir();
+  await touche("e");
+  await page.click('[data-cle="arret-veille"]');
+  assert.deepEqual(await calques(), []);
+  assert.ok(await page.evaluate(() => document.body.classList.contains("ambiant")));
+  assert.deepEqual(await messages("veille"), [{ type: "veille" }]);
+  assert.deepEqual(await messages("choix"), []);
+  // Refusée (fenêtre du mode ambiant) : l'écran ne reste pas à faire croire que ça dort.
+  await page.evaluate(() => window.hub.recevoir({ type: "veille", resultat: "refus", raison: "ambiant" }));
+  assert.ok(!(await page.evaluate(() => document.body.classList.contains("ambiant"))));
+  assert.match(await page.textContent("#annonce"), /pas possible/);
+});
+
+test("arrêt : l'écran permanent bascule en mode ambiant sans rien arrêter", async () => {
+  await ouvrir();
+  await touche("e");
+  await page.click('[data-cle="arret-ambiant"]');
+  assert.deepEqual(await calques(), []);
+  assert.ok(await page.evaluate(() => document.body.classList.contains("ambiant")));
+  await page.waitForTimeout(400);
+  assert.deepEqual(await messages("choix"), []);
+  assert.deepEqual(await messages("veille"), []);
+  await touche("Enter");
+  assert.ok(!(await page.evaluate(() => document.body.classList.contains("ambiant"))), "la première touche réveille");
+});
+
+test("arrêt : changer de profil ouvre la liste des profils", async () => {
+  await ouvrir({ retour: true, reglages: deuxProfils() });
+  await touche("e");
+  await page.click('[data-cle="arret-profils"]');
+  // calques() suit l'ordre du HTML, pas celui de la pile : la liste s'ouvre par-dessus le menu.
+  assert.deepEqual((await calques()).sort(), ["arret", "profils"]);
+  assert.equal(await page.locator("#liste-profils .tuile-profil").count(), 3, "les deux profils et l'ajout");
+});
+
+// Un profil restreint ne coupe pas la machine de toute la maison : le code d'un parent
+// (profil sans restriction, protégé par un code) est demandé d'abord — le même gardien que
+// pour accorder du temps d'écran.
+test("arrêt : sur un profil restreint, éteindre demande le code d'un parent", async () => {
+  const r = deuxProfils();
+  r.profilActif = "alix";
+  await ouvrir({ retour: true, reglages: r });
+  await touche("e");
+  await page.click('[data-cle="arret-eteindre"]');
+  await page.waitForFunction(() => document.querySelector("#code.ouvert"));
+  await page.keyboard.type("0000");
+  await page.waitForFunction(() => /incorrect/.test(document.querySelector("#code-detail").textContent));
+  assert.deepEqual(await messages("choix"), []);
+  await page.keyboard.type("1234");
+  await page.waitForFunction(() => document.querySelector("#arret-confirmer.ouvert"));
+  assert.equal(await focus(), "arret-confirmer-annuler", "même là, la confirmation repart d'Annuler");
+  // Ce qui se défait d'un geste ne demande pas de code : la veille et l'écran permanent.
+  await touche("Escape");
+  await page.click('[data-cle="arret-veille"]');
+  assert.deepEqual(await messages("veille"), [{ type: "veille" }]);
+});
+
+test("arrêt : profil restreint sans parent protégé, la confirmation suffit", async () => {
+  const r = deuxProfils();
+  r.profilActif = "alix";
+  delete r.profils[0].pin;
+  await ouvrir({ retour: true, reglages: r });
+  await touche("e");
+  await page.click('[data-cle="arret-eteindre"]');
+  assert.deepEqual(await calques(), ["arret", "arret-confirmer"], "sans code parent, la restriction ne tient pas : on n'enferme personne");
+});
+
+test("anglais : le menu d'arrêt et sa confirmation sont traduits", async () => {
+  await ouvrir({ retour: true, reglages: { profilActif: "a", profils: [{ id: "a", nom: "Sam", langue: "en" }], systeme: { meteo: { active: false } } } });
+  await touche("e");
+  assert.equal(await page.textContent("#arret h2"), "What should the HUB do?");
+  assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll("#arret .action-nom")].map(e => e.textContent)),
+    ["Cancel", "Power off", "Restart", "Sleep", "Always-On Display", "Switch profile"]);
+  await page.click('[data-cle="arret-redemarrer"]');
+  assert.equal(await page.textContent("#arret-confirmer-titre"), "Restart the HUB?");
+  assert.equal(await page.textContent("#arret-confirmer-oui"), "Restart");
 });
 
 test("réglages : parcourir le sommaire change la section, choisir un motif puis une couleur l'enregistre", async () => {

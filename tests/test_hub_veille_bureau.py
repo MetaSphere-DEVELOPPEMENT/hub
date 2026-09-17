@@ -325,6 +325,11 @@ class MenuAmbiant(unittest.TestCase):
         source = (INSTALLER / "hub-menu.py").read_text()
         corps = source[source.index("def message_recu"):source.index("# La voix")]
         self.assertRegex(corps, r"if not message or not message_permis\(message\[\"type\"\], self\.ambiant\):\s+return")
+        # Refusé, un message qui attend une réponse (mettre en veille) reçoit un refus, et
+        # rien d'autre : la page ne doit pas rester à croire que la machine s'endort.
+        self.assertEqual(hub_menu.refus_ambiant("veille"),
+                         {"type": "veille", "resultat": "refus", "raison": "ambiant"})
+        self.assertIsNone(hub_menu.refus_ambiant("reglages"))
         # L'ambiant ne rend jamais de choix au script de session.
         fin = source[source.index("menu.run(None)"):]
         self.assertLess(fin.index("if ambiant:"), fin.index("print(menu.choix)"))

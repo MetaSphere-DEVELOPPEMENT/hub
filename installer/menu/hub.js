@@ -8,6 +8,7 @@
 //   → { type: "meteo", lat, lon }        demander un relevé (Python le met en cache)
 //   → { type: "geocodage", nom, langue } chercher une ville
 //   → { type: "minuteur", minutes }      programmer (ou annuler avec 0) l'extinction
+//   → { type: "veille" }                 endormir la machine (réponse : { type: "veille", resultat, raison })
 //   → { type: "infos" }                  machine, adresse IP, disque…
 //   → { type: "appairage", affiche }     l'écran d'appairage de la télécommande est (ou n'est plus) à l'écran
 //   → { type: "recopie-code", nouveau }  le code de recopie d'écran (nouveau : en tirer un autre)
@@ -181,6 +182,10 @@ window.hubExtensions = extensions;
 function estRestreint(p = profil()) {
   return ["tv", "gaming", "bureau"].some(m => !modeAutorise(m, p)) || extensions.restrictions.some(f => f(p));
 }
+// Les profils qui peuvent lever une restriction : sans restriction eux-mêmes, et protégés
+// par un code. Ce sont eux qu'on interroge pour accorder du temps d'écran (temps-ecran.js)
+// et pour arrêter le HUB depuis un profil restreint.
+function parentsAvecCode() { return reglages.profils.filter(x => x.pin && !estRestreint(x)); }
 function lancementRefuse(mode) { return extensions.avantLancer.some(f => f(mode) === false); }
 
 // ── Services : streaming et jeu en nuage ──────────────────────────────────
@@ -1584,11 +1589,68 @@ function lancer(carte) {
   setTimeout(() => envoyer({ type: "choix", mode: carte.dataset.mode }), profil().animations === "reduites" ? 0 : 620);
 }
 
-function eteindre() {
-  if (APERCU) { fermerTout(); return annoncer(t("apercu.eteindre")); }
+// ── Arrêt, veille et écran permanent ──────────────────────────────────────
+// Le bouton Éteindre du pied ouvre un menu (#arret) : les façons d'arrêter ou d'endormir
+// le HUB, plus le changement de profil. Ce qui ne se défait pas (éteindre, redémarrer)
+// demande une confirmation ; ce qui se défait d'un geste (veille, écran permanent) part
+// tout de suite. Les deux calques rendent la sélection à Annuler à chaque ouverture :
+// la mémoire de focus des calques ramènerait sinon sur « Éteindre » d'une fois sur l'autre.
+const ARRETS = {
+  eteindre: { titre: "arret.eteindre.titre", avant: "arret.eteindre.avant" },
+  redemarrer: { titre: "arret.redemarrer.titre", avant: "arret.redemarrer.avant" },
+};
+
+// Un profil restreint (un enfant) ne coupe pas la machine de toute la maison : on demande
+// le code d'un parent, comme pour accorder du temps d'écran. Sans parent protégé par un
+// code, la restriction ne tient de toute façon pas (Réglages → Profils le dit) : on laisse
+// faire, plutôt que d'interdire d'éteindre une TV que personne ne saurait rallumer.
+function sousCodeParent(suite) {
+  const parents = parentsAvecCode();
+  if (!estRestreint() || !parents.length) return suite();
+  demanderCode({ id: "parents", nom: t("temps.parent"), couleur: "ambre" }, () => {
+    // Le code d'un parent ne déverrouille pas ce gardien pour la suite.
+    deverrouilles.delete("parents");
+    suite();
+  }, { detail: t("arret.code") });
+  demande.profils = parents.map(x => x.id);
+}
+
+function confirmerArret(nom) {
+  sousCodeParent(() => {
+    $("arret-confirmer-titre").textContent = t(ARRETS[nom].titre);
+    $("arret-confirmer-detail").textContent = t(ARRETS[nom].avant);
+    $("arret-confirmer-oui").firstElementChild.textContent = t(nom);
+    $("arret-confirmer-oui").dataset.arret = nom;
+    focusParCalque["arret-confirmer"] = $("arret-confirmer-annuler");
+    ouvrirCalque("arret-confirmer");
+  });
+}
+
+// Éteindre et redémarrer suivent le même chemin qu'un mode : le mode est écrit sur la
+// sortie standard de hub-menu, et c'est le script de session qui appelle systemctl.
+function quitter(mode) {
+  if (APERCU) { fermerTout(); return annoncer(t(`apercu.${mode}`)); }
   verrou = true;
   document.body.classList.add("depart");
-  setTimeout(() => envoyer({ type: "choix", mode: "eteindre" }), 620);
+  setTimeout(() => envoyer({ type: "choix", mode }), profil().animations === "reduites" ? 0 : 620);
+}
+
+// La veille de la machine emprunte l'écran du mode ambiant : l'horloge s'installe (et le
+// code est redemandé si le profil le veut), puis hub-menu endort la machine. Au réveil, on
+// retrouve l'heure à l'écran plutôt que le menu tel qu'on l'avait laissé.
+function mettreEnVeille() {
+  entrerAmbiant();
+  envoyer({ type: "veille" });
+}
+
+function recevoirVeille(message) {
+  if (message.resultat === "ok") return;
+  // Refusée (fenêtre du mode ambiant) ou ratée : l'écran ne doit pas rester en ambiant à
+  // faire croire que la machine dort.
+  reveiller();
+  son("erreur");
+  annoncer(t(message.resultat === "refus" ? "arret.veille.refus" : "arret.veille.echec"),
+    message.resultat === "echec" ? message.raison : null);
 }
 
 onglets.forEach(c => c.addEventListener("click", () => {
@@ -1721,8 +1783,12 @@ const ACTIONS = {
     focusParCalque.jeux = (cle && $("contenu-jeux").querySelector(`[data-cle="${cle}"]`)) || $("contenu-jeux").querySelector(".tuile-service");
     ouvrirCalque("jeux");
   },
-  arret: () => ouvrirCalque("arret"),
-  eteindre,
+  arret: () => { focusParCalque.arret = $("arret-annuler"); ouvrirCalque("arret"); },
+  eteindre: () => confirmerArret("eteindre"),
+  redemarrer: () => confirmerArret("redemarrer"),
+  "arret-confirme": () => quitter($("arret-confirmer-oui").dataset.arret),
+  veille: mettreEnVeille,
+  ambiant: entrerAmbiant,
   fermer: fermerCalque,
   minuteur: () => ACTIONS.reglages("veille"),
   reseau: () => ACTIONS.reglages("apropos"),
@@ -3105,6 +3171,7 @@ window.hub = {
       case "meteo": return recevoirMeteo(message.donnees, message.releveLe, message.horsLigne);
       case "geocodage": return rappelGeocodage?.(message.resultats || []);
       case "minuteur": return recevoirMinuteur(message.fin);
+      case "veille": return recevoirVeille(message);
       case "telecommande": return recevoirTelecommande(message.etat);
       case "lecture": return recevoirLecture(message.etat);
       case "maj": return recevoirMiseAJour(message);
