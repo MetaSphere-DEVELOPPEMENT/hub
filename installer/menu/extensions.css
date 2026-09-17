@@ -1,4 +1,5 @@
-/* Temps d'écran, allumage programmé, cadre photo (temps-ecran.js, allumage.js, cadre.js).
+/* Temps d'écran, allumage programmé, affichage, cadre photo (temps-ecran.js, allumage.js,
+   affichage.js, cadre.js).
    À part de hub.css pour la même raison que leurs scripts : plusieurs mains éditent hub.css. */
 
 /* ── Jauge du temps restant sur la puce du profil ────────────────────────── */
@@ -26,6 +27,30 @@
 .etat-allumage { margin: .15rem 0 .46rem; }
 .adresses-mac { display: grid; gap: .38rem; }
 .valeur.mac { font-family: ui-monospace, "DejaVu Sans Mono", monospace; letter-spacing: .04em; }
+
+/* ── Réglages → Affichage ────────────────────────────────────────────────── */
+/* La fréquence de l'écran se lit d'abord, en gros, à trois mètres. « Fluide » et
+   « Saccadé » sont écrits : la couleur ne porte jamais seule l'information (WCAG 1.4.1). */
+.ecran-actuel .mode-courant { display: grid; justify-items: end; gap: .15rem; text-align: right; }
+.ecran-actuel .definition { font-size: var(--t-4); font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ecran-actuel .jugement { font-size: var(--t-2); color: var(--texte-doux); }
+.ecran-actuel.saccade .definition { color: var(--attention); }
+
+.modes-ecran { display: grid; gap: .38rem; margin-top: .68rem; }
+.mode-ecran { display: flex; align-items: baseline; gap: .68rem; padding: .61rem .8rem; white-space: normal; }
+.mode-ecran .definition { font-size: var(--t-3); font-weight: 700; font-variant-numeric: tabular-nums; }
+.mode-ecran .frequence { font-size: var(--t-2); font-weight: 600; font-variant-numeric: tabular-nums; }
+/* « Fluide » / « Saccadé » sont écrits, pas teintés : --attention tombait à 4,39:1 sur le
+   verre d'une option en thème clair (mesuré le 17/09/2026), et la couleur seule ne dit rien. */
+.mode-ecran .jugement { margin-left: auto; font-size: var(--t-1); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.mode-ecran .actif { font-size: var(--t-1); font-weight: 600; padding: .11rem .42rem; border-radius: 99rem; color: var(--texte-doux); background: var(--verre-fort); }
+.alerte-affichage { margin-top: .53rem; }
+/* Le compte à rebours du filet : le seul chiffre qui compte quand l'image vient de changer. */
+.compte-a-rebours { margin-top: .76rem; font-size: var(--t-4); font-weight: 700; font-variant-numeric: tabular-nums; color: var(--attention); }
+
+/* ── Réglages → À propos : le numéro de version, et ce qu'elle apporte ───── */
+.version-info .version-detail { margin-top: .15rem; font-size: var(--t-1); color: var(--texte-doux); font-variant-numeric: tabular-nums; }
+.rangee.nouveautes { margin-top: .53rem; }
 
 /* ── Cadre photo du mode ambiant ─────────────────────────────────────────── */
 #cadre { position: absolute; inset: 0; overflow: hidden; background: #000; }

@@ -63,6 +63,27 @@ class Lectures(unittest.TestCase):
         Path(f.name).write_text("3eb4bf5\n")
         self.assertEqual(maj.version_installee(f.name), "3eb4bf5")
 
+    def test_numero_et_empreinte_du_fichier_pose_par_l_installateur(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "VERSION"
+            f.write_text("1.4.0\nv1.2-14-g3eb4bf5\n2026-09-17\n")
+            self.assertEqual(maj.lire_version(f), ("1.4.0", "3eb4bf5"))
+            # Un HUB installé avant les numéros : l'empreinte seule, et rien d'inventé.
+            f.write_text("3eb4bf5\n")
+            self.assertEqual(maj.lire_version(f), (None, "3eb4bf5"))
+            self.assertEqual(maj.lire_version(Path(d) / "absent"), (None, None))
+            # Un numéro mal formé n'est pas pris pour une empreinte, ni l'inverse.
+            f.write_text("1.4\n3eb4bf5\n")
+            self.assertEqual(maj.lire_version(f), (None, "1.4"))
+
+    def test_numero_du_depot_lu_dans_son_fichier_version(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIsNone(maj.numero_du_depot(d))
+            (Path(d) / "VERSION").write_text("2.0.1\n")
+            self.assertEqual(maj.numero_du_depot(d), "2.0.1")
+            (Path(d) / "VERSION").write_text("bientôt\n")
+            self.assertIsNone(maj.numero_du_depot(d))
+
     def test_config(self):
         with tempfile.TemporaryDirectory() as d:
             f = Path(d) / "c.json"
@@ -281,6 +302,31 @@ class DepotLocal(unittest.TestCase):
         reponse = maj.verifier(config, "0123abc", signataires=self.signataires)
         self.assertTrue(reponse["disponible"])
         self.assertTrue(reponse["verifiable"])
+
+    def test_verifier_donne_les_numeros_lisibles_quand_l_etiquette_existe(self):
+        self.commit()
+        (self.source / "VERSION").write_text("2.0.0\n")
+        git("add", "-A", cwd=self.source)
+        git("commit", "--no-gpg-sign", "-q", "-m", "v2", cwd=self.source)
+        config = {"source": str(self.source), "branche": "main"}
+        # Sans étiquette, aucun numéro distant : le menu s'en tiendra à l'empreinte.
+        reponse = maj.verifier(config, "0123abc", signataires=self.signataires, numero="1.0.0")
+        self.assertEqual(reponse["numero"], "1.0.0")
+        self.assertIsNone(reponse["numeroDistant"])
+        # Étiquette posée sur ce commit : le numéro se lit sans rien télécharger.
+        git("tag", "-a", "-m", "v2", "v2.0.0", cwd=self.source)
+        self.assertEqual(maj.verifier(config, "0123abc", signataires=self.signataires)["numeroDistant"], "2.0.0")
+        # Une étiquette posée ailleurs ne doit pas être prise pour celle du commit distant.
+        git("tag", "-a", "-m", "vieux", "v1.9.0", "HEAD~1", cwd=self.source)
+        self.assertEqual(maj.verifier(config, "0123abc", signataires=self.signataires)["numeroDistant"], "2.0.0")
+
+    def test_l_etat_publie_porte_le_numero_de_la_version_installee(self):
+        (self.source / "VERSION").write_text("2.0.0\n")
+        self.commit()
+        self.assertEqual(self.appliquer(installee="0000000"), 0)
+        etapes = {e["etape"]: e for e in self.etats}
+        for etape in ("tests", "installation", "terminee"):
+            self.assertEqual(etapes[etape].get("numero"), "2.0.0", etape)
 
     def test_verifier_signale_une_version_non_verifiable(self):
         self.commit()

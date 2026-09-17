@@ -206,6 +206,9 @@ test("réglages : parcourir le sommaire change la section, choisir un motif puis
   await touche("r");
   assert.deepEqual(await calques(), ["reglages"]);
   assert.equal(await page.textContent("#contenu-reglages h3"), "Apparence");
+  // Apparence, puis Affichage (affichage.js, les modes de l'écran), puis Arrière-plan.
+  await touche("ArrowDown");
+  assert.equal(await page.textContent("#contenu-reglages h3"), "Affichage");
   await touche("ArrowDown");
   assert.equal(await page.textContent("#contenu-reglages h3"), "Arrière-plan");
   await touche("ArrowRight");

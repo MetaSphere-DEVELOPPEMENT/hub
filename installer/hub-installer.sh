@@ -302,10 +302,17 @@ etape_mesure() {
 }
 
 # Le menu affiche la version installée : c'est la première chose qu'on demande quand
-# un soir « ça ne marche plus ». Elle vient du dépôt dont on installe, pas d'un
-# numéro tenu à la main qu'on oublierait de changer.
+# un soir « ça ne marche plus ». Trois lignes dans /usr/local/share/hub/VERSION :
+#
+#   1.0.0          le numéro lisible, lu dans le VERSION du dépôt (NOUVEAUTES.md le date)
+#   a03afa7        l'empreinte du commit installé, calculée ici : c'est elle qui décide
+#   2026-09-17     la date de ce commit
+#
+# Le numéro est écrit à la main et peut être oublié ; l'empreinte, non. Tout ce qui
+# compare (suis-je à jour ? qu'est-ce qui a été signé ?) se fait donc sur l'empreinte,
+# et le numéro n'est là que pour être lu. Les deux, jamais l'un à la place de l'autre.
 poser_version() {
-  local version_depot cible=/usr/local/share/hub/VERSION
+  local version_depot numero date_depot cible=/usr/local/share/hub/VERSION
   # safe.directory : lancé par sudo, git refuse un dépôt appartenant à l'utilisateur.
   version_depot=$(git -c safe.directory='*' -C "$DEPOT/.." describe --always --dirty 2>/dev/null)
   # Une Ubuntu neuve n'a pas git : la révision se lit alors directement dans .git
@@ -319,24 +326,35 @@ poser_version() {
     esac
     version_depot="${version_depot:0:7}"
   fi
-  if [ -z "$version_depot" ] && [ -f "$DEPOT/../VERSION" ]; then
-    version_depot=$(head -n 1 "$DEPOT/../VERSION")
-  fi
-  if [ -z "$version_depot" ]; then
+  # Le numéro lisible et la date : le fichier du dépôt, et la date du commit installé.
+  numero=$(head -n 1 "$DEPOT/../VERSION" 2>/dev/null | tr -d '[:space:]')
+  case "$numero" in
+    *[!0-9.]* | "") numero="" ;;
+    [0-9]*.[0-9]*.[0-9]*) ;;
+    *) numero="" ;;
+  esac
+  date_depot=$(git -c safe.directory='*' -C "$DEPOT/.." log -1 --format=%cs 2>/dev/null)
+  case "$date_depot" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;; *) date_depot="" ;; esac
+  if [ -z "$version_depot" ] && [ -z "$numero" ]; then
     alerte "version inconnue (ni dépôt git, ni fichier VERSION) : le menu n'en affichera pas"
     return 0
   fi
-  if [ "$(cat "$cible" 2>/dev/null)" = "$version_depot" ]; then
-    deja "$cible ($version_depot)"; return 0
-  fi
-  if [ "$POUR_DE_VRAI" = 1 ]; then
-    printf '%s\n' "$version_depot" >"$cible.hub" &&
+  local contenu; contenu=$(printf '%s\n%s\n%s\n' "$numero" "$version_depot" "$date_depot")
+  if [ "$(cat "$cible" 2>/dev/null)" = "$contenu" ]; then
+    deja "$cible (${numero:-?} · ${version_depot:-?})"
+  elif [ "$POUR_DE_VRAI" = 1 ]; then
+    printf '%s\n' "$contenu" >"$cible.hub" &&
     faire install -D -m 0644 "$cible.hub" "$cible"
     local code=$?; rm -f "$cible.hub"; [ "$code" -eq 0 ] || return 1
+    ok "$cible (${numero:-?} · ${version_depot:-?})"
   else
-    faire "écrire $version_depot dans $cible"
+    faire "écrire ${numero:-?} / ${version_depot:-?} dans $cible"
+    ok "$cible (${numero:-?} · ${version_depot:-?})"
   fi
-  ok "$cible ($version_depot)"
+  # Ce qu'apporte la version, affiché sous « Installer » dans Réglages → À propos.
+  # Absent du dépôt : rien à dire, et le menu n'affichera rien.
+  [ -f "$DEPOT/../NOUVEAUTES.md" ] || return 0
+  poser "$DEPOT/../NOUVEAUTES.md" /usr/local/share/hub/NOUVEAUTES.md 0644
 }
 
 # ── 3. Session et menu ────────────────────────────────────────────────────────

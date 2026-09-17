@@ -162,11 +162,12 @@ frequence=… Hz`.
 
 ```bash
 journalctl --user -b | grep "hub-menu : rendu"     # à vérifier : la sortie d'erreur de la session arrive-t-elle bien là ?
-gnome-monitor-config list                          # mode courant et fréquence
+gdctl show                                         # mode courant et fréquence (mutter)
 sudo cat /sys/kernel/debug/dri/0/i915_display_info | grep -iE "crtc|mode"
 ```
 
-- [ ] fréquence négociée : ____ Hz (mode ____×____)
+- [x] fréquence négociée : **30** Hz (mode **3840**×**2160**), le 17/09/2026 ; la TV
+      n'offre aucun 4K à 60 Hz (voir « Le mode de l'écran », plus bas)
 - [ ] `acceleration=` : ____ (attendu : always)
 - [ ] `gsk=` : ____
 
@@ -218,6 +219,63 @@ sudo intel_gpu_top                                 # paquet intel-gpu-tools : «
 Un GPU à 100 % pendant que le CPU reste bas désigne le remplissage des pixels 4K ; un
 CPU saturé sur un cœur désigne la page (peinture, style).
 
+## Le mode de l'écran : Réglages → Affichage
+
+### Ce qui a été mesuré sur la TV, le 17/09/2026
+
+La TV est une Sony branchée en HDMI-2. **Son EDID ne propose aucun 3840×2160 à 60 Hz** :
+le 4K y plafonne à 30 Hz, faute d'un lien HDMI 2.0 (câble). Relevés du compteur du menu :
+
+| Mode | Images/s | Images > 50 ms |
+|---|---|---|
+| 3840×2160 à 30 Hz | 29,4 | 3 |
+| 1920×1080 à 60 Hz | 60,0 | 0 |
+
+D'où le réglage : le propriétaire choisit lui-même entre la netteté du 4K et la fluidité
+du 1080p, sans SSH. Pour retrouver le 4K **à 60 Hz**, il faut un câble HDMI 2.0 (ou mieux)
+**et** le « Format amélioré » (« HDMI signal format » → « Enhanced ») de l'entrée HDMI dans
+les réglages de la TV ; sans les deux, le mode n'apparaît même pas dans la liste.
+
+### Où c'est, et ce que ça fait
+
+Réglages → **Affichage**, juste sous Apparence (`installer/menu/affichage.js`, section
+enregistrée par `extensions.sections`). La section montre, en clair, la définition et la
+fréquence en cours (« 3840×2160 à 30 Hz — le mouvement paraît saccadé »), puis les modes
+proposés par l'écran, du plus confortable au moins bon : 50 Hz et plus d'abord, puis la
+plus grande définition. Le mode actif porte une coche, le mot « Actif » et `aria-current`.
+
+**Le filet.** Un mode que la TV refuse laisse l'écran noir : personne ne peut plus
+répondre. Après chaque application, une question « Garder ce mode ? » et 15 s de compte à
+rebours. Sans « Garder », la page redemande le mode précédent ; `hub-menu` fait de même
+quatre secondes plus tard si la page ne répond plus, et à sa fermeture si un mode a été
+lancé entre-temps. Le mode gardé est écrit dans les réglages ; « Rétablir au démarrage »
+(actif par défaut) le réapplique à chaque allumage, au cas où la TV revienne au sien.
+
+### En ligne de commande, si l'écran reste noir
+
+Tout passe par `gdctl` (livré avec mutter ; `gnome-randr` et `wlr-randr` sont absents
+d'Ubuntu 26.04, et `xrandr` ne sert plus à rien en Wayland). Par SSH, le menu restant à
+l'écran :
+
+```bash
+gdctl show --verbose | grep -A4 -E '^ *[│├└ ]*──[0-9]+x[0-9]+@'   # les modes et leurs propriétés
+gdctl show                                                        # le mode courant seul
+gdctl set --persistent --logical-monitor --primary \
+          --monitor HDMI-2 --mode 1920x1080@60.000                # revenir à un mode sûr
+```
+
+`--persistent` écrit le choix dans `~/.config/monitors.xml` : il survit au redémarrage.
+Sans cette option, mutter revient seul au mode précédent au bout d'une vingtaine de
+secondes si personne ne confirme — la fenêtre « Conserver ces réglages ? » de GNOME Shell,
+que la session kiosque n'a pas et que `gdctl` n'appelle jamais. C'est pourquoi le menu
+applique pour de bon et tient son filet lui-même.
+
+- [ ] `gdctl show --verbose` : la sortie est-elle bien celle que lit `lire_modes` ?
+- [ ] 1920×1080 à 60 Hz appliqué depuis le menu : le compteur monte-t-il à 60 i/s ?
+- [ ] mode refusé par la TV (écran noir) : le retour se fait-il bien tout seul ?
+- [ ] après redémarrage : le mode gardé revient-il (monitors.xml, ou « Rétablir au démarrage ») ?
+- [ ] Kodi règle ses propres modes : le mode du menu revient-il au retour du mode TV ?
+
 ### Pistes évaluées, non activées
 
 - **`hardware-acceleration-policy`.** La documentation de l'API 6.0 (webkitgtk.org,
@@ -228,8 +286,8 @@ CPU saturé sur un cœur désigne la page (peinture, style).
   agrandit la mise en page mais WebKit peint toujours à la résolution de la fenêtre :
   aucun pixel de moins. La seule réduction réelle est un mode de sortie en 1920×1080
   (quatre fois moins de pixels, la TV agrandit), au prix de la netteté du texte, et
-  Kodi règle ses propres modes. À n'envisager que si `intel_gpu_top` montre le GPU
-  saturé sur l'accueil.
+  Kodi règle ses propres modes. C'est devenu un réglage à part entière (« Le mode de
+  l'écran », plus bas) : sur cette TV, il y gagne aussi 30 images par seconde.
 - **Le grain** (`.grain`, `mix-blend-mode: overlay` plein écran au-dessus du fond
   animé) reste un suspect, gardé parce qu'il fait partie du rendu ; rien n'est mesuré.
 - **`will-change`** n'est posé que sur l'accueil pendant qu'il s'efface (départ,
