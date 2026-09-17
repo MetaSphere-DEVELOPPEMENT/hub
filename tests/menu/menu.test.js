@@ -541,6 +541,60 @@ test("navigation : Haut depuis Fermer reste dans le contenu et atteint Recherche
   assert.equal((await messages("maj-etat")).length >= 1, true, "l'état d'une mise à jour en cours est demandé à l'ouverture");
 });
 
+// Audit du 17/09/2026 : un focus sorti du contenu changeait la section affichée (Haut depuis
+// « Sombre » ouvrait Arrière-plan ; Gauche depuis GeForce NOW, Enceinte réseau).
+test("réglages : sortir du contenu ne change jamais de section", async () => {
+  await ouvrir({ retour: true });
+  await touche("r");
+  assert.equal(await focus(), "section-apparence");
+  await touche("ArrowRight");
+  assert.equal(await focus(), "theme-sombre");
+  await touche("ArrowUp");
+  assert.equal(await focus(), "theme-sombre", "Haut s'arrête au bord du contenu");
+  assert.equal(await page.textContent("#contenu-reglages h3"), "Apparence");
+  await touche("ArrowLeft");
+  assert.equal(await focus(), "section-apparence", "Gauche revient sur la section affichée");
+  assert.equal(await page.textContent("#contenu-reglages h3"), "Apparence");
+
+  await page.evaluate(() => { fermerTout(); ACTIONS.reglages("services"); });
+  await page.evaluate(() => definirFocus(document.querySelector('[data-cle="service-geforcenow-true"]'), true));
+  await touche("ArrowLeft");
+  assert.equal(await focus(), "section-services");
+  assert.equal(await page.textContent("#contenu-reglages h3"), "Streaming et jeux");
+
+  const derniere = await page.evaluate(() => { const l = [...document.querySelectorAll("#contenu-reglages [data-nav]")].at(-1); definirFocus(l, true); return l.dataset.cle; });
+  await touche("ArrowDown");
+  assert.equal(await focus(), derniere, "Bas s'arrête au bord du contenu");
+  assert.equal(await page.textContent("#contenu-reglages h3"), "Streaming et jeux");
+});
+
+// Audit du 17/09/2026 : en taille XL, les dernières entrées du sommaire étaient rognées par
+// la feuille, et leur focus invisible.
+test("réglages : en taille XL, le sommaire défile jusqu'à la dernière entrée", async () => {
+  await ouvrir({ retour: true, reglages: { profils: [{ id: "p", nom: "Samuel", animations: "reduites" }], profilActif: "p", systeme: { echelle: 1.2 } } });
+  await page.setViewportSize({ width: 1280, height: 720 });
+  // Sans la police Ubuntu Sans de la TV, les lignes sont plus basses : on garantit que le
+  // sommaire déborde, c'est son défilement qu'on éprouve.
+  await page.addStyleTag({ content: "#sommaire .entree { padding-block: .6rem; }" });
+  await touche("r");
+  assert.ok(await page.evaluate(() => { const s = document.querySelector("#sommaire"); return s.scrollHeight > s.clientHeight + 20; }), "le sommaire déborde");
+  const entrees = await page.evaluate(() => [...document.querySelectorAll("#sommaire .entree")].map(e => e.dataset.cle));
+  for (let i = 1; i < entrees.length; i++) await touche("ArrowDown");
+  assert.equal(await focus(), entrees.at(-1));
+  await page.waitForTimeout(100);
+  const vue = await page.evaluate(() => {
+    const e = document.querySelector("#sommaire .entree.focus").getBoundingClientRect();
+    const s = document.querySelector("#sommaire").getBoundingClientRect();
+    const f = document.querySelector("#reglages .feuille-corps").getBoundingClientRect();
+    return e.top >= Math.max(s.top, f.top) - 1 && e.bottom <= Math.min(s.bottom, f.bottom, innerHeight) + 1;
+  });
+  assert.ok(vue, "la dernière entrée sélectionnée est entièrement visible");
+  await touche("ArrowUp", "ArrowUp");
+  for (let i = 2; i < entrees.length; i++) await touche("ArrowUp");
+  assert.equal(await focus(), entrees[0]);
+  assert.ok(await page.evaluate(() => document.querySelector("#sommaire").scrollTop === 0), "retour en haut du sommaire");
+});
+
 test("mise à jour : un état « terminee » ancien ne relance pas le menu", async () => {
   await ouvrir({ retour: true });
   await page.evaluate(() => window.hub.recevoir({ type: "maj", etat: { etape: "terminee", version: "abc" } }));
@@ -724,4 +778,69 @@ test("profil par défaut neutre ; des réglages existants gardent leurs profils 
   const donnees = (await messages("reglages")).at(-1).donnees;
   assert.equal(donnees.profilActif, "ancien");
   assert.deepEqual(donnees.profils.map(p => [p.id, p.nom]), [["autre", "Alix"], ["ancien", "Dominique"]]);
+});
+
+// Audit du 17/09/2026 : sur l'accueil, Gauche depuis TV menait à YouTube puis au profil, Haut
+// depuis Jeux à la météo, Bas depuis Netflix au bouton Raccourcis, et 19 paires de
+// déplacements ne revenaient pas au point de départ.
+test("accueil : rangées qui s'arrêtent au bout, et chaque déplacement se défait par la flèche opposée", async () => {
+  await ouvrir({ retour: true, reprises: [{ titre: "Dune", fichier: "/d.mkv", position: 60, duree: 600 }], reglages: { profils: [{ id: "p", nom: "Samuel", meteo: { active: true, ville: "Lyon", lat: 45.7, lon: 4.8 } }], profilActif: "p" } });
+  await page.evaluate(() => { window.hub.recevoir({ type: "meteo", donnees: { current: { temperature_2m: 17, weather_code: 3, is_day: 1 } }, releveLe: new Date().toISOString() }); recevoirMinuteur(Date.now() + 600000); });
+  const aller = async (depart, ...touches) => { await page.evaluate(s => definirFocus(document.querySelector(s), true), depart); await touche(...touches); return focus(); };
+  assert.equal(await aller('[data-mode="tv"]', "ArrowLeft"), "tv", "Gauche s'arrête au bout de la rangée des cartes");
+  assert.equal(await aller('[data-mode="bureau"]', "ArrowRight"), "bureau");
+  assert.equal(await aller('[data-mode="gaming"]', "ArrowUp"), "profils", "Haut depuis les cartes : le profil");
+  assert.equal(await aller('[data-cle="service-youtube"]', "ArrowLeft"), "service-youtube");
+
+  const oppose = { ArrowUp: "ArrowDown", ArrowDown: "ArrowUp", ArrowLeft: "ArrowRight", ArrowRight: "ArrowLeft" };
+  const cibles = await page.evaluate(() => candidats().map(e => e.dataset.mode || e.dataset.cle || e.dataset.action));
+  const irreversibles = [];
+  for (const depart of cibles) for (const k of Object.keys(oppose)) {
+    const sel = `[data-mode="${depart}"], [data-cle="${depart}"], #accueil [data-action="${depart}"]`;
+    await page.evaluate(s => definirFocus(document.querySelector(s), true), sel);
+    await page.keyboard.press(k);
+    const arrivee = await focus();
+    if (arrivee === depart) continue;
+    await page.keyboard.press(oppose[k]);
+    const retour = await focus();
+    if (retour !== depart) irreversibles.push(`${depart} ${k} → ${arrivee} → ${retour}`);
+  }
+  assert.deepEqual(irreversibles, []);
+});
+
+test("réglages : Droite depuis le sommaire va au premier réglage ; Rechercher et Fermer se rejoignent sans détour", async () => {
+  await ouvrir({ retour: true });
+  await touche("r");
+  await page.evaluate(() => definirFocus(document.querySelector('[data-section="apropos"]')));
+  await page.evaluate(() => window.hub.recevoir({ type: "maj", verification: { disponible: false }, etat: null }));
+  await touche("ArrowRight");
+  assert.equal(await focus(), "maj-verifier");
+  await touche("ArrowDown");
+  assert.equal(await focus(), "fermer-reglages");
+  await touche("ArrowUp");
+  assert.equal(await focus(), "maj-verifier");
+  await touche("ArrowDown", "ArrowLeft");
+  assert.equal(await focus(), "section-apropos", "Gauche depuis Fermer revient à la section, sans en ouvrir une autre");
+  assert.equal(await page.evaluate(() => sectionCourante), "apropos");
+  await page.evaluate(() => definirFocus(document.querySelector('[data-section="services"]')));
+  await touche("ArrowRight");
+  assert.equal(await focus(), await page.evaluate(() => document.querySelector("#contenu-reglages [data-nav]").dataset.cle));
+});
+
+test("éditeur de profil : la flèche opposée ramène toujours d'où l'on vient", async () => {
+  await ouvrir({ retour: true, reglages: { profils: [{ id: "p", nom: "Samuel" }], profilActif: "p" } });
+  await page.evaluate(() => ouvrirEditeur(reglages.profils[0]));
+  await page.waitForTimeout(200);
+  const oppose = { ArrowUp: "ArrowDown", ArrowDown: "ArrowUp", ArrowLeft: "ArrowRight", ArrowRight: "ArrowLeft" };
+  const n = await page.evaluate(() => candidats().length);
+  const irreversibles = [];
+  for (let i = 0; i < n; i++) for (const k of Object.keys(oppose)) {
+    const depart = await page.evaluate(i => { const e = candidats()[i]; definirFocus(e, true); return e.dataset.cle || e.dataset.action; }, i);
+    await page.keyboard.press(k);
+    const arrivee = await focus();
+    if (arrivee === depart) continue;
+    await page.keyboard.press(oppose[k]);
+    if (await focus() !== depart) irreversibles.push(`${depart} ${k} → ${arrivee} → ${await focus()}`);
+  }
+  assert.deepEqual(irreversibles, []);
 });

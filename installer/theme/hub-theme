@@ -896,14 +896,20 @@ accent_r = {ar};
 accent_v = {av};
 accent_b = {ab};
 
-logo.image = Image("hub.png");
+# Tailles en fraction de la hauteur de l'écran, pas en pixels : les images natives
+# faisaient 4 % de la hauteur en 4K, deux fois moins qu'en 1080p. Les images sont
+# dessinées pour la 4K (HAUTEUR_ECRAN_4K) et réduites ici : Plymouth agrandirait flou.
+hauteur_ecran = Window.GetHeight();
+logo.brut = Image("hub.png");
+logo.image = logo.brut.Scale(logo.brut.GetWidth() * hauteur_ecran * {logo} / logo.brut.GetHeight(), hauteur_ecran * {logo});
 logo.sprite = Sprite(logo.image);
 logo.x = Window.GetX() + Window.GetWidth() / 2 - logo.image.GetWidth() / 2;
 logo.y = Window.GetY() + Window.GetHeight() / 2 - logo.image.GetHeight() / 2;
 logo.sprite.SetPosition(logo.x, logo.y, 1);
 logo.sprite.SetOpacity(0);
 
-point_image = Image("point.png");
+point_brut = Image("point.png");
+point_image = point_brut.Scale(hauteur_ecran * {point}, hauteur_ecran * {point});
 ecart = point_image.GetWidth() * 2.2;
 for (i = 0; i < 3; i++) {{
   point[i].sprite = Sprite(point_image);
@@ -928,8 +934,9 @@ Plymouth.SetRefreshFunction(rafraichir);
 
 # Messages (fsck, mise à jour) : en couleur d'accent sous les points. Image.Text demande le
 # greffon « label » ; s'il manque, l'image est vide et rien ne casse.
+# Corps proportionnel lui aussi : 16 px par défaut, illisible à 3 m sur une TV 4K.
 fun afficher_message(texte) {{
-  global.message.image = Image.Text(texte, accent_r, accent_v, accent_b);
+  global.message.image = Image.Text(texte, accent_r, accent_v, accent_b, 1, "Sans " + Math.Int(hauteur_ecran * {message}));
   global.message.sprite = Sprite(global.message.image);
   global.message.sprite.SetPosition(Window.GetX() + Window.GetWidth() / 2 - global.message.image.GetWidth() / 2,
                              Window.GetY() + Window.GetHeight() * 0.85, 2);
@@ -941,6 +948,14 @@ fun effacer_message() {{
 }}
 Plymouth.SetHideMessageFunction(effacer_message);
 """
+
+# Proportions de l'écran de démarrage, en fraction de la hauteur : celles qu'avait le
+# thème en 1080p (logo 125 px, point 18 px), étendues à toutes les définitions. Message
+# à 1/40 de la hauteur (27 px en 1080p, 54 en 4K) : lisible à 3 m.
+HAUTEUR_ECRAN_4K = 2160
+PLYMOUTH_LOGO = .116
+PLYMOUTH_POINT = .0167
+PLYMOUTH_MESSAGE = .025
 
 PLYMOUTH_INI = """\
 [Plymouth Theme]
@@ -967,9 +982,12 @@ def generer_plymouth(dossier, apparence):
         return ", ".join(f"{c / 255:.3f}" for c in rvb)
     ar, av, ab = (f"{c / 255:.3f}" for c in apparence.couleur)
     ecrire_atomique(dossier / "hub.plymouth", PLYMOUTH_INI)
-    ecrire_atomique(dossier / "hub.script", SCRIPT_PLYMOUTH.format(haut=flottants(base), bas=flottants(bas), ar=ar, av=av, ab=ab))
-    ecrire_png(dossier / "hub.png", *image_mot_hub())
-    ecrire_png(dossier / "point.png", *image_point(18, apparence.couleur))
+    ecrire_atomique(dossier / "hub.script", SCRIPT_PLYMOUTH.format(
+        haut=flottants(base), bas=flottants(bas), ar=ar, av=av, ab=ab,
+        logo=PLYMOUTH_LOGO, point=PLYMOUTH_POINT, message=PLYMOUTH_MESSAGE))
+    largeur, hauteur, lignes = image_mot_hub(round(HAUTEUR_ECRAN_4K * PLYMOUTH_LOGO / (1 + 2 * .15)))
+    ecrire_png(dossier / "hub.png", largeur, hauteur, lignes)
+    ecrire_png(dossier / "point.png", *image_point(round(HAUTEUR_ECRAN_4K * PLYMOUTH_POINT), apparence.couleur))
     return {"dossier": str(dossier), "fichiers": ["hub.plymouth", "hub.script", "hub.png", "point.png"]}
 
 

@@ -267,6 +267,8 @@ function appliquerApparence() {
     fondPret = false;
   }
   racine.style.setProperty("--echelle", reglages.systeme.echelle);
+  // L et XL : l'écran ne grandit pas avec le texte ; hub.css resserre l'accueil et la météo.
+  racine.dataset.taille = Number(reglages.systeme.echelle) > 1 ? "grande" : "normale";
   racine.style.setProperty("--marge", reglages.systeme.marge);
   document.body.classList.toggle("sans-animation", profil().animations === "reduites");
   const couleur = COULEURS_PROFIL[profil().couleur] || COULEURS_PROFIL.turquoise;
@@ -641,7 +643,7 @@ function rendreMeteo() {
     el("div", {},
       el("div", { class: "etat" }, libelleMeteo(c.weather_code)),
       el("div", { class: "lieu" }, `${meteoProfil().ville} · ${releve}`),
-      alerteMeteo() && el("div", { class: "lieu", style: "color:rgb(90 170 255)" }, alerteMeteo())),
+      alerteMeteo() && el("div", { class: "lieu", style: "color:var(--pluie)" }, alerteMeteo())),
     boutons));
 
   const info = (etiquette, valeur) => el("div", { class: "info" }, el("div", { class: "etiquette" }, etiquette), el("div", { class: "valeur" }, valeur));
@@ -731,6 +733,8 @@ const pile = ["accueil"];
 const focusParCalque = {};
 let courant = null;
 let verrou = false;
+// Flèche maintenue (répétition automatique du clavier ou de la télécommande).
+let toucheRepetee = false;
 
 function calqueActif() { return $(pile.at(-1)); }
 function candidats() {
@@ -744,25 +748,32 @@ function definirFocus(cible, silencieux = false) {
   const change = courant !== cible;
   // La carte qu'on atteint pivote un instant dans le sens du déplacement, comme
   // si on la faisait glisser : on sent la direction sans lire l'écran.
-  if (change && precedent?.classList.contains("carte") && cible.classList.contains("carte") && profil().animations !== "reduites") {
+  // 180 ms, et rien quand la touche est maintenue : à 650 ms avec rebond, chaque carte
+  // traversée tournait encore quand on arrivait à la suivante.
+  if (change && !toucheRepetee && precedent?.classList.contains("carte") && cible.classList.contains("carte") && profil().animations !== "reduites") {
     const sens = cartes.indexOf(cible) > cartes.indexOf(precedent) ? 1 : -1;
     cible.animate([
-      { transform: `translateY(-.9rem) scale(1.06) rotateY(${sens * -9}deg)` },
-      { transform: "translateY(-.9rem) scale(1.06) rotateY(0deg)" },
-    ], { duration: 650, easing: "cubic-bezier(.34, 1.56, .64, 1)" });
+      { transform: `translateY(-.68rem) scale(1.06) rotateY(${sens * -9}deg)` },
+      { transform: "translateY(-.68rem) scale(1.06) rotateY(0deg)" },
+    ], { duration: 180, easing: "cubic-bezier(.2, .7, .3, 1)" });
     precedent.animate([
       { transform: `scale(.96) rotateY(${sens * 7}deg)` },
       { transform: "scale(.96) rotateY(0deg)" },
-    ], { duration: 650, easing: "cubic-bezier(.2, .8, .2, 1)" });
+    ], { duration: 180, easing: "cubic-bezier(.2, .7, .3, 1)" });
   }
   courant = cible;
   cible.classList.add("focus");
   focusParCalque[pile.at(-1)] = cible;
+  retenirRangee(cible);
   if (change && !silencieux) son("deplacer");
 
   if (cible.dataset.accent) accentuer(cible.dataset.accent);
   else if (pile.at(-1) === "accueil") accentuer(cartes.find(c => c.dataset.mode === profil().dernier)?.dataset.accent || "tv");
-  if (cible.dataset.section && cible.dataset.section !== sectionCourante) {
+  // Parcourir le sommaire change la section ; y revenir depuis le contenu, jamais : on
+  // rentre sur la section qu'on quittait (voisin), et un focus égaré ne doit pas remplacer
+  // sous les yeux la page qu'on était en train de régler (audit du 17/09/2026 : Haut depuis
+  // « Sombre » ouvrait Arrière-plan).
+  if (cible.dataset.section && cible.dataset.section !== sectionCourante && !precedent?.closest(".contenu")) {
     sectionCourante = cible.dataset.section;
     rendreSection(false);
   }
@@ -770,6 +781,22 @@ function definirFocus(cible, silencieux = false) {
 }
 
 function defiler(cible) {
+  // Le sommaire ne tient pas toujours (taille XL : Allumage, Raccourcis et À propos passaient
+  // sous le bord de la feuille, focus compris). Il défile d'une entrée d'avance, pour qu'on
+  // voie qu'il en reste.
+  const sommaire = cible.closest(".sommaire");
+  if (sommaire) {
+    const r = cible.getBoundingClientRect(), s = sommaire.getBoundingClientRect();
+    const avance = r.height;
+    const entrees = [...sommaire.querySelectorAll(".entree")];
+    let haut = sommaire.scrollTop;
+    if (cible === entrees[0]) haut = 0;
+    else if (cible === entrees.at(-1)) haut = sommaire.scrollHeight - sommaire.clientHeight;
+    else if (r.top < s.top + avance) haut -= s.top + avance - r.top;
+    else if (r.bottom > s.bottom - avance) haut += r.bottom - (s.bottom - avance);
+    if (haut !== sommaire.scrollTop) sommaire.scrollTo({ top: haut, behavior: profil().animations === "reduites" ? "auto" : "smooth" });
+    return;
+  }
   const zone = cible.closest(".contenu-defile");
   if (!zone) return;
   const cadre = zone.parentElement;
@@ -777,7 +804,9 @@ function defiler(cible) {
   const position = r.top - z.top;
   const hauteurUtile = cadre.clientHeight - parseFloat(getComputedStyle(cadre).paddingTop) * 2;
   const maximum = Math.max(0, zone.scrollHeight - hauteurUtile);
-  const decalage = borne(position - hauteurUtile * .4, 0, maximum);
+  // Sur la dernière cible, jusqu'en bas : une aide ou une note qui la suit doit se lire.
+  const derniere = [...zone.querySelectorAll("[data-nav]")].filter(e => e.getClientRects().length).at(-1) === cible;
+  const decalage = derniere ? maximum : borne(position - hauteurUtile * .4, 0, maximum);
   zone.style.transform = `translateY(${-decalage}px)`;
 }
 
@@ -785,10 +814,65 @@ function defiler(cible) {
 // pied…) : sans ça, « haut » depuis un bouton du contenu sautait dans le sommaire voisin
 // au lieu du bouton juste au-dessus.
 const ZONES = ".contenu, .sommaire, .entete, .pied, .modes, .reprises, .applis, .grille-jeux, .editeur-identite, .editeur-securite, .choix, .pave";
+// L'accueil se lit en rangées : en-tête, cartes, reprises, streaming, pied. Gauche et Droite
+// restent dans la rangée et s'arrêtent à son bout ; Haut et Bas passent à la rangée voisine,
+// sur l'élément qu'on y avait sélectionné en dernier. La plus proche des cibles, en géométrie
+// pure, menait ailleurs (audit du 17/09/2026 : Gauche depuis TV → YouTube puis le profil ;
+// Haut depuis Jeux → la météo ; Bas depuis Netflix → le bouton Raccourcis) et 19 paires de
+// déplacements n'étaient pas réversibles.
+const RANGEES_ACCUEIL = [".entete", ".modes", ".reprises-liste", ".applis-liste", ".pied .actions"];
+const memoireRangee = new Map();
+function rangeesAccueil(liste) {
+  return RANGEES_ACCUEIL.map(sel => document.querySelector(`#accueil ${sel}`))
+    .map(r => r && liste.filter(e => r.contains(e)).sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left))
+    .filter(r => r?.length);
+}
+function voisinAccueil(depart, direction, liste) {
+  const rangees = rangeesAccueil(liste);
+  const i = rangees.findIndex(r => r.includes(depart));
+  if (i < 0) return undefined;
+  const rangee = rangees[i], j = rangee.indexOf(depart);
+  if (direction === "gauche") return rangee[j - 1] || null;
+  if (direction === "droite") return rangee[j + 1] || null;
+  const cible = rangees[direction === "haut" ? i - 1 : i + 1];
+  if (!cible) return null;
+  const retenu = memoireRangee.get(RANGEES_ACCUEIL.find(sel => cible[0].closest(`#accueil ${sel}`)));
+  if (cible.includes(retenu)) return retenu;
+  // L'en-tête, jamais visité : le profil, sa première cible, plutôt que la météo qui se
+  // trouve au-dessus de la carte du milieu.
+  if (cible[0].closest("#accueil .entete")) return cible[0];
+  const a = depart.getBoundingClientRect(), x = a.left + a.width / 2;
+  return cible.reduce((m, e) => { const r = e.getBoundingClientRect(); const d = Math.abs(r.left + r.width / 2 - x); return d < m.d ? { e, d } : m; }, { e: null, d: Infinity }).e;
+}
+function retenirRangee(cible) {
+  if (pile.at(-1) !== "accueil") return;
+  const sel = RANGEES_ACCUEIL.find(s => cible.closest(`#accueil ${s}`));
+  if (sel) memoireRangee.set(sel, cible);
+}
+
 function voisin(depart, direction) {
   const zone = depart.closest(ZONES);
-  const dansZone = zone && voisinParmi(depart, direction, candidats().filter(e => zone.contains(e)));
-  return dansZone || voisinParmi(depart, direction, candidats());
+  const liste = candidats();
+  if (pile.at(-1) === "accueil") {
+    const v = voisinAccueil(depart, direction, liste);
+    if (v !== undefined) return v;
+  }
+  const dansZone = zone && voisinParmi(depart, direction, liste.filter(e => zone.contains(e)));
+  if (dansZone) return dansZone;
+  // Le contenu d'une feuille est un cul-de-sac en haut et en bas : le sommaire est à
+  // gauche, pas au-dessus. Gauche ramène sur l'entrée de la section affichée.
+  // Du sommaire vers la droite : le premier réglage dans l'ordre de lecture, pas celui qui
+  // se trouve à la hauteur de l'entrée (dans À propos, « Rechercher » n'était atteint que
+  // par un détour, audit du 17/09/2026).
+  if (zone?.classList.contains("sommaire") && direction === "droite") {
+    const premier = liste.find(e => e.closest(".contenu") && zone.parentElement.contains(e));
+    if (premier) return premier;
+  }
+  if (zone?.classList.contains("contenu")) {
+    if (direction !== "gauche") return null;
+    return liste.find(e => e.dataset.section === sectionCourante) || null;
+  }
+  return voisinParmi(depart, direction, liste);
 }
 function voisinParmi(depart, direction, liste) {
   const a = depart.getBoundingClientRect();
@@ -812,11 +896,21 @@ function voisinParmi(depart, direction, liste) {
   return meilleur;
 }
 
+// La flèche opposée défait le déplacement qu'on vient de faire : dans un calque dessiné
+// librement (éditeur de profil), la cible la plus proche au retour n'était pas celle d'où
+// l'on venait (25 allers-retours sur 16 cibles ne revenaient pas, audit du 17/09/2026).
+// Sauf depuis le sommaire, où Droite mène toujours au premier réglage.
+const OPPOSES = { haut: "bas", bas: "haut", gauche: "droite", droite: "gauche" };
+let dernierDeplacement = null;
 function deplacer(direction) {
   const liste = candidats();
   if (!courant || !liste.includes(courant)) return definirFocus(liste[0]);
-  const suivant = voisin(courant, direction);
-  if (suivant) definirFocus(suivant);
+  const d = dernierDeplacement;
+  const defaire = d && d.vers === courant && d.direction === OPPOSES[direction] && liste.includes(d.depuis) && !courant.closest(".sommaire");
+  const suivant = defaire ? d.depuis : voisin(courant, direction);
+  if (!suivant) return;
+  dernierDeplacement = { depuis: courant, vers: suivant, direction };
+  definirFocus(suivant);
 }
 
 function ouvrirCalque(id, focusPremier = true) {
@@ -873,7 +967,7 @@ function lancer(carte) {
   if (carte.dataset.indisponible) {
     son("erreur");
     annoncer(t(carte.dataset.indisponible));
-    carte.animate([{ translate: "0" }, { translate: "-.6rem" }, { translate: ".6rem" }, { translate: "-.3rem" }, { translate: "0" }], { duration: 420, easing: "ease-out" });
+    carte.animate([{ translate: "0" }, { translate: "-.45rem" }, { translate: ".45rem" }, { translate: "-.23rem" }, { translate: "0" }], { duration: 420, easing: "ease-out" });
     return;
   }
   verrou = true;
@@ -985,7 +1079,7 @@ function lancerService(tuile, s) {
   if (APERCU) { son("ok"); return annoncer(t("apercu.mode", { mode: s.nom })); }
   if (!serviceDisponible(s)) {
     son("erreur");
-    tuile?.animate([{ translate: "0" }, { translate: "-.5rem" }, { translate: ".5rem" }, { translate: "0" }], { duration: 380, easing: "ease-out" });
+    tuile?.animate([{ translate: "0" }, { translate: "-.38rem" }, { translate: ".38rem" }, { translate: "0" }], { duration: 380, easing: "ease-out" });
     return annoncer(t("service.absent.detail", { nom: s.nom }));
   }
   verrou = true;
@@ -1159,7 +1253,7 @@ function rendreSecurite() {
         brouillon.modes = suivant;
         rendreEditeur();
       },
-    }, `${actif ? "✓ " : ""}${t(cle)}`));
+    }, t(cle)));
   }
   $("editeur-restreint").hidden = !restreint;
   // Une restriction ne tient que si on ne peut pas simplement passer sur un profil libre.
@@ -1340,7 +1434,7 @@ function effacerChiffre() {
 }
 function refuserCode(message) {
   son("erreur");
-  $("code-points").animate([{ translate: "0" }, { translate: "-1rem" }, { translate: "1rem" }, { translate: "-.5rem" }, { translate: "0" }], { duration: 380 });
+  $("code-points").animate([{ translate: "0" }, { translate: "-.76rem" }, { translate: ".76rem" }, { translate: "-.38rem" }, { translate: "0" }], { duration: 380 });
   $("code-detail").textContent = message;
   demande.saisie = "";
   majPoints();
@@ -1555,7 +1649,7 @@ function rendreSection(garderFocus = true) {
         }, el("span", {}, t(`fond.${f}`))));
       }
       zone.append(vignettes,
-        el("div", { class: "aide", style: "margin-top:-.2rem" }, t("fond.photos.detail")),
+        el("div", { class: "aide", style: "margin-top:-.15rem" }, t("fond.photos.detail")),
         rangee(t("fond.couleur.mode"), null, options("teinte", [[true, t("oui")], [false, t("non")]], p.teinteMode, v => { p.teinteMode = v === true || v === "true"; })));
       break;
     }
@@ -1568,7 +1662,7 @@ function rendreSection(garderFocus = true) {
       for (const x of reglages.profils) {
         const couleur = COULEURS_PROFIL[x.couleur] || COULEURS_PROFIL.turquoise;
         zone.append(rangee(
-          el("span", { style: "display:flex;align-items:center;gap:.9rem" }, avatar(x), x.nom, x.pin && el("span", { class: "cadenas", html: ICONE_CADENAS }), x.id === reglages.profilActif ? " ✓" : ""),
+          el("span", { style: "display:flex;align-items:center;gap:.68rem" }, avatar(x), x.nom, x.pin && el("span", { class: "cadenas", html: ICONE_CADENAS }), x.id === reglages.profilActif ? " ✓" : ""),
           null,
           el("div", { class: "options" },
             x.id !== reglages.profilActif && el("button", { class: "option", "data-nav": true, "data-cle": `utiliser-${x.id}`, onclick: () => { choisirProfil(x.id); } }, "✓"),
@@ -1667,7 +1761,7 @@ function rendreSection(garderFocus = true) {
         info(t("apropos.disque"), i.disqueLibre),
         info(t("apropos.version"), i.version)),
         contenuMiseAJour(),
-        el("div", { class: "options", style: "justify-content:flex-start;margin-top:.4rem" },
+        el("div", { class: "options", style: "justify-content:flex-start;margin-top:.3rem" },
           el("button", { class: "option", "data-nav": true, "data-cle": "fermer-reglages", "data-action": "fermer" }, t("fermer"))));
       break;
     }
@@ -1898,7 +1992,7 @@ function recevoirVoix(etat, texte) {
   const pastille = $("voix-pastille");
   pastille.hidden = !reglages.systeme.voix;
   reveiller();
-  if (etat === "eveil") { pastille.classList.add("eveil"); $("voix-texte").textContent = t("voix.ecoute"); bulle(t("voix.ecoute"), 0, true); son("deplacer"); }
+  if (etat === "eveil") { pastille.classList.add("eveil"); bulle(t("voix.ecoute"), 0, true); son("deplacer"); }
   else if (etat === "entendu") { bulle(`« ${texte} »`, 2200); }
   else if (etat === "incompris") { pastille.classList.remove("eveil"); bulle(t("voix.incompris"), 2200); son("erreur"); }
   else if (etat === "repos") { pastille.classList.remove("eveil"); $("voix-texte").textContent = "HUB"; setTimeout(() => $("bulle-voix").classList.remove("visible"), 1500); }
@@ -1968,7 +2062,7 @@ setInterval(() => {
   if (minutes && Date.now() - derniereAction > minutes * 60000) entrerAmbiant();
   // L'horloge du mode ambiant glisse doucement : aucune image fixe ne marque l'écran.
   if (document.body.classList.contains("ambiant")) {
-    $("ambiant-corps").style.transform = `translate(${(Math.random() - .5) * 8}rem, ${(Math.random() - .5) * 5}rem)`;
+    $("ambiant-corps").style.transform = `translate(${(Math.random() - .5) * 6}rem, ${(Math.random() - .5) * 3.8}rem)`;
   }
 }, 30000);
 
@@ -1976,6 +2070,7 @@ setInterval(() => {
 const DIRECTIONS = { ArrowLeft: "gauche", ArrowRight: "droite", ArrowUp: "haut", ArrowDown: "bas" };
 
 addEventListener("keydown", e => {
+  toucheRepetee = e.repeat;
   document.body.classList.remove("souris");
   if (reveiller()) { e.preventDefault(); return; }
   if (verrou) return;

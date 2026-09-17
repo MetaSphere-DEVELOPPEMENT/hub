@@ -131,3 +131,39 @@ CPU saturé sur un cœur désigne la page (peinture, style).
   paquet deb, la même `libwebkitgtk-6.0` (à vérifier avec `ldd`) et a un inspecteur :
   `file:///usr/local/share/hub/menu/index.html?apercu&fps` en plein écran sur la TV
   permet de désactiver une règle CSS et de lire l'effet sur le compteur.
+
+## Lisibilité à trois mètres et navigation
+
+### Audit de design du 17/09/2026, et après correction
+
+Rendu **Chromium 153 headless (Playwright), pas WebKitGTK**, police Ubuntu Sans chargée
+localement, fond aurore. Scripts de l'audit (hors dépôt) : `captures.mjs 1920 3840 1280
+--mesures` (taille et contraste de chaque texte sur le fond réellement peint, 95e centile
+du fond, sans l'ombre portée du texte), `focus.mjs` (pixels changeant d'au moins 3:1 entre
+sélectionné et non sélectionné, rapportés au périmètre de 2 px, WCAG 2.4.13),
+`nav-touches.mjs` (vraies touches : flèche puis flèche opposée), `tenue.mjs` (27 écrans,
+fr et en, S à XL, débordements). Mêmes scénarios avant (56210f1) et après, taille M, en
+français, thème sombre sauf indication.
+
+| Mesure | Avant | Après |
+|---|---|---|
+| Taille de base en 1080p | 18,6 px (100vmin/58) | 24,5 px (100vmin/44) |
+| Textes sous 24 px (équivalent 1080p) | 645 sur 792 (81 %) | 116 sur 786 (15 %), tous à 22,1 px (--t-1) |
+| Plus petit texte (équivalent 1080p) | 13,4 px | 22,1 px |
+| Tailles de police en dur | 37 | 0 (7 jetons et une taille d'affiche) |
+| Textes sous le seuil WCAG 1.4.3, sombre | 138, le pire à 1,67:1 | 0 |
+| Textes sous le seuil, clair | 33, le pire à 1,47:1 | 2 (cadre photo sur neige, 3,46–3,5:1 sans l'ombre) |
+| Anneau de focus conforme 2.4.13 (9 cibles × 2 thèmes × 3 définitions) | anneaux de 1,5 à 2 px, non conformes | 54 sur 54 |
+| Allers-retours non réversibles, accueil (18 cibles) | 24 | 0 |
+| Allers-retours non réversibles, éditeur de profil (16 cibles) | 25 | 0 |
+| Sorties du contenu vers une autre section des réglages | 67 | 0 |
+| Entrées du sommaire inatteignables à l'œil en XL | 3 | 0 (il défile) |
+
+Les trois définitions donnent les mêmes proportions : tout est en rem de 100vmin.
+
+### À vérifier sur la TV
+
+- [ ] WebKitGTK 2.52 : `color-mix()`, `outline` qui suit `border-radius`, `:root[data-taille]`
+- [ ] lecture réelle à 3 m en M et en XL ; zone sûre de la TV à 5 et 8 %
+- [ ] cadre photo : horloge sur une photo très claire (le dégradé du coin suffit-il ?)
+- [ ] télécommande réelle : la touche maintenue envoie-t-elle `repeat` (pas de rotation) ?
