@@ -7,6 +7,11 @@ lisibles depuis le canapé : le menu affiche cette première section sous « Ins
 **La première section doit porter le numéro du fichier `VERSION`.** Un test le vérifie
 (`tests/test_version.py`). Marche à suivre pour publier : `installer/mise-a-jour/README.md`.
 
+## 1.0.6 — 18 septembre 2026
+
+Le HUB cherche les mises à jour toutes les 45 minutes au lieu de toutes les six heures :
+une version publiée le soir se voit dans l'heure, sans appuyer sur Rechercher.
+
 ## 1.0.5 — 18 septembre 2026
 
 Le téléphone reste la télécommande quand un mode démarre. Passer au Bureau fermait la
