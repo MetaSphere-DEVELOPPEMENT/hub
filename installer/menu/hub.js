@@ -733,6 +733,8 @@ const pile = ["accueil"];
 const focusParCalque = {};
 let courant = null;
 let verrou = false;
+// Flèche maintenue (répétition automatique du clavier ou de la télécommande).
+let toucheRepetee = false;
 
 function calqueActif() { return $(pile.at(-1)); }
 function candidats() {
@@ -746,16 +748,18 @@ function definirFocus(cible, silencieux = false) {
   const change = courant !== cible;
   // La carte qu'on atteint pivote un instant dans le sens du déplacement, comme
   // si on la faisait glisser : on sent la direction sans lire l'écran.
-  if (change && precedent?.classList.contains("carte") && cible.classList.contains("carte") && profil().animations !== "reduites") {
+  // 180 ms, et rien quand la touche est maintenue : à 650 ms avec rebond, chaque carte
+  // traversée tournait encore quand on arrivait à la suivante.
+  if (change && !toucheRepetee && precedent?.classList.contains("carte") && cible.classList.contains("carte") && profil().animations !== "reduites") {
     const sens = cartes.indexOf(cible) > cartes.indexOf(precedent) ? 1 : -1;
     cible.animate([
       { transform: `translateY(-.68rem) scale(1.06) rotateY(${sens * -9}deg)` },
       { transform: "translateY(-.68rem) scale(1.06) rotateY(0deg)" },
-    ], { duration: 650, easing: "cubic-bezier(.34, 1.56, .64, 1)" });
+    ], { duration: 180, easing: "cubic-bezier(.2, .7, .3, 1)" });
     precedent.animate([
       { transform: `scale(.96) rotateY(${sens * 7}deg)` },
       { transform: "scale(.96) rotateY(0deg)" },
-    ], { duration: 650, easing: "cubic-bezier(.2, .8, .2, 1)" });
+    ], { duration: 180, easing: "cubic-bezier(.2, .7, .3, 1)" });
   }
   courant = cible;
   cible.classList.add("focus");
@@ -2008,6 +2012,7 @@ setInterval(() => {
 const DIRECTIONS = { ArrowLeft: "gauche", ArrowRight: "droite", ArrowUp: "haut", ArrowDown: "bas" };
 
 addEventListener("keydown", e => {
+  toucheRepetee = e.repeat;
   document.body.classList.remove("souris");
   if (reveiller()) { e.preventDefault(); return; }
   if (verrou) return;

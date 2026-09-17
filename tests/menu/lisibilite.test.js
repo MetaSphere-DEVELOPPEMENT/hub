@@ -206,3 +206,32 @@ test("zone sûre : les feuilles respectent la marge de sécurité réglée", asy
     }
   }
 });
+
+// Audit du 17/09/2026 : focus en .45 à .55 s avec rebond, rotation de 650 ms à chaque carte.
+test("mouvement : la sélection suit en 200 ms au plus, sans rebond ; rien en touche maintenue", async () => {
+  await ouvrir(reglages());
+  const transitions = await page.evaluate(() => [".carte", ".tuile-service", ".puce", ".bouton", ".reprise"].map(sel => {
+    const e = document.querySelector(sel); if (!e) return null;
+    const cs = getComputedStyle(e);
+    return { sel, durees: cs.transitionDuration.split(",").map(parseFloat), courbes: cs.transitionTimingFunction };
+  }).filter(Boolean));
+  for (const t of transitions) {
+    assert.ok(Math.max(...t.durees) <= .2, `${t.sel} : ${t.durees}`);
+    assert.doesNotMatch(t.courbes, /1\.56/, `${t.sel} : rebond`);
+  }
+  // Les rotations sont notées au moment où la page les lance : sur une machine chargée, une
+  // animation de 180 ms peut être finie avant qu'on aille la chercher.
+  await page.evaluate(() => {
+    window.__rotations = [];
+    const animer = Element.prototype.animate;
+    Element.prototype.animate = function (k, o) { if (this.classList.contains("carte")) window.__rotations.push(o.duration); return animer.call(this, k, o); };
+    definirFocus(document.querySelector('[data-mode="tv"]'), true);
+    window.__rotations = [];
+  });
+  await page.keyboard.press("ArrowRight");
+  const tournent = await page.evaluate(() => window.__rotations);
+  assert.ok(tournent.length && tournent.every(d => d <= 200), `durées ${tournent}`);
+  await page.evaluate(() => { definirFocus(document.querySelector('[data-mode="tv"]'), true); window.__rotations = []; });
+  await page.evaluate(() => dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", repeat: true })));
+  assert.deepEqual(await page.evaluate(() => window.__rotations), [], "aucune rotation pendant la répétition de la touche");
+});
