@@ -46,7 +46,11 @@ const DEFAUTS_PROFIL = {
   nom: "Profil 1",
   couleur: "turquoise",
   theme: "sombre",
+  // La couleur du fond (une palette, « minimal » ou « photos ») et son motif. Un profil
+  // neuf part du motif cinéma de l'accueil ; un profil enregistré sans « motif » garde
+  // les nappes qu'il avait (voir la lecture des réglages plus bas).
   fond: "aurore",
+  motif: "cinema",
   teinteMode: true,
   langue: "fr",
   horloge: "24",
@@ -150,7 +154,9 @@ let reglages = (() => {
     try { brut = JSON.parse(localStorage.getItem("hub-reglages")); } catch { brut = null; }
   }
   const r = fusion(copie(DEFAUTS), brut || {});
-  r.profils = (r.profils.length ? r.profils : copie(DEFAUTS.profils)).map(p => ({ ...DEFAUTS_PROFIL, ...p }));
+  // « motif » est venu après « fond » : un profil qui ne le porte pas a été réglé quand il
+  // n'y avait que les nappes, et doit les garder.
+  r.profils = (r.profils.length ? r.profils : copie(DEFAUTS.profils)).map(p => ({ ...DEFAUTS_PROFIL, motif: "nappes", ...p }));
   if (!r.profils.some(p => p.id === r.profilActif)) r.profilActif = r.profils[0].id;
   return r;
 })();
@@ -278,6 +284,13 @@ function appliquerApparence() {
 }
 
 // ── Fonds animés ──────────────────────────────────────────────────────────
+// Un fond, c'est un motif (le dessin et son mouvement) et une couleur (la palette).
+// Le profil garde la couleur dans « fond », comme avant : hub-theme la lit pour le bureau
+// et Kodi, et un profil enregistré avant les motifs (« fond: "ocean" » seul) garde
+// exactement son rendu, les nappes. Le motif vit dans « motif ». « minimal » et « photos »
+// restent des valeurs de « fond » : ce sont des fonds entiers, sans variation de couleur.
+// Chaque palette : une base et quatre teintes, [0] la principale (teintée par le mode),
+// [1] et [2] les secondaires, [3] la plus profonde.
 const PALETTES = {
   aurore: {
     sombre: { base: "#06070c", nappes: [[62, 224, 208], [110, 90, 255], [62, 140, 255], [30, 40, 90]] },
@@ -295,11 +308,24 @@ const PALETTES = {
     sombre: { base: "#0c0605", nappes: [[200, 75, 30], [130, 30, 60], [235, 130, 40], [45, 12, 10]] },
     clair: { base: "#f8efe9", nappes: [[255, 192, 150], [245, 178, 196], [255, 216, 160], [250, 232, 220]] },
   },
+  // Ajoutées avec les motifs (17/09/2026) : un vert de forêt la nuit, et un couchant
+  // rose et or. Les quatre premières étaient toutes froides ou toutes rouges.
+  emeraude: {
+    sombre: { base: "#030b08", nappes: [[40, 200, 130], [20, 120, 110], [150, 215, 90], [6, 40, 30]] },
+    clair: { base: "#e9f4ee", nappes: [[150, 225, 190], [170, 215, 205], [205, 235, 165], [225, 242, 232]] },
+  },
+  crepuscule: {
+    sombre: { base: "#0d0709", nappes: [[255, 120, 150], [240, 170, 80], [150, 70, 170], [50, 15, 35]] },
+    clair: { base: "#f8eef0", nappes: [[255, 190, 205], [255, 215, 160], [220, 190, 235], [250, 235, 238]] },
+  },
   minimal: {
     sombre: { base: "#0a0c13", nappes: [[42, 48, 70]] },
     clair: { base: "#eef1f6", nappes: [[255, 255, 255]] },
   },
 };
+const COULEURS_FOND = ["aurore", "nebuleuse", "ocean", "braise", "emeraude", "crepuscule"];
+// Dans l'ordre des réglages. « nappes » est le motif d'avant, gardé tel quel.
+const MOTIFS = ["cinema", "rubans", "profondeur", "faisceaux", "nappes"];
 const NAPPES = [
   { x: .18, y: .22, r: .50, phase: 0 },
   { x: .86, y: .18, r: .44, phase: 2 },
@@ -319,13 +345,50 @@ const MOUVEMENTS = {
   ocean: { x: { amplitude: .24, periodes: [22, 26, 18, 28] }, y: { amplitude: .07, periodes: [15, 17, 16, 19] }, rayon: { amplitude: .1, periodes: [14, 17, 13, 16] } },
   // Les braises montent : « periodes » y est le temps d'une traversée, bas → haut.
   braise: { x: { amplitude: .09, periodes: [16, 19, 14, 21] }, y: { montee: true, periodes: [26, 22, 30, 24] }, rayon: { amplitude: .1, periodes: [12, 15, 13, 17] } },
+  emeraude: { x: { amplitude: .17, periodes: [21, 28, 24, 18] }, y: { amplitude: .14, periodes: [19, 16, 23, 27] }, rayon: { amplitude: .11, periodes: [14, 17, 12, 15] } },
+  crepuscule: { x: { amplitude: .2, periodes: [25, 20, 29, 22] }, y: { amplitude: .12, periodes: [18, 24, 15, 21] }, rayon: { amplitude: .1, periodes: [16, 13, 17, 12] } },
+};
+// Les rythmes des quatre motifs des maquettes, en secondes. Les maquettes allaient
+// jusqu'à 120 s (le filigrane : 60 s aller, 60 s retour) : on a vu avec les nappes que
+// rien de plus lent que 30 s ne se voit du canapé. Même règle, même test.
+const RYTHMES = {
+  // Trois taches qui dérivent et respirent, trois ondes qui partent du filigrane.
+  cinema: { derive: [23, 19, 27, 21, 25, 17], souffle: [13, 16, 14], onde: 9, filigrane: 28, flotte: 19 },
+  // Trois rubans : l'ondulation qui court le long du ruban (vague, vague2), son épaisseur,
+  // les rayons verticaux qui défilent, le glissement d'ensemble ; l'horizon qui respire ;
+  // chaque étoile scintille à son rythme, entre 5 et 14 s.
+  rubans: { vague: [14, 17, 12], vague2: [23, 19, 26], epaisseur: [11, 13, 9], rayons: [11, 13, 8], glisse: [29, 24, 27], horizon: 12, scintille: [5, 14] },
+  // Une case du sol qui avance, le soleil qui pulse, les orbes (largeur, hauteur).
+  profondeur: { case: 6, soleil: 16, orbes: [26, 30, 22], orbesY: [19, 23, 17] },
+  // Les deux faisceaux qui balaient ; la poussière monte (une traversée en 22 à 30 s),
+  // oscille (7 à 13 s) et scintille (3 à 8 s).
+  faisceaux: { balaye: [20, 24], montee: [22, 30], oscille: [7, 13], scintille: [3, 8] },
 };
 // En mode ambiant, tout va deux fois moins vite : on regarde l'heure, pas le fond.
 const LENTEUR_AMBIANT = .5;
-// Le canvas ne fait que 192×108 : le dessiner ne coûte rien. Mais chaque image du fond
+// Les nappes tiennent dans 192×108 : le dessin ne coûte rien. Mais chaque image du fond
 // oblige à recalculer tous les flous d'arrière-plan posés dessus, en 3840×2160 sur un
 // UHD 630. 30 images par seconde suffisent à un mouvement de 20 s.
 const IMAGES_FOND_PAR_SECONDE = 30;
+
+// Deux toiles, deux finesses. Ce qui est flou par nature (taches, rubans, faisceaux,
+// ciel, soleil) se dessine en 320×180, un vingt-quatrième de la largeur 4K : agrandi par
+// le navigateur, il reste doux, et le remplir coûte 58 000 pixels par image. Les lignes
+// fines (sol quadrillé, ondes, étoiles, poussière, orbes) seraient des traînées floues à
+// cette taille : elles vont sur une seconde toile de 960 pixels de large, transparente,
+// où un trait d'un pixel fait 2 px en 1080p et 4 px en 4K, l'épaisseur des maquettes.
+// Elle n'est qu'effacée puis tracée (quelques dizaines de traits), et ses 518 000
+// pixels sont un seizième de l'écran 4K. Aucun filtre, aucun masque animé : les fondus
+// sont dans les couleurs. Les nappes gardent leur 192×108.
+const RESOLUTIONS_FOND = { nappes: [192, 108], minimal: [192, 108], photos: [192, 108] };
+const RESOLUTION_MOTIF = [320, 180];
+const LARGEUR_LIGNES = 960;
+const MOTIFS_A_LIGNES = ["cinema", "rubans", "profondeur", "faisceaux"];
+// Centre des ondes et du filigrane du motif cinéma, en fractions de l'écran (maquette C :
+// 1480 × 400 sur 1920 × 1080), et côté du filigrane en fraction de la hauteur.
+const FILIGRANE = { x: .775, y: .4, taille: .76 };
+// Ligne d'horizon du motif profondeur.
+const HORIZON = .585;
 
 // Position (fractions de l'écran), rayon (fraction de la largeur) et éclat (0–1) de la
 // nappe i au temps s, en secondes de fond. Pure : les tests la parcourent.
@@ -350,10 +413,358 @@ function periodesFond(choix) {
   const m = MOUVEMENTS[choix];
   return m ? Object.values(m).flatMap(axe => axe.periodes) : [];
 }
-window.hubFond = { mouvementNappe, periodesFond, LENTEUR_AMBIANT, IMAGES_FOND_PAR_SECONDE };
+function periodesMotif(motif) {
+  return Object.values(RYTHMES[motif] || {}).flat();
+}
+
+// Tirages fixes : les mêmes étoiles et la même poussière à chaque démarrage, et des
+// aperçus que les tests peuvent comparer.
+function hasard(graine) {
+  let a = graine >>> 0;
+  return () => {
+    a = (a + 0x6D2B79F5) | 0;
+    let x = Math.imul(a ^ a >>> 15, 1 | a);
+    x = (x + Math.imul(x ^ x >>> 7, 61 | x)) ^ x;
+    return ((x ^ x >>> 14) >>> 0) / 4294967296;
+  };
+}
+const ETOILES = (() => {
+  const r = hasard(7);
+  const [min, max] = RYTHMES.rubans.scintille;
+  return Array.from({ length: 150 }, () => ({ x: r(), y: r() ** 1.3 * .72, taille: .55 + r() ** 3 * 1.4, eclat: .35 + r() * .65, periode: min + r() * (max - min), phase: r() * 6.283 }));
+})();
+const POUSSIERE = (() => {
+  const r = hasard(11), R = RYTHMES.faisceaux;
+  const entre = ([a, b]) => a + r() * (b - a);
+  return Array.from({ length: 90 }, () => ({ x: r(), y: r(), taille: .7 + r() * 1.2, eclat: .3 + r() * .5, montee: entre(R.montee), oscille: entre(R.oscille), ampleur: .006 + r() * .018, scintille: entre(R.scintille), phase: r() * 6.283 }));
+})();
+
+const rvbHex = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+const rgba = (c, a) => `rgba(${Math.round(c[0])},${Math.round(c[1])},${Math.round(c[2])},${borne(a, 0, 1).toFixed(3)})`;
+const onde = (s, periode, phase = 0) => Math.sin(2 * Math.PI * s / periode + phase);
+// Un trait lisible sur le fond : éclairci sur le sombre, assombri sur le clair (les
+// teintes claires sont des pastels qui disparaîtraient sur une base presque blanche).
+const encreTrait = (c, clair) => clair ? melange(c, [16, 20, 36], .5) : melange(c, [255, 255, 255], .35);
+
+// Une tache elliptique, du centre (alpha) vers le bord (rien) ; « milieu » : [position, part de l'alpha].
+function tache(c, x, y, rx, ry, couleur, alpha, fin = .7, milieu = null) {
+  c.save();
+  c.translate(x, y);
+  c.scale(Math.max(rx, .01), Math.max(ry, .01));
+  const g = c.createRadialGradient(0, 0, 0, 0, 0, 1);
+  g.addColorStop(0, rgba(couleur, alpha));
+  if (milieu) g.addColorStop(milieu[0], rgba(couleur, alpha * milieu[1]));
+  g.addColorStop(fin, rgba(couleur, 0));
+  c.fillStyle = g;
+  c.fillRect(-1, -1, 2, 2);
+  c.restore();
+}
+
+// Tout ce que le dessin d'un motif doit savoir, pour l'écran comme pour les aperçus.
+function environnementFond(couleur, theme, s, accent, teinter) {
+  const palette = (PALETTES[couleur] || PALETTES.aurore)[theme];
+  const n = palette.nappes;
+  const teinte = (i, part) => teinter ? melange(n[i % n.length], accent, part) : n[i % n.length];
+  // À moitié seulement pour la teinte principale (les nappes vont jusqu'aux trois quarts) :
+  // sinon, teinte du mode allumée, les six couleurs d'un motif se ressemblaient toutes.
+  return {
+    theme, clair: theme === "clair", s, palette,
+    base: rvbHex(palette.base), c0: teinte(0, .5), c1: teinte(1, .25), c2: teinte(2, .25), c3: n[3] || n[0],
+  };
+}
+
+// Les nappes, telles qu'avant les motifs : une base et quatre remplissages radiaux.
+function peindreNappes(c, choix, e, accent, teinter) {
+  const w = c.canvas.width, h = c.canvas.height, { palette, theme, s } = e;
+  c.globalCompositeOperation = "source-over";
+  c.fillStyle = palette.base;
+  c.fillRect(0, 0, w, h);
+  c.globalCompositeOperation = theme === "clair" ? "source-over" : "lighter";
+  palette.nappes.forEach((teinteBase, i) => {
+    const minimal = choix === "minimal";
+    const m = mouvementNappe(choix, i, s);
+    const x = m.x * w;
+    const y = minimal ? -h * .3 : m.y * h;
+    const r = (minimal ? 1.1 : m.r) * w;
+    const teinte = teinter && !minimal ? melange(teinteBase, accent, i === 0 ? .75 : .25) : teinteBase;
+    const force = (theme === "clair" ? (i === 0 ? .6 : .5) : (i === 3 ? .35 : i === 0 ? .34 : .2)) * m.eclat;
+    const g = c.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, `rgba(${teinte.map(Math.round).join(",")},${minimal ? (theme === "clair" ? .9 : .5) : force})`);
+    g.addColorStop(1, `rgba(${teinte.map(Math.round).join(",")},0)`);
+    c.fillStyle = g;
+    c.fillRect(0, 0, w, h);
+  });
+}
+
+// C · Cinéma : un dégradé maillé de trois taches qui dérivent et respirent, le bas
+// assombri pour les rangées. Les ondes et le filigrane sont à part (lignes, calque).
+function peindreCinema(c, e) {
+  const w = c.canvas.width, h = c.canvas.height, { s, clair } = e, R = RYTHMES.cinema;
+  c.globalCompositeOperation = "source-over";
+  c.fillStyle = rgba(e.base, 1);
+  c.fillRect(0, 0, w, h);
+  c.globalCompositeOperation = clair ? "source-over" : "lighter";
+  [[.76, .38, .42, .52, e.c0, .58], [.95, .9, .36, .46, e.c1, clair ? .5 : .34], [.1, 1, .46, .56, e.c2, clair ? .45 : .3]].forEach(([x, y, rx, ry, couleur, a], i) => {
+    // Un dixième de l'écran d'amplitude : la maquette en faisait 5 %, invisible à trois mètres.
+    const souffle = 1 + .12 * onde(s, R.souffle[i], i);
+    tache(c, (x + .09 * onde(s, R.derive[2 * i], i * 1.7)) * w, (y + .07 * Math.cos(2 * Math.PI * s / R.derive[2 * i + 1] + i)) * h,
+      rx * souffle * w, ry * souffle * h, couleur, a);
+  });
+  c.globalCompositeOperation = "source-over";
+  const g = c.createLinearGradient(0, h * .52, 0, h);
+  g.addColorStop(0, rgba(e.base, 0));
+  g.addColorStop(.45, rgba(e.base, .85));
+  g.addColorStop(1, rgba(e.base, 1));
+  c.fillStyle = g;
+  c.fillRect(0, h * .52, w, h * .48);
+}
+function lignesCinema(l, e, k) {
+  const w = l.canvas.width, h = l.canvas.height, { s, clair } = e, R = RYTHMES.cinema;
+  const couleur = encreTrait(e.c0, clair);
+  const x = FILIGRANE.x * w, y = FILIGRANE.y * h;
+  for (let i = 0; i < 3; i++) {
+    const p = (((s + i * R.onde / 3) / R.onde) % 1 + 1) % 1;
+    // Maquette : de 0,4 à 5,5 fois un cercle de 100 px en 1080p, allumée à 15 % du trajet.
+    const rayon = (.4 + p * 5.1) * .0926 * h;
+    const alpha = (p < .15 ? p / .15 : (1 - p) / .85) * (clair ? .5 : .6);
+    l.strokeStyle = rgba(couleur, alpha);
+    l.lineWidth = (1.2 + p * 2.6) * k;
+    l.beginPath();
+    l.arc(x, y, rayon, 0, 2 * Math.PI);
+    l.stroke();
+  }
+}
+// Le filigrane pivote et flotte : transform seulement, posée par dessinerFond.
+function mouvementFiligrane(s) {
+  const R = RYTHMES.cinema;
+  return { angle: -1 + 8 * onde(s, R.filigrane), decalage: .014 * onde(s, R.flotte, 1) };
+}
+
+// A · Aurore : ciel profond, trois rubans qui ondulent (l'onde court le long du ruban,
+// des rayons verticaux y défilent), une lueur d'horizon qui respire. Étoiles sur les lignes.
+const RUBANS = [
+  { y: .1, epaisseur: .26, debut: .12, fin: .88, pente: -.05, couleurs: ["c0", "c0"], eclat: .36 },
+  { y: .27, epaisseur: .42, debut: .02, fin: .95, pente: -.1, couleurs: ["c0", "c1"], eclat: .56 },
+  { y: .37, epaisseur: .3, debut: .18, fin: 1.08, pente: .06, couleurs: ["c1", "c2"], eclat: .5 },
+];
+function peindreRubans(c, e) {
+  const w = c.canvas.width, h = c.canvas.height, { s, clair } = e, R = RYTHMES.rubans;
+  c.globalCompositeOperation = "source-over";
+  c.fillStyle = rgba(e.base, 1);
+  c.fillRect(0, 0, w, h);
+  tache(c, w / 2, 0, 1.2 * w, .85 * h, clair ? melange(e.base, e.c1, .3) : melange(e.base, e.c3, .55), 1, 1, [.55, .45]);
+  c.globalCompositeOperation = clair ? "source-over" : "lighter";
+  const pas = 3;
+  RUBANS.forEach((r, j) => {
+    const glisse = .07 * onde(s, R.glisse[j], j);
+    for (let x = 0; x < w; x += pas) {
+      const u = (x + pas / 2) / w;
+      const v = (u - r.debut - glisse) / (r.fin - r.debut);
+      if (v <= 0 || v >= 1) continue;
+      const centre = (r.y + r.pente * (u - .5) + .055 * Math.sin(2 * Math.PI * (u * 1.3 - s / R.vague[j]) + 2 * j) + .025 * Math.sin(2 * Math.PI * (u * 2.7 + s / R.vague2[j]) + j)) * h;
+      const epaisseur = r.epaisseur * (1 + .24 * Math.sin(2 * Math.PI * (u * 1.9 - s / R.epaisseur[j]) + j)) * h;
+      const rayons = .7 + .3 * Math.sin(2 * Math.PI * (u * 13 - s / R.rayons[j]) + 3 * j);
+      const alpha = r.eclat * Math.sin(Math.PI * v) ** 1.5 * rayons * (clair ? 1.4 : 1);
+      const couleur = melange(e[r.couleurs[0]], e[r.couleurs[1]], v);
+      // Plus vif vers le bas, comme un rideau d'aurore qui s'efface vers le ciel.
+      const haut = centre - epaisseur * .6;
+      const g = c.createLinearGradient(0, haut, 0, haut + epaisseur);
+      g.addColorStop(0, rgba(couleur, 0));
+      g.addColorStop(.7, rgba(couleur, alpha));
+      g.addColorStop(1, rgba(couleur, 0));
+      c.fillStyle = g;
+      c.fillRect(x, haut, pas, epaisseur);
+    }
+  });
+  const p = .5 + .5 * onde(s, R.horizon);
+  const echelle = .92 + .14 * p;
+  tache(c, .5 * w, 1.065 * h, .68 * w * echelle, .42 * h * echelle, e.c0, (clair ? .6 : .55) * (.7 + .3 * p), 1, [.6, .22]);
+}
+function lignesRubans(l, e, k) {
+  if (e.clair) return;
+  const w = l.canvas.width, h = l.canvas.height, { s } = e;
+  const teinte = melange([255, 255, 255], e.c0, .15);
+  for (const et of ETOILES) {
+    l.fillStyle = rgba(teinte, et.eclat * (.3 + .7 * (.5 + .5 * onde(s, et.periode, et.phase))));
+    l.beginPath();
+    l.arc(et.x * w, et.y * h, et.taille * k, 0, 2 * Math.PI);
+    l.fill();
+  }
+}
+
+// B · Profondeur : un ciel en bandes jusqu'à l'horizon, un soleil qui pulse, un voile sur
+// le sol. Le quadrillage qui avance et les orbes sont sur les lignes.
+function peindreProfondeur(c, e) {
+  const w = c.canvas.width, h = c.canvas.height, { s, clair } = e, R = RYTHMES.profondeur;
+  const blanc = [255, 255, 255];
+  const g = c.createLinearGradient(0, 0, 0, h);
+  if (clair) {
+    g.addColorStop(0, rgba(melange(e.base, e.c1, .3), 1));
+    g.addColorStop(.46, rgba(melange(e.base, e.c0, .25), 1));
+    g.addColorStop(HORIZON - .005, rgba(melange(e.base, e.c0, .55), 1));
+    g.addColorStop(HORIZON, rgba(melange(e.base, blanc, .45), 1));
+    g.addColorStop(1, rgba(melange(e.base, e.c1, .18), 1));
+  } else {
+    g.addColorStop(0, rgba(melange(e.base, e.c3, .4), 1));
+    g.addColorStop(.46, rgba(melange(e.base, e.c0, .14), 1));
+    g.addColorStop(HORIZON - .005, rgba(melange(e.base, e.c0, .32), 1));
+    g.addColorStop(HORIZON, rgba(melange(e.base, e.c0, .06), 1));
+    g.addColorStop(1, rgba(e.base, 1));
+  }
+  c.globalCompositeOperation = "source-over";
+  c.fillStyle = g;
+  c.fillRect(0, 0, w, h);
+  c.globalCompositeOperation = clair ? "source-over" : "lighter";
+  const p = .5 + .5 * onde(s, R.soleil);
+  const rayon = .417 * h * (.9 + .16 * p);
+  tache(c, .5 * w, .648 * h, rayon, rayon, clair ? e.c0 : melange(e.c0, blanc, .35), (clair ? .7 : .6) * (.75 + .25 * p), .72, [.45, .4]);
+  c.globalCompositeOperation = "source-over";
+  const voile = c.createLinearGradient(0, .556 * h, 0, h);
+  voile.addColorStop(0, rgba(e.base, clair ? .1 : .2));
+  voile.addColorStop(.7, rgba(e.base, clair ? .45 : .75));
+  voile.addColorStop(1, rgba(e.base, clair ? .5 : .8));
+  c.fillStyle = voile;
+  c.fillRect(0, .556 * h, w, .444 * h);
+}
+// Hors du héros (à gauche) et de l'en-tête : dans le ciel, de part et d'autre du soleil.
+const ORBES = [{ x: .6, y: .25, r: .036, couleur: "c0" }, { x: .88, y: .36, r: .026, couleur: "c2" }, { x: .75, y: .18, r: .018, couleur: "c1" }];
+function lignesProfondeur(l, e, k) {
+  const w = l.canvas.width, h = l.canvas.height, { s, clair } = e, R = RYTHMES.profondeur;
+  const horizon = HORIZON * h, sol = h - horizon;
+  const couleur = encreTrait(e.c0, clair);
+  // Visible à partir de 30 % du sol (le lointain se fond dans l'horizon), estompé en bas.
+  const presence = y => { const q = (y - horizon) / sol; return borne(q / .3, 0, 1) * (1 - .45 * borne((q - .55) / .45, 0, 1)); };
+  const avance = ((s / R.case) % 1 + 1) % 1;
+  for (let n = 1; n < 44; n++) {
+    // La ligne n est à la profondeur n − avance : en une case, elle prend la place de sa voisine.
+    const z = n - avance;
+    if (z <= .05) continue;
+    const y = horizon + sol * 1.2 / z;
+    if (y > h + 3) continue;
+    const a = (clair ? .5 : .62) * presence(y);
+    if (a < .01) continue;
+    l.strokeStyle = rgba(couleur, a);
+    l.lineWidth = (.8 + 1.8 * (y - horizon) / sol) * k;
+    l.beginPath();
+    l.moveTo(0, y);
+    l.lineTo(w, y);
+    l.stroke();
+  }
+  const fuyantes = l.createLinearGradient(0, horizon, 0, h);
+  const a = clair ? .36 : .42;
+  fuyantes.addColorStop(0, rgba(couleur, 0));
+  fuyantes.addColorStop(.3, rgba(couleur, a));
+  fuyantes.addColorStop(.55, rgba(couleur, a));
+  fuyantes.addColorStop(1, rgba(couleur, a * .55));
+  l.strokeStyle = fuyantes;
+  l.lineWidth = 1.2 * k;
+  l.beginPath();
+  for (let i = -16; i <= 16; i++) {
+    l.moveTo(w / 2, horizon);
+    l.lineTo(w / 2 + i * w * .09, h);
+  }
+  l.stroke();
+  ORBES.forEach((o, i) => {
+    const x = (o.x + .04 * onde(s, R.orbes[i], i)) * w;
+    const y = (o.y + .05 * Math.cos(2 * Math.PI * s / R.orbesY[i] + 2 * i)) * h;
+    const r = o.r * h;
+    const teinte = clair ? melange(e[o.couleur], [0, 0, 0], .15) : e[o.couleur];
+    const g = l.createRadialGradient(x - .3 * r, y - .4 * r, 0, x - .3 * r, y - .4 * r, 1.9 * r);
+    g.addColorStop(0, rgba(melange(teinte, [255, 255, 255], .6), .95));
+    g.addColorStop(.4, rgba(teinte, .9));
+    g.addColorStop(.72, rgba(teinte, 0));
+    l.fillStyle = g;
+    l.beginPath();
+    l.arc(x, y, r, 0, 2 * Math.PI);
+    l.fill();
+  });
+}
+
+// D · Faisceaux : deux faisceaux qui balaient depuis le haut, une lueur au sol.
+// La poussière est sur les lignes, et brille quand un faisceau la traverse.
+function mouvementFaisceaux(s) {
+  const R = RYTHMES.faisceaux, degre = Math.PI / 180;
+  return [
+    { x: .104, y: -.28, angle: (14 + 15 * onde(s, R.balaye[0])) * degre, demi: 11 * degre, couleur: "c0", alpha: .32 },
+    { x: .896, y: -.28, angle: (-14 - 15 * onde(s, R.balaye[1], 1)) * degre, demi: 12 * degre, couleur: "c1", alpha: .36 },
+  ];
+}
+function peindreFaisceaux(c, e) {
+  const w = c.canvas.width, h = c.canvas.height, { s, clair } = e;
+  c.globalCompositeOperation = "source-over";
+  c.fillStyle = rgba(clair ? melange(e.base, e.c1, .3) : e.base, 1);
+  c.fillRect(0, 0, w, h);
+  tache(c, .5 * w, 1.1 * h, .9 * w, .75 * h, clair ? melange(e.base, e.c2, .45) : melange(e.base, e.c2, .3), 1);
+  c.globalCompositeOperation = clair ? "source-over" : "lighter";
+  const longueur = 1.7 * h;
+  for (const f of mouvementFaisceaux(s)) {
+    const ax = f.x * w, ay = f.y * h;
+    const teinte = clair ? melange(e[f.couleur], [255, 255, 255], .35) : e[f.couleur];
+    // Trois coins emboîtés : un cœur plus vif et des bords qui s'effacent, sans flou.
+    for (const [largeur, part] of [[1, .3], [.6, .35], [.28, .35]]) {
+      const g = c.createRadialGradient(ax, ay, 0, ax, ay, longueur);
+      const a = f.alpha * part * (clair ? 3 : 1);
+      g.addColorStop(0, rgba(teinte, a));
+      g.addColorStop(.55, rgba(teinte, a * .6));
+      g.addColorStop(1, rgba(teinte, 0));
+      c.fillStyle = g;
+      c.beginPath();
+      c.moveTo(ax, ay);
+      c.lineTo(ax + longueur * Math.sin(f.angle - f.demi * largeur), ay + longueur * Math.cos(f.angle - f.demi * largeur));
+      c.lineTo(ax + longueur * Math.sin(f.angle + f.demi * largeur), ay + longueur * Math.cos(f.angle + f.demi * largeur));
+      c.closePath();
+      c.fill();
+    }
+  }
+  c.globalCompositeOperation = "source-over";
+  const sol = c.createLinearGradient(0, .74 * h, 0, h);
+  sol.addColorStop(0, rgba(e.c1, 0));
+  sol.addColorStop(1, rgba(e.c1, clair ? .18 : .1));
+  c.fillStyle = sol;
+  c.fillRect(0, .74 * h, w, .26 * h);
+}
+function lignesFaisceaux(l, e, k) {
+  const w = l.canvas.width, h = l.canvas.height, { s, clair } = e;
+  const faisceaux = mouvementFaisceaux(s);
+  const teinte = clair ? encreTrait(e.c0, true) : melange([255, 255, 255], e.c0, .2);
+  for (const p of POUSSIERE) {
+    const y = (((p.y - s / p.montee) % 1) + 1) % 1 * 1.1 - .05;
+    const x = p.x + p.ampleur * onde(s, p.oscille, p.phase);
+    const fondu = Math.min(1, (y + .05) / .15, (1.05 - y) / .15);
+    // Dans un faisceau (angle vu depuis sa source, en pixels carrés), la poussière s'allume.
+    const lumiere = Math.max(0, ...faisceaux.map(f => 1 - Math.abs(Math.atan2((x - f.x) * w, (y - f.y) * h) - f.angle) / f.demi));
+    const a = p.eclat * fondu * (.6 + .4 * onde(s, p.scintille, p.phase)) * (1 + 2.2 * lumiere) * (clair ? .4 : .5);
+    if (a <= .01) continue;
+    l.fillStyle = rgba(teinte, a);
+    l.beginPath();
+    l.arc(x * w, y * h, p.taille * k * (1 + .5 * lumiere), 0, 2 * Math.PI);
+    l.fill();
+  }
+}
+
+const PEINTRES = { cinema: peindreCinema, rubans: peindreRubans, profondeur: peindreProfondeur, faisceaux: peindreFaisceaux };
+const TRACEURS = { cinema: lignesCinema, rubans: lignesRubans, profondeur: lignesProfondeur, faisceaux: lignesFaisceaux };
+
+// Un motif sur deux toiles : « c » la basse résolution, « l » les lignes (effacée ici
+// si « effacer »). Pure hormis les toiles : les aperçus et les tests l'appellent aussi.
+function peindreFond(motif, couleur, theme, s, accent, teinter, c, l, effacer = true) {
+  const e = environnementFond(couleur, theme, s, accent, teinter);
+  if (!PEINTRES[motif]) {
+    peindreNappes(c, couleur, e, accent, teinter);
+  } else {
+    PEINTRES[motif](c, e);
+  }
+  if (!l) return;
+  if (effacer) l.clearRect(0, 0, l.canvas.width, l.canvas.height);
+  l.globalCompositeOperation = "source-over";
+  TRACEURS[motif]?.(l, e, l.canvas.width / LARGEUR_LIGNES);
+}
 
 const toile = $("fond");
 const ctx = toile.getContext("2d");
+const toileLignes = $("fond-lignes");
+const ctxLignes = toileLignes.getContext("2d");
+const filigrane = $("filigrane");
 let accentCible = COULEURS_MODE.tv;
 let accentCourant = [...COULEURS_MODE.tv];
 let fondPret = false;
@@ -369,6 +780,13 @@ function fondChoisi() {
   if (f === "photos" && !(INITIAL.photos || []).length) return "aurore";
   return PALETTES[f] || f === "photos" ? f : "aurore";
 }
+function motifDuProfil(p = profil()) { return MOTIFS.includes(p.motif) ? p.motif : "nappes"; }
+// Le dessin à l'écran : « minimal » et « photos » passent avant le motif.
+function motifChoisi() {
+  const f = fondChoisi();
+  return f === "minimal" || f === "photos" ? f : motifDuProfil();
+}
+window.hubFond = { mouvementNappe, periodesFond, periodesMotif, peindreFond, mouvementFiligrane, mouvementFaisceaux, motifChoisi, fondChoisi, MOTIFS, COULEURS_FOND, LARGEUR_LIGNES, RESOLUTION_MOTIF, LENTEUR_AMBIANT, IMAGES_FOND_PAR_SECONDE };
 
 // Personne ne regarde le fond : page cachée, mode qui démarre, calque plein écran
 // par-dessus (voile, et le verre de la feuille recalculé à chaque image du fond), ou
@@ -377,6 +795,29 @@ function fondSuspendu() {
   const corps = document.body.classList;
   return document.hidden || corps.contains("depart") || corps.contains("calque-ouvert") || corps.contains("cadre-actif");
 }
+
+// Taille des toiles et calques du motif : seulement quand le motif ou l'écran changent
+// (redimensionner une toile l'efface et réalloue sa mémoire).
+let preparation = "";
+function preparerToiles(motif, theme, couleur) {
+  const [largeur, hauteur] = RESOLUTIONS_FOND[motif] || RESOLUTION_MOTIF;
+  const lignes = MOTIFS_A_LIGNES.includes(motif);
+  const hauteurLignes = Math.round(LARGEUR_LIGNES * innerHeight / Math.max(1, innerWidth));
+  const cle = [motif, theme, couleur, innerWidth, innerHeight].join();
+  if (cle === preparation) return;
+  preparation = cle;
+  if (toile.width !== largeur || toile.height !== hauteur) { toile.width = largeur; toile.height = hauteur; }
+  toileLignes.hidden = !lignes;
+  if (lignes && (toileLignes.width !== LARGEUR_LIGNES || toileLignes.height !== hauteurLignes)) {
+    toileLignes.width = LARGEUR_LIGNES;
+    toileLignes.height = hauteurLignes;
+  }
+  filigrane.hidden = motif !== "cinema";
+  document.body.dataset.motif = motif;
+  // La couleur de base du fond, pour le voile du bas qui passe sur le filigrane (hub.css).
+  racine.style.setProperty("--fond-base", rvbHex((PALETTES[couleur] || PALETTES.aurore)[theme].base).join(" "));
+}
+addEventListener("resize", () => { preparation = ""; relancerFond(); });
 
 function dessinerFond(temps) {
   // Suspendu, on dessine encore une image si quelque chose a changé (thème, fond
@@ -389,39 +830,30 @@ function dessinerFond(temps) {
     return;
   }
   const choix = fondChoisi();
+  const motif = motifChoisi();
   const theme = racine.dataset.theme === "clair" ? "clair" : "sombre";
-  const palette = (PALETTES[choix] || PALETTES.aurore)[theme];
   const reduit = profil().animations === "reduites" || matchMedia("(prefers-reduced-motion: reduce)").matches;
   const lent = document.body.classList.contains("ambiant") ? LENTEUR_AMBIANT : 1;
   // Plafonné : après une pause (page cachée, calque), on reprend là où on était.
   const ecoule = dernierDessin === null ? 0 : Math.min(temps - dernierDessin, 100);
   dernierDessin = temps;
   if (!reduit) horlogeFond += ecoule / 1000 * lent;
-  const s = reduit ? 0 : horlogeFond;
-  const w = toile.width, h = toile.height;
+  // Figé, un motif montre un instant où tout est en place (ondes à mi-course, orbes…).
+  const s = reduit ? (motif === "nappes" ? 0 : 6) : horlogeFond;
+  preparerToiles(motif, theme, choix === "photos" ? "aurore" : choix);
 
   // Même vitesse de fondu de la teinte qu'à 60 images par seconde (3 % par image).
   accentCourant = melange(accentCourant, accentCible, reduit ? 1 : 1 - Math.pow(.97, ecoule / (1000 / 60)));
-  ctx.globalCompositeOperation = "source-over";
-  ctx.fillStyle = palette.base;
-  ctx.fillRect(0, 0, w, h);
-  ctx.globalCompositeOperation = theme === "clair" ? "source-over" : "lighter";
-
-  palette.nappes.forEach((teinteBase, i) => {
-    const minimal = choix === "minimal";
-    const m = mouvementNappe(choix, i, s);
-    const x = m.x * w;
-    const y = minimal ? -h * .3 : m.y * h;
-    const r = (minimal ? 1.1 : m.r) * w;
-    const teinter = profil().teinteMode && !minimal;
-    const teinte = teinter ? melange(teinteBase, accentCourant, i === 0 ? .75 : .25) : teinteBase;
-    const force = (theme === "clair" ? (i === 0 ? .6 : .5) : (i === 3 ? .35 : i === 0 ? .34 : .2)) * m.eclat;
-    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
-    g.addColorStop(0, `rgba(${teinte.map(Math.round).join(",")},${minimal ? (theme === "clair" ? .9 : .5) : force})`);
-    g.addColorStop(1, `rgba(${teinte.map(Math.round).join(",")},0)`);
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, w, h);
-  });
+  const teinter = !!profil().teinteMode;
+  if (PEINTRES[motif]) {
+    peindreFond(motif, choix, theme, s, accentCourant, teinter, ctx, ctxLignes);
+    if (motif === "cinema") {
+      const f = mouvementFiligrane(s);
+      filigrane.style.transform = `translate3d(0, ${(f.decalage * innerHeight).toFixed(1)}px, 0) rotate(${f.angle.toFixed(2)}deg)`;
+    }
+  } else {
+    peindreNappes(ctx, choix, environnementFond(PALETTES[choix] ? choix : "aurore", theme, s, accentCourant, teinter), accentCourant, teinter);
+  }
   // Le scintillement suit le fond : une animation CSS à part, sur un calque 4K, faisait
   // recalculer les flous du dessus à chaque image, en plus de celles du fond.
   if (etoiles && !etoiles.hidden) etoiles.style.opacity = reduit ? "" : .775 - .225 * Math.cos(2 * Math.PI * s / 14);
@@ -441,8 +873,28 @@ function relancerFond() {
 }
 document.addEventListener("visibilitychange", () => { if (!document.hidden) relancerFond(); });
 
+// Aperçu d'un motif dans une couleur, pour les réglages : les mêmes fonctions de dessin,
+// figées à 6 s, sur une toile de 480×270 (la vignette fait 10 à 14 rem de large).
+function apercuFond(motif, couleur, theme, s = 6, accent = accentCourant, teinter = !!profil().teinteMode) {
+  const vignette = document.createElement("canvas");
+  vignette.width = 480; vignette.height = 270;
+  const v = vignette.getContext("2d");
+  const [largeur, hauteur] = RESOLUTIONS_FOND[motif] || RESOLUTION_MOTIF;
+  const basse = document.createElement("canvas");
+  basse.width = largeur; basse.height = hauteur;
+  const b = basse.getContext("2d");
+  if (PEINTRES[motif]) peindreFond(motif, couleur, theme, s, accent, teinter, b, null);
+  else peindreNappes(b, motif === "minimal" ? "minimal" : couleur, environnementFond(motif === "minimal" ? "minimal" : couleur, theme, s, accent, teinter), accent, teinter);
+  v.imageSmoothingEnabled = true;
+  v.imageSmoothingQuality = "high";
+  v.drawImage(basse, 0, 0, 480, 270);
+  TRACEURS[motif]?.(v, environnementFond(couleur, theme, s, accent, teinter), 480 / LARGEUR_LIGNES);
+  return vignette;
+}
+window.hubFond.apercuFond = apercuFond;
+
 function etoilesVisibles() {
-  const visible = fondChoisi() === "nebuleuse" && racine.dataset.theme !== "clair";
+  const visible = fondChoisi() === "nebuleuse" && motifChoisi() === "nappes" && racine.dataset.theme !== "clair";
   if (visible && !etoiles) {
     etoiles = el("canvas", { id: "etoiles" });
     const echelle = Math.min(devicePixelRatio || 1, 2);
@@ -501,6 +953,12 @@ function accentuer(nom) {
   const couleur = COULEURS_MODE[nom] || COULEURS_MODE.tv;
   accentCible = couleur;
   racine.style.setProperty("--accent", (racine.dataset.theme === "clair" ? couleur.map(v => Math.round(v * .78)) : couleur).join(" "));
+  // Le filigrane du motif cinéma : le pictogramme du mode, le même que dans son onglet.
+  const picto = document.querySelector(`#modes .onglet[data-accent="${nom}"] svg`);
+  if (picto && filigrane.dataset.picto !== nom) {
+    filigrane.dataset.picto = nom;
+    filigrane.querySelector("svg").innerHTML = picto.innerHTML;
+  }
   relancerFond();
 }
 
@@ -518,7 +976,10 @@ function horloge() {
   const h = maintenant.getHours();
   const moment = h >= 5 && h < 12 ? "matin" : h >= 12 && h < 18 ? "aprem" : h >= 18 && h < 23 ? "soir" : "nuit";
   $("salut").textContent = `${t("salut." + moment)}, ${profil().nom}`;
-  $("sous-salut").textContent = alerteMeteo() || t("salut.question");
+  // Dans l'en-tête, la salutation reste courte : la ligne du dessous ne sert qu'à une alerte.
+  const alerte = alerteMeteo();
+  $("sous-salut").textContent = alerte || "";
+  $("sous-salut").hidden = !alerte;
   appliquerApparence();
 }
 
@@ -746,29 +1207,20 @@ function definirFocus(cible, silencieux = false) {
   const precedent = courant;
   if (courant && courant !== cible) courant.classList.remove("focus");
   const change = courant !== cible;
-  // La carte qu'on atteint pivote un instant dans le sens du déplacement, comme
-  // si on la faisait glisser : on sent la direction sans lire l'écran.
-  // 180 ms, et rien quand la touche est maintenue : à 650 ms avec rebond, chaque carte
-  // traversée tournait encore quand on arrivait à la suivante.
-  if (change && !toucheRepetee && precedent?.classList.contains("carte") && cible.classList.contains("carte") && profil().animations !== "reduites") {
-    const sens = cartes.indexOf(cible) > cartes.indexOf(precedent) ? 1 : -1;
-    cible.animate([
-      { transform: `translateY(-.68rem) scale(1.06) rotateY(${sens * -9}deg)` },
-      { transform: "translateY(-.68rem) scale(1.06) rotateY(0deg)" },
-    ], { duration: 180, easing: "cubic-bezier(.2, .7, .3, 1)" });
-    precedent.animate([
-      { transform: `scale(.96) rotateY(${sens * 7}deg)` },
-      { transform: "scale(.96) rotateY(0deg)" },
-    ], { duration: 180, easing: "cubic-bezier(.2, .7, .3, 1)" });
-  }
   courant = cible;
   cible.classList.add("focus");
   focusParCalque[pile.at(-1)] = cible;
   retenirRangee(cible);
   if (change && !silencieux) son("deplacer");
 
-  if (cible.dataset.accent) accentuer(cible.dataset.accent);
-  else if (pile.at(-1) === "accueil") accentuer(cartes.find(c => c.dataset.mode === profil().dernier)?.dataset.accent || "tv");
+  // Sur l'accueil, le héros, la pastille et la teinte du fond suivent l'onglet. Une tuile
+  // (streaming, reprise) n'est pas un mode : le héros garde le dernier mode choisi, et le
+  // fond sa couleur, plutôt que de passer au turquoise de la TV à chaque Bas.
+  if (pile.at(-1) === "accueil") {
+    if (cible.classList.contains("onglet")) montrerHeros(cible, change && !toucheRepetee && !!precedent);
+    $("modes").classList.toggle("actif", cible.classList.contains("onglet"));
+    accentuer(ongletHeros?.dataset.accent || "tv");
+  } else if (cible.dataset.accent) accentuer(cible.dataset.accent);
   // Parcourir le sommaire change la section ; y revenir depuis le contenu, jamais : on
   // rentre sur la section qu'on quittait (voisin), et un focus égaré ne doit pas remplacer
   // sous les yeux la page qu'on était en train de régler (audit du 17/09/2026 : Haut depuis
@@ -838,9 +1290,8 @@ function voisinAccueil(depart, direction, liste) {
   if (!cible) return null;
   const retenu = memoireRangee.get(RANGEES_ACCUEIL.find(sel => cible[0].closest(`#accueil ${sel}`)));
   if (cible.includes(retenu)) return retenu;
-  // L'en-tête, jamais visité : le profil, sa première cible, plutôt que la météo qui se
-  // trouve au-dessus de la carte du milieu.
-  if (cible[0].closest("#accueil .entete")) return cible[0];
+  // L'en-tête, jamais visité : le profil, plutôt que la météo qui le précède.
+  if (cible[0].closest("#accueil .entete")) return cible.find(e => e.id === "puce-profil") || cible[0];
   const a = depart.getBoundingClientRect(), x = a.left + a.width / 2;
   return cible.reduce((m, e) => { const r = e.getBoundingClientRect(); const d = Math.abs(r.left + r.width / 2 - x); return d < m.d ? { e, d } : m; }, { e: null, d: Infinity }).e;
 }
@@ -949,8 +1400,51 @@ function fermerCalque() {
 }
 function fermerTout() { while (pile.length > 1) fermerCalque(); }
 
+// ── Accueil : le héros et les onglets des modes ───────────────────────────
+// Maquette C « Cinéma », choisie le 17/09/2026 : le mode choisi en grand à gauche, les
+// modes en onglets sous lui, une pastille à sa couleur qui glisse derrière l'onglet. Les
+// trois cartes de verre d'avant se touchaient presque, avec l'anneau blanc collé autour
+// (« trop bord à bord et compactes ») ; et leur flou d'arrière-plan était recalculé à
+// chaque image du fond. Ni le héros, ni les onglets, ni les tuiles n'ont de flou.
+const onglets = [...document.querySelectorAll("#modes .onglet")];
+let ongletHeros = null;
+
+function pastillesHeros(mode) {
+  if (mode === "gaming") return SERVICES.filter(s => s.categorie === "jeux" && serviceVisible(s)).map(s => s.nom);
+  if (mode === "tv") {
+    const reprises = (INITIAL.reprises || []).length;
+    return ["Kodi", t("heros.films"), t("heros.series"), t("heros.musique"), reprises && t("heros.reprises", { n: Math.min(reprises, 4) })].filter(Boolean);
+  }
+  return ["Ubuntu", t("heros.applications"), t("heros.fichiers")];
+}
+
+// Le héros dit le mode de l'onglet : titre, phrase, services, et ce que fait OK.
+// « anime » : un fondu de 180 ms, jamais quand la touche est maintenue.
+function montrerHeros(onglet = ongletHeros, anime = false) {
+  const visibles = onglets.filter(o => !o.hidden);
+  if (!onglet || onglet.hidden) onglet = visibles.find(o => o.dataset.mode === profil().dernier) || visibles[0];
+  if (!onglet) return;
+  const change = ongletHeros !== onglet;
+  ongletHeros = onglet;
+  const mode = onglet.dataset.mode;
+  const nom = t({ tv: "mode.tv", gaming: "mode.jeux", bureau: "mode.bureau" }[mode]);
+  $("heros-titre").textContent = nom;
+  $("heros-texte").textContent = t(`heros.${mode}`);
+  $("heros-services").replaceChildren(...pastillesHeros(mode).map(n => el("span", {}, n)));
+  $("lancer-texte").textContent = t(mode === "gaming" ? "heros.ouvrir" : "heros.lancer", { mode: nom });
+  onglets.forEach(o => o.classList.toggle("choisi", o === onglet));
+  // La pastille glisse d'un onglet à l'autre (transform, 180 ms) : des colonnes égales,
+  // elle n'a qu'à connaître son rang et leur nombre.
+  $("modes").style.setProperty("--n", visibles.length);
+  $("modes").style.setProperty("--i", Math.max(0, visibles.indexOf(onglet)));
+  if (change && anime && profil().animations !== "reduites") {
+    for (const e of [$("heros-titre"), $("heros-texte"), $("heros-services")]) {
+      e.animate([{ opacity: .25, transform: "translateY(.45rem)" }, { opacity: 1, transform: "none" }], { duration: 180, easing: "cubic-bezier(.2, .7, .3, 1)" });
+    }
+  }
+}
+
 // ── Accueil : lancer un mode ──────────────────────────────────────────────
-const cartes = [...document.querySelectorAll(".carte")];
 
 let minuterieAnnonce;
 function annoncer(texte) {
@@ -990,11 +1484,16 @@ function eteindre() {
   setTimeout(() => envoyer({ type: "choix", mode: "eteindre" }), 620);
 }
 
-cartes.forEach(c => c.addEventListener("click", () => {
+onglets.forEach(c => c.addEventListener("click", () => {
   if (pile.at(-1) !== "accueil") return;
   definirFocus(c, true);
   lancer(c);
 }));
+$("lancer").addEventListener("click", () => {
+  if (pile.at(-1) !== "accueil" || !ongletHeros || verrou) return;
+  definirFocus(ongletHeros, true);
+  lancer(ongletHeros);
+});
 
 // ── Continuer à regarder ──────────────────────────────────────────────────
 function rendreReprises() {
@@ -1175,7 +1674,7 @@ function choisirProfil(id) {
   document.body.classList.remove("gestion");
   appliquerTout();
   fermerTout();
-  const carte = cartes.find(c => c.dataset.mode === profil().dernier) || cartes[0];
+  const carte = onglets.find(c => c.dataset.mode === profil().dernier && !c.hidden) || onglets.find(c => !c.hidden);
   definirFocus(carte, true);
   annoncer(`${t("salut." + (new Date().getHours() < 18 ? "matin" : "soir"))}, ${profil().nom}`);
 }
@@ -1641,20 +2140,45 @@ function rendreSection(garderFocus = true) {
       break;
 
     case "fond": {
-      const vignettes = el("div", { class: "vignettes" });
-      for (const f of ["aurore", "nebuleuse", "ocean", "braise", "minimal", "photos"]) {
-        vignettes.append(el("button", {
-          class: `vignette-fond apercu-${f}${p.fond === f ? " choisie" : ""}`, "data-nav": true, "data-cle": `fond-${f}`,
-          onclick: () => {
-            if (f === "photos" && !(INITIAL.photos || []).length) { son("erreur"); return annoncer(t("fond.photos.aucune")); }
-            p.fond = f; sauver(); appliquerTout(); rendreSection(); son("ok");
-          },
-          html: f === "photos" ? '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="m3 16 5-5 4 4 3-3 6 6"/></svg>' : "",
-        }, el("span", {}, t(`fond.${f}`))));
+      // D'abord le motif, puis sa couleur. Chaque vignette est le vrai dessin, figé, dans
+      // le thème affiché : on choisit ce qu'on verra, pas un pictogramme.
+      const theme = racine.dataset.theme === "clair" ? "clair" : "sombre";
+      const couleur = COULEURS_FOND.includes(p.fond) ? p.fond : null;
+      const motif = ["minimal", "photos"].includes(p.fond) ? p.fond : motifDuProfil(p);
+      const valider = changer => { changer(); sauver(); appliquerTout(); rendreSection(); son("ok"); };
+      const vignette = (cle, choisie, libelle, apercu, onclick) => el("button", {
+        class: `vignette-fond${choisie ? " choisie" : ""}`, "data-nav": true, "data-cle": cle, onclick,
+      }, apercu, el("span", { class: "libelle" }, libelle));
+      const motifs = el("div", { class: "vignettes motifs" });
+      for (const m of [...MOTIFS, "minimal", "photos"]) {
+        let apercu;
+        if (m === "photos") apercu = el("span", { class: "apercu-photos", html: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="m3 16 5-5 4 4 3-3 6 6"/></svg>' });
+        else apercu = apercuFond(m, couleur || "aurore", theme);
+        if (m === "cinema") apercu = el("span", { class: "apercu-cinema" }, apercu, el("span", { class: "apercu-filigrane", html: $("filigrane").innerHTML }));
+        motifs.append(vignette(`motif-${m}`, motif === m, t(m === "minimal" || m === "photos" ? `fond.${m}` : `motif.${m}`), apercu, () => {
+          if (m === "photos" && !(INITIAL.photos || []).length) { son("erreur"); return annoncer(t("fond.photos.aucune")); }
+          valider(() => {
+            if (m === "minimal" || m === "photos") p.fond = m;
+            else { p.motif = m; if (!couleur) p.fond = "aurore"; }
+          });
+        }));
       }
-      zone.append(vignettes,
-        el("div", { class: "aide", style: "margin-top:-.15rem" }, t("fond.photos.detail")),
-        rangee(t("fond.couleur.mode"), null, options("teinte", [[true, t("oui")], [false, t("non")]], p.teinteMode, v => { p.teinteMode = v === true || v === "true"; })));
+      // Les couleurs montrent le motif animé du profil, même quand « minimal » ou « photos »
+      // est choisi : en prendre une y revient.
+      const couleurs = el("div", { class: "vignettes couleurs" });
+      const motifCouleurs = motifDuProfil(p);
+      for (const c of COULEURS_FOND) {
+        const apercu = apercuFond(motifCouleurs, c, theme);
+        couleurs.append(vignette(`couleur-${c}`, couleur === c, t(`fond.${c}`), apercu, () => valider(() => { p.fond = c; p.motif = motifCouleurs; })));
+      }
+      zone.append(
+        el("div", { class: "sous-titre" }, t("fond.motif")),
+        motifs,
+        el("div", { class: "aide" }, t("fond.photos.detail")),
+        el("div", { class: "sous-titre" }, t("fond.couleur")),
+        ...(couleur ? [] : [el("div", { class: "aide" }, t("fond.couleur.aide", { motif: t(`motif.${motifCouleurs}`) }))]),
+        couleurs,
+        rangee(t("fond.couleur.mode"), t("fond.couleur.mode.detail"), options("teinte", [[true, t("oui")], [false, t("non")]], p.teinteMode, v => { p.teinteMode = v === true || v === "true"; })));
       break;
     }
 
@@ -2026,8 +2550,8 @@ function commande(nom) {
   }
   if (nom in modes) {
     fermerTout();
-    definirFocus(cartes[modes[nom]], true);
-    return lancer(cartes[modes[nom]]);
+    definirFocus(onglets[modes[nom]], true);
+    return lancer(onglets[modes[nom]]);
   }
   if (nom.startsWith("theme:")) {
     profil().theme = nom.slice(6) === "clair" ? "clair" : "sombre";
@@ -2366,7 +2890,7 @@ window.hub = {
 // ── Démarrage ─────────────────────────────────────────────────────────────
 function appliquerTout() {
   appliquerApparence();
-  for (const carte of cartes) carte.hidden = !modeAutorise(carte.dataset.mode);
+  for (const onglet of onglets) onglet.hidden = !modeAutorise(onglet.dataset.mode);
   rendreReprises();
   rendreApplis();
   appliquerTextes();
@@ -2374,8 +2898,10 @@ function appliquerTout() {
   afficherMeteo();
   majMinuteur();
   $("voix-pastille").hidden = !reglages.systeme.voix || etatVoix.micro === null;
+  // Textes, services visibles, onglets cachés : le héros se refait sur le même mode.
+  montrerHeros();
   relancerFond();
-  if (pile.at(-1) === "accueil" && courant?.dataset.accent) accentuer(courant.dataset.accent);
+  if (pile.at(-1) === "accueil") accentuer(ongletHeros?.dataset.accent || "tv");
 }
 
 appliquerTout();
@@ -2396,7 +2922,7 @@ setInterval(chargerMeteo, 20 * 60000);
 relancerManettes();
 window.hubBoucles = () => ({ fond: boucleFond, manettes: boucleManettes });
 
-const carteDepart = cartes.find(c => c.dataset.mode === (INITIAL.dernier || profil().dernier)) || cartes[0];
+const carteDepart = onglets.find(c => c.dataset.mode === (INITIAL.dernier || profil().dernier) && !c.hidden) || onglets.find(c => !c.hidden);
 definirFocus(carteDepart, true);
 // Le dernier relevé en cache s'affiche tout de suite ; le relevé frais suit.
 if (INITIAL.meteo) recevoirMeteo(INITIAL.meteo.donnees, INITIAL.meteo.releveLe, INITIAL.meteo.horsLigne);
@@ -2408,9 +2934,10 @@ if (!INITIAL.retour) {
   else if (verrouAccueil) setTimeout(exigerDeverrouillage, parametres.has("sans-intro") ? 0 : 1800);
 }
 
-// Mise au point : ?ecran=reglages&section=fond, ?ecran=meteo, ?theme=clair…
+// Mise au point : ?ecran=reglages&section=fond, ?ecran=meteo, ?theme=clair, ?motif=profondeur&fond=emeraude…
 if (parametres.get("theme")) { profil().theme = parametres.get("theme"); appliquerTout(); }
 if (parametres.get("fond")) { profil().fond = parametres.get("fond"); appliquerTout(); }
+if (parametres.get("motif")) { profil().motif = parametres.get("motif"); appliquerTout(); }
 if (parametres.get("langue")) { profil().langue = parametres.get("langue"); appliquerTout(); }
 const ecran = parametres.get("ecran");
 if (ecran === "ambiant") setTimeout(entrerAmbiant, 300);

@@ -12,7 +12,7 @@ import path from "node:path";
 
 const ici = path.dirname(fileURLToPath(import.meta.url));
 const PAGE = pathToFileURL(path.join(ici, "../../installer/menu/index.html")).href;
-const FONDS_ANIMES = ["aurore", "nebuleuse", "ocean", "braise"];
+const FONDS_ANIMES = ["aurore", "nebuleuse", "ocean", "braise", "emeraude", "crepuscule"];
 
 let navigateur, page;
 
@@ -151,20 +151,23 @@ test("manettes : pas de boucle sans manette ; une manette branchée pilote, déb
   });
   await attendreBoucle("manettes", true);
   await page.evaluate(() => { window.__manette.buttons[15] = { pressed: true }; });
-  await page.waitForFunction(() => document.querySelector(".carte.focus")?.dataset.mode === "gaming", null, { timeout: 3000 });
+  await page.waitForFunction(() => document.querySelector(".onglet.focus")?.dataset.mode === "gaming", null, { timeout: 3000 });
   await page.evaluate(() => { window.__manette = null; });
   await attendreBoucle("manettes", false);
 });
 
-test("liseré tournant : seulement sur la carte sélectionnée, arrêté en mode ambiant", async () => {
+// Le liseré tournant des anciennes cartes repeignait un dégradé conique masqué à chaque image.
+// Les onglets n'ont aucune animation continue : la pastille glisse (transform), puis s'arrête.
+test("onglets : aucune animation continue, la pastille glisse par transform", async () => {
   await ouvrir({ dernier: "gaming" });
-  const etats = () => page.$$eval(".carte", cartes => cartes.map(c => [c.dataset.mode, getComputedStyle(c, "::before").animationPlayState]));
-  assert.deepEqual(await etats(), [["tv", "paused"], ["gaming", "running"], ["bureau", "paused"]]);
+  await page.waitForTimeout(1200);
+  const enCours = () => page.evaluate(() => document.getAnimations().filter(a => a.playState === "running" && a.effect?.target?.closest?.("#modes")).length);
+  assert.equal(await enCours(), 0);
+  const transition = await page.evaluate(() => getComputedStyle(document.querySelector(".pastille-onglet")).transitionProperty);
+  assert.equal(transition, "transform");
   await page.keyboard.press("ArrowRight");
-  assert.deepEqual(await etats(), [["tv", "paused"], ["gaming", "paused"], ["bureau", "running"]]);
-  await page.keyboard.press("a");
-  await page.waitForFunction(() => document.body.classList.contains("ambiant"));
-  assert.deepEqual((await etats()).map(e => e[1]), ["paused", "paused", "paused"]);
+  await page.waitForTimeout(400);
+  assert.equal(await enCours(), 0);
 });
 
 test("allègement : ni flou plein écran animé, ni flou d'arrière-plan sur les voiles et les puces", async () => {
@@ -177,7 +180,7 @@ test("allègement : ni flou plein écran animé, ni flou d'arrière-plan sur les
     document.body.classList.replace("calque-ouvert", "ambiant");
     r.ambiant = flou(document.querySelector(".ecran"));
     r.voiles = [...document.querySelectorAll(".voile, .feuille, #profils, #clavier, .puce, .bouton")].flatMap(flou);
-    r.transitions = [...document.querySelectorAll(".ecran, .carte, .puce, .bouton, .option")].map(e => getComputedStyle(e).transitionProperty).filter(t => /\ball\b|filter|box-shadow/.test(t));
+    r.transitions = [...document.querySelectorAll(".ecran, .onglet, .pastille-onglet, .tuile-service, .puce, .bouton, .option")].map(e => getComputedStyle(e).transitionProperty).filter(t => /\ball\b|filter|box-shadow/.test(t));
     return r;
   });
   assert.deepEqual(flous, { ecran: [], calque: [], ambiant: [], voiles: [], transitions: [] });

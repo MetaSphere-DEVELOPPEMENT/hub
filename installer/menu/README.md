@@ -25,6 +25,32 @@ de 50 à 160 ; plus de flou animé plein écran ; flous d'arrière-plan réduits
 cartes et aux panneaux ; liseré tournant sur la seule carte sélectionnée ; boucle des
 manettes seulement manette branchée.
 
+### Motifs de fond et accueil « Cinéma » (17/09/2026)
+
+Retour sur la TV : « le fond n'est toujours pas animé et décoré, les cartes sont trop bord
+à bord ». Le fond est devenu un motif × une couleur (`hub.js`, « Fonds animés ») ; l'accueil
+suit la maquette C. Ce que chaque image coûte, par motif (lecture du code, **pas mesuré sur
+la TV**) :
+
+| Motif | Toile floue | Toile des traits (960 px de large, transparente) | Calque en plus |
+|---|---|---|---|
+| nappes (celui d'avant) | 192×108, 5 remplissages | — | — |
+| cinéma (défaut d'un profil neuf) | 320×180, 4 remplissages | 3 cercles | filigrane : `transform` seule |
+| aurore boréale | 320×180, ~320 bandes de 3 px | 150 étoiles (sombre) | — |
+| profondeur | 320×180, 3 remplissages | ~45 traits, 3 orbes | — |
+| faisceaux | 320×180, 9 coins | 90 grains de poussière | — |
+
+Tout est au rythme du fond (30 i/s au plus), s'arrête avec lui (calque, page cachée, départ,
+cadre photo), ralentit en ambiant et se fige en animations réduites. Aucun filtre ni masque
+animé ; le `saturate()` de la toile ne reste que sur les nappes. L'accueil n'a plus aucun
+`backdrop-filter` : les trois cartes de verre en recalculaient chacune un à chaque image du
+fond. La toile des traits ajoute un envoi de 960×540 pixels par image au GPU.
+
+- [ ] motif cinéma, accueil immobile 30 s : ____ images/s, pire seconde ____
+- [ ] motif aurore boréale (le plus de dessin) : ____ images/s ; CPU WebKitWebProcess ____ %
+- [ ] motif profondeur : les traits du sol restent-ils nets en 4K, sans scintiller ?
+- [ ] nappes (profil d'avant) : rendu identique à la version précédente ?
+
 ### Mesure indicative, hors TV
 
 `cd tests/menu && HUB_NAVIGATEUR=chromium node mesurer-rendu.mjs [copie du dépôt]`,

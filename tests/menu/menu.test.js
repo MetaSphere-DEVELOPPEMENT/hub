@@ -124,13 +124,13 @@ test("Jeux : Steam et Moonlight n'apparaissent que détectés, un service sans n
   assert.deepEqual(await calques(), []);
 });
 
-test("streaming sur l'accueil : Bas depuis les cartes, OK lance le service", async () => {
+test("streaming sur l'accueil : Bas depuis les onglets, OK lance le service", async () => {
   await ouvrir({ retour: true });
   assert.equal(await page.locator("#applis .tuile-service").count(), 8);
   await touche("ArrowDown");
-  assert.equal(await focus(), "service-netflix", "la tuile sous la carte TV");
-  await touche("ArrowLeft");
-  assert.equal(await focus(), "service-youtube");
+  assert.equal(await focus(), "service-youtube", "la tuile sous l'onglet TV");
+  await touche("ArrowRight", "ArrowLeft", "ArrowLeft");
+  assert.equal(await focus(), "service-youtube", "Gauche s'arrête au bout de la rangée");
   await touche("Enter");
   await attendreChoix();
   assert.deepEqual(await messages("choix"), [{ type: "choix", mode: "web", service: "youtube" }]);
@@ -179,7 +179,7 @@ test("profil sans TV : pas de streaming, services figés dans les réglages, voi
   assert.deepEqual(await calques(), ["jeux"], "le mode Jeux, autorisé, garde ses services");
 });
 
-test("depuis une carte, Bas atteint le streaming puis les boutons du pied, Haut revient aux cartes", async () => {
+test("depuis un onglet, Bas atteint le streaming puis les boutons du pied, Haut revient aux onglets", async () => {
   await ouvrir();
   await touche("ArrowDown");
   assert.match(await focus(), /^service-/);
@@ -201,7 +201,7 @@ test("éteindre demande confirmation, Annuler est sélectionné d'abord", async 
   assert.deepEqual(await messages("choix"), [{ type: "choix", mode: "eteindre" }]);
 });
 
-test("réglages : parcourir le sommaire change la section, choisir un fond l'enregistre", async () => {
+test("réglages : parcourir le sommaire change la section, choisir un motif puis une couleur l'enregistre", async () => {
   await ouvrir();
   await touche("r");
   assert.deepEqual(await calques(), ["reglages"]);
@@ -209,10 +209,17 @@ test("réglages : parcourir le sommaire change la section, choisir un fond l'enr
   await touche("ArrowDown");
   assert.equal(await page.textContent("#contenu-reglages h3"), "Arrière-plan");
   await touche("ArrowRight");
-  assert.equal(await focus(), "fond-aurore");
-  await touche("ArrowRight", "Enter");
-  await attendreReglages(d => d.profils[0].fond === "nebuleuse");
-  assert.equal(await focus(), "fond-nebuleuse", "la sélection reste sur la vignette choisie");
+  assert.equal(await focus(), "motif-cinema", "un profil neuf a le motif cinéma");
+  await touche("ArrowRight", "ArrowRight", "Enter");
+  await attendreReglages(d => d.profils[0].motif === "profondeur" && d.profils[0].fond === "aurore");
+  assert.equal(await focus(), "motif-profondeur", "la sélection reste sur la vignette choisie");
+  // Deux rangées de motifs (quatre, puis trois), puis les couleurs.
+  await touche("ArrowDown", "ArrowDown");
+  assert.match(await focus(), /^couleur-/);
+  await page.evaluate(() => definirFocus(document.querySelector('[data-cle="couleur-emeraude"]')));
+  await touche("Enter");
+  await attendreReglages(d => d.profils[0].motif === "profondeur" && d.profils[0].fond === "emeraude");
+  assert.equal(await page.evaluate(() => window.hubFond.motifChoisi()), "profondeur");
   await touche("Escape");
   assert.deepEqual(await calques(), []);
 });

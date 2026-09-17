@@ -169,6 +169,15 @@ class Reglages(unittest.TestCase):
         self.assertEqual(ht.profil_actif({"profils": "n'importe quoi"})["fond"], "aurore")
         self.assertEqual(ht.profil_actif({"profils": [{"id": "a"}]}, "a")["id"], "a")
 
+    def test_motif_du_menu_ignore_couleur_gardee(self):
+        """Le menu range le motif dans « motif » et garde la couleur dans « fond » : le bureau
+        et Kodi prennent la couleur, y compris les deux palettes ajoutées avec les motifs."""
+        with tempfile.TemporaryDirectory() as d:
+            c = {"maison": Path(d), "fonds": Path(d) / "fonds"}
+            for couleur in ("emeraude", "crepuscule", "ocean"):
+                a = ht.construire_apparence({"fond": couleur, "motif": "cinema"}, "sombre", c, generer=False)
+                self.assertEqual((a.fond, a.base), (couleur, ht.PALETTES[couleur]["sombre"]["base"]))
+
     def test_theme_force_puis_choisi_puis_auto(self):
         midi = datetime.datetime(2026, 9, 15, 12, 0)
         nuit = datetime.datetime(2026, 9, 15, 23, 0)

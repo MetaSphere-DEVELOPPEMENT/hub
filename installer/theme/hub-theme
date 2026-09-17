@@ -71,6 +71,16 @@ PALETTES = {
         "sombre": {"base": "#0c0605", "nappes": [(200, 75, 30), (130, 30, 60), (235, 130, 40), (45, 12, 10)]},
         "clair": {"base": "#f8efe9", "nappes": [(255, 192, 150), (245, 178, 196), (255, 216, 160), (250, 232, 220)]},
     },
+    # Ajoutées avec les motifs du menu (17/09/2026). Le bureau et Kodi ne dessinent que les
+    # nappes, figées : le motif ne les concerne pas, la couleur si.
+    "emeraude": {
+        "sombre": {"base": "#030b08", "nappes": [(40, 200, 130), (20, 120, 110), (150, 215, 90), (6, 40, 30)]},
+        "clair": {"base": "#e9f4ee", "nappes": [(150, 225, 190), (170, 215, 205), (205, 235, 165), (225, 242, 232)]},
+    },
+    "crepuscule": {
+        "sombre": {"base": "#0d0709", "nappes": [(255, 120, 150), (240, 170, 80), (150, 70, 170), (50, 15, 35)]},
+        "clair": {"base": "#f8eef0", "nappes": [(255, 190, 205), (255, 215, 160), (220, 190, 235), (250, 235, 238)]},
+    },
     "minimal": {
         "sombre": {"base": "#0a0c13", "nappes": [(42, 48, 70)]},
         "clair": {"base": "#eef1f6", "nappes": [(255, 255, 255)]},

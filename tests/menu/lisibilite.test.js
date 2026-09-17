@@ -121,23 +121,28 @@ async function contrastes(selecteurs) {
   }, { png, textes });
 }
 
-test("contrastes : accueil sombre, textes secondaires à 4,5:1 au moins", async () => {
-  await ouvrir(reglages({}, { animations: "reduites" }));
-  await page.evaluate(() => definirFocus(document.querySelector('[data-mode="gaming"]'), true));
-  await page.waitForTimeout(200);
-  const mesures = await contrastes([".carte:not(.focus) .detail", ".carte .touche-rapide", ".aides > span > span", ".carte.focus .ouvrir > span", ".reprises-titre"]);
-  const faibles = mesures.filter(m => m.ratio < 4.5);
-  assert.deepEqual(faibles, [], JSON.stringify(mesures));
+// L'accueil « Cinéma » : chaque motif de fond, figé (animations réduites), sous les mêmes textes.
+const TEXTES_ACCUEIL = ["#salut", ".date", ".heros-sur", ".heros-texte", ".heros-services span", ".lancer > span", ".onglet.focus .nom", ".onglet:not(.focus) .nom", ".aides > span > span", ".reprises-titre"];
+test("contrastes : accueil sombre, sur chaque motif, textes à 4,5:1 au moins", async () => {
+  for (const motif of ["cinema", "rubans", "profondeur", "faisceaux", "nappes"]) {
+    await page?.close();
+    await ouvrir({ ...reglages({}, { animations: "reduites", motif }), reprises: REPRISES });
+    await page.evaluate(() => definirFocus(document.querySelector('[data-mode="gaming"]'), true));
+    await page.waitForTimeout(250);
+    const mesures = await contrastes(TEXTES_ACCUEIL);
+    const faibles = mesures.filter(m => m.ratio < 4.5);
+    assert.deepEqual(faibles, [], `${motif} : ${JSON.stringify(mesures)}`);
+  }
 });
 
 test("contrastes : thème clair et initiales des avatars à 4,5:1 au moins", async () => {
   const telecommande = { url: "http://192.168.1.40:8790/", code: "482913", appairageOuvert: true, expire: Date.now() + 240000, telephones: 0 };
   for (const theme of ["clair", "sombre"]) {
     await page?.close();
-    await ouvrir({ ...reglages({}, { theme, animations: "reduites", couleur: "ambre" }), telecommande });
+    await ouvrir({ ...reglages({}, { theme, animations: "reduites", couleur: "ambre", motif: "cinema" }), telecommande });
     await page.evaluate(() => definirFocus(document.querySelector('[data-mode="bureau"]'), true));
     await page.waitForTimeout(200);
-    const accueil = await contrastes(["#avatar-profil", ".carte.focus .ouvrir > span", ".carte:not(.focus) .detail", ".aides > span > span"]);
+    const accueil = await contrastes(["#avatar-profil", ...TEXTES_ACCUEIL]);
     await page.evaluate(() => ACTIONS.reglages("telecommande"));
     await page.waitForTimeout(400);
     const reglage = await contrastes([".code-appairage", "#contenu-reglages .aide", ".portee .avatar"]);
@@ -158,7 +163,7 @@ test("sélection : anneau épais et décalé sur toute cible, coche sur l'option
   for (const theme of ["sombre", "clair"]) {
     await page?.close();
     await ouvrir(reglages({}, { theme }));
-    const cibles = ['[data-mode="gaming"]', '[data-cle="service-netflix"]', "#puce-profil", '[data-action="reglages"]', '[data-action="arret"]'];
+    const cibles = ['[data-cle="service-netflix"]', "#puce-profil", '[data-action="reglages"]', '[data-action="arret"]'];
     await page.evaluate(() => ACTIONS.reglages("apparence"));
     await page.waitForTimeout(300);
     for (const sel of [...cibles, '[data-cle="theme-clair"]', '[data-cle="section-fond"]']) {
@@ -188,6 +193,52 @@ test("sélection : anneau épais et décalé sur toute cible, coche sur l'option
   }
 });
 
+// Les onglets n'ont pas d'anneau : la pastille pleine est l'indicateur de focus. WCAG 2.4.13 :
+// elle couvre l'onglet, et ses pixels changent d'au moins 3:1 entre l'onglet sélectionné et
+// le même onglet quand le focus est sur une autre rangée (pastille en retrait), comme contre
+// le rail d'un onglet non choisi.
+test("sélection : la pastille des onglets est un indicateur de focus conforme", async () => {
+  for (const theme of ["sombre", "clair"]) {
+    for (const mode of ["tv", "gaming", "bureau"]) {
+      await page?.close();
+      await ouvrir(reglages({}, { theme, animations: "reduites", motif: "cinema", dernier: mode }));
+      const autre = mode === "tv" ? "bureau" : "tv";
+      const zones = await page.evaluate(([m, a]) => {
+        const o = document.querySelector(`[data-mode="${m}"]`);
+        definirFocus(o, true);
+        const r = o.getBoundingClientRect(), p = document.querySelector(".pastille-onglet").getBoundingClientRect(), b = document.querySelector(`[data-mode="${a}"]`).getBoundingClientRect();
+        const recouvre = Math.max(0, Math.min(r.right, p.right) - Math.max(r.left, p.left)) * Math.max(0, Math.min(r.bottom, p.bottom) - Math.max(r.top, p.top)) / (r.width * r.height);
+        // Une bande sous le libellé, dans la pastille : là où ni le texte ni le pictogramme ne passent.
+        const bande = x => ({ x: Math.round(x.left + x.width * .1), y: Math.round(x.bottom - x.height * .28), w: Math.round(x.width * .8), h: Math.round(x.height * .12) });
+        return { recouvre, onglet: bande(r), rail: bande(b) };
+      }, [mode, autre]);
+      assert.ok(zones.recouvre > .9, `${theme} ${mode} : la pastille couvre ${zones.recouvre}`);
+      const luminance = async zone => {
+        await page.waitForTimeout(250);
+        const png = (await page.screenshot({ clip: { x: zone.x, y: zone.y, width: zone.w, height: zone.h } })).toString("base64");
+        return page.evaluate(async png => {
+          const i = new Image(); i.src = "data:image/png;base64," + png; await i.decode();
+          const c = document.createElement("canvas"); c.width = i.width; c.height = i.height;
+          const x = c.getContext("2d"); x.drawImage(i, 0, 0);
+          const d = x.getImageData(0, 0, i.width, i.height).data, px = [];
+          for (let k = 0; k < d.length; k += 4) px.push([d[k], d[k + 1], d[k + 2]]);
+          const lin = v => { v /= 255; return v <= .03928 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4; };
+          const L = ([r, g, b]) => .2126 * lin(r) + .7152 * lin(g) + .0722 * lin(b);
+          px.sort((p, q) => L(p) - L(q));
+          return L(px[px.length >> 1]);
+        }, png);
+      };
+      const ratio = (a, b) => (Math.max(a, b) + .05) / (Math.min(a, b) + .05);
+      const pleine = await luminance(zones.onglet);
+      const rail = await luminance(zones.rail);
+      await page.evaluate(() => definirFocus(document.querySelector('[data-cle="service-youtube"]'), true));
+      const enRetrait = await luminance(zones.onglet);
+      assert.ok(ratio(pleine, enRetrait) >= 3, `${theme} ${mode} : pastille pleine / en retrait ${ratio(pleine, enRetrait).toFixed(2)}:1`);
+      assert.ok(ratio(pleine, rail) >= 3, `${theme} ${mode} : pastille / rail ${ratio(pleine, rail).toFixed(2)}:1`);
+    }
+  }
+});
+
 // Audit du 17/09/2026 : les feuilles (réglages, météo, jeux, aide) étaient posées à 3 % du haut
 // et 2,2 % de la droite, quelle que soit la marge de sécurité réglée pour la TV.
 test("zone sûre : les feuilles respectent la marge de sécurité réglée", async () => {
@@ -210,7 +261,7 @@ test("zone sûre : les feuilles respectent la marge de sécurité réglée", asy
 // Audit du 17/09/2026 : focus en .45 à .55 s avec rebond, rotation de 650 ms à chaque carte.
 test("mouvement : la sélection suit en 200 ms au plus, sans rebond ; rien en touche maintenue", async () => {
   await ouvrir(reglages());
-  const transitions = await page.evaluate(() => [".carte", ".tuile-service", ".puce", ".bouton", ".reprise"].map(sel => {
+  const transitions = await page.evaluate(() => [".onglet", ".pastille-onglet", ".tuile-service", ".puce", ".bouton", ".reprise"].map(sel => {
     const e = document.querySelector(sel); if (!e) return null;
     const cs = getComputedStyle(e);
     return { sel, durees: cs.transitionDuration.split(",").map(parseFloat), courbes: cs.transitionTimingFunction };
@@ -219,21 +270,21 @@ test("mouvement : la sélection suit en 200 ms au plus, sans rebond ; rien en to
     assert.ok(Math.max(...t.durees) <= .2, `${t.sel} : ${t.durees}`);
     assert.doesNotMatch(t.courbes, /1\.56/, `${t.sel} : rebond`);
   }
-  // Les rotations sont notées au moment où la page les lance : sur une machine chargée, une
+  // Le fondu du héros est noté au moment où la page le lance : sur une machine chargée, une
   // animation de 180 ms peut être finie avant qu'on aille la chercher.
   await page.evaluate(() => {
-    window.__rotations = [];
+    window.__fondus = [];
     const animer = Element.prototype.animate;
-    Element.prototype.animate = function (k, o) { if (this.classList.contains("carte")) window.__rotations.push(o.duration); return animer.call(this, k, o); };
+    Element.prototype.animate = function (k, o) { if (this.closest("#heros")) window.__fondus.push(o.duration); return animer.call(this, k, o); };
     definirFocus(document.querySelector('[data-mode="tv"]'), true);
-    window.__rotations = [];
+    window.__fondus = [];
   });
   await page.keyboard.press("ArrowRight");
-  const tournent = await page.evaluate(() => window.__rotations);
-  assert.ok(tournent.length && tournent.every(d => d <= 200), `durées ${tournent}`);
-  await page.evaluate(() => { definirFocus(document.querySelector('[data-mode="tv"]'), true); window.__rotations = []; });
+  const fondus = await page.evaluate(() => window.__fondus);
+  assert.ok(fondus.length && fondus.every(d => d <= 200), `durées ${fondus}`);
+  await page.evaluate(() => { definirFocus(document.querySelector('[data-mode="tv"]'), true); window.__fondus = []; });
   await page.evaluate(() => dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", repeat: true })));
-  assert.deepEqual(await page.evaluate(() => window.__rotations), [], "aucune rotation pendant la répétition de la touche");
+  assert.deepEqual(await page.evaluate(() => window.__fondus), [], "aucun fondu pendant la répétition de la touche");
 });
 
 // Défauts mineurs de l'audit du 17/09/2026.

@@ -20,6 +20,10 @@
 <body>
 <canvas id="fond" width="192" height="108"></canvas>
 <div id="photos" hidden></div>
+<!-- Les traits fins des motifs (sol, ondes, étoiles, poussière), plus nets que le fond. -->
+<canvas id="fond-lignes" width="960" height="540" hidden></canvas>
+<!-- Motif cinéma : le pictogramme du mode choisi, en grand, qui pivote lentement. -->
+<div id="filigrane" hidden><svg viewBox="0 0 32 32"></svg></div>
 <canvas class="grain" id="grain"></canvas>
 <div class="vignette"></div>
 <div id="intro" hidden><div class="intro-mot"><span>H</span><span>U</span><span>B</span></div><div class="intro-ligne"></div></div>
@@ -28,10 +32,11 @@
   <header class="entete">
     <div class="gauche">
       <div class="marque"><i></i>HUB</div>
-      <button class="puce" id="puce-profil" data-nav data-action="profils">
-        <span class="avatar" id="avatar-profil">P</span>
-        <span id="nom-profil">Profil 1</span>
-      </button>
+      <div class="salut">
+        <h1 id="salut">Bonsoir</h1>
+        <!-- Une alerte (pluie à venir) seulement : vide, il est caché. -->
+        <p id="sous-salut" hidden></p>
+      </div>
     </div>
     <div class="droite">
       <!-- En cours de lecture (Spotify, AirPlay, recopie) : une information, pas un bouton. -->
@@ -50,6 +55,10 @@
         <span class="temp" id="meteo-temp-puce">--°</span>
         <span class="ville" id="meteo-ville-puce"></span>
       </button>
+      <button class="puce" id="puce-profil" data-nav data-action="profils">
+        <span class="avatar" id="avatar-profil">P</span>
+        <span id="nom-profil">Profil 1</span>
+      </button>
       <div class="horloge">
         <div class="heure" id="heure">--:--</div>
         <div class="date" id="date"></div>
@@ -58,49 +67,29 @@
   </header>
 
   <section class="centre">
-    <div class="salut">
-      <h1 id="salut">Bonsoir</h1>
-      <p id="sous-salut"></p>
+    <!-- Le mode choisi dans les onglets, en grand. Rien ici n'est une cible : OK sur
+         l'onglet lance le mode, le bouton ne fait que le dire (et répond à la souris). -->
+    <div class="heros" id="heros">
+      <div class="heros-sur" data-t="heros.sur"></div>
+      <h2 class="heros-titre" id="heros-titre"></h2>
+      <p class="heros-texte" id="heros-texte"></p>
+      <div class="heros-services" id="heros-services"></div>
+      <button class="lancer" id="lancer" tabindex="-1"><kbd>OK</kbd><span id="lancer-texte"></span></button>
     </div>
 
     <div class="modes" id="modes">
-      <button class="carte" data-nav data-mode="tv" data-accent="tv">
-        <span class="carte-corps">
-          <span class="halo"></span>
-          <span class="pictogramme">
-            <svg viewBox="0 0 32 32"><rect x="3.5" y="6" width="25" height="16.5" rx="2.5"/><path d="M11 27h10M16 22.5V27"/><path d="m14 11.2 5 3-5 3z" fill="currentColor" stroke="none"/></svg>
-          </span>
-          <span class="nom" data-t="mode.tv"></span>
-          <span class="detail" data-t="mode.tv.detail"></span>
-          <span class="ouvrir"><kbd>OK</kbd> <span data-t="ouvrir"></span></span>
-          <span class="touche-rapide">1</span>
-        </span>
+      <span class="pastille-onglet" id="pastille-onglet"></span>
+      <button class="onglet" data-nav data-mode="tv" data-accent="tv">
+        <svg viewBox="0 0 32 32"><rect x="3.5" y="6" width="25" height="16.5" rx="2.5"/><path d="M11 27h10M16 22.5V27"/><path d="m14 11.2 5 3-5 3z"/></svg>
+        <span class="nom" data-t="mode.tv"></span>
       </button>
-
-      <button class="carte" data-nav data-mode="gaming" data-accent="jeux">
-        <span class="carte-corps">
-          <span class="halo"></span>
-          <span class="pictogramme">
-            <svg viewBox="0 0 32 32"><path d="M9.5 9h13a6 6 0 0 1 5.9 5l1 5.6a3.4 3.4 0 0 1-6 2.7L21 19.5H11l-2.4 2.8a3.4 3.4 0 0 1-6-2.7l1-5.6A6 6 0 0 1 9.5 9z"/><path d="M10 12.5v4M8 14.5h4"/><circle cx="21" cy="13.4" r=".6" fill="currentColor"/><circle cx="23.4" cy="15.8" r=".6" fill="currentColor"/></svg>
-          </span>
-          <span class="nom" data-t="mode.jeux"></span>
-          <span class="detail" data-t="mode.jeux.detail"></span>
-          <span class="ouvrir"><kbd>OK</kbd> <span data-t="ouvrir"></span></span>
-          <span class="touche-rapide">2</span>
-        </span>
+      <button class="onglet" data-nav data-mode="gaming" data-accent="jeux">
+        <svg viewBox="0 0 32 32"><path d="M9.5 9h13a6 6 0 0 1 5.9 5l1 5.6a3.4 3.4 0 0 1-6 2.7L21 19.5H11l-2.4 2.8a3.4 3.4 0 0 1-6-2.7l1-5.6A6 6 0 0 1 9.5 9z"/><path d="M10 12.5v4M8 14.5h4M21 13.4h.01M23.4 15.8h.01"/></svg>
+        <span class="nom" data-t="mode.jeux"></span>
       </button>
-
-      <button class="carte" data-nav data-mode="bureau" data-accent="bureau">
-        <span class="carte-corps">
-          <span class="halo"></span>
-          <span class="pictogramme">
-            <svg viewBox="0 0 32 32"><rect x="3.5" y="5" width="25" height="17" rx="2.5"/><path d="M12 27h8M16 22v5"/><path d="M8 10h7M8 13.5h10M8 17h5"/></svg>
-          </span>
-          <span class="nom" data-t="mode.bureau"></span>
-          <span class="detail" data-t="mode.bureau.detail"></span>
-          <span class="ouvrir"><kbd>OK</kbd> <span data-t="ouvrir"></span></span>
-          <span class="touche-rapide">3</span>
-        </span>
+      <button class="onglet" data-nav data-mode="bureau" data-accent="bureau">
+        <svg viewBox="0 0 32 32"><rect x="3.5" y="5" width="25" height="17" rx="2.5"/><path d="M12 27h8M16 22v5"/><path d="M8 10h7M8 13.5h10M8 17h5"/></svg>
+        <span class="nom" data-t="mode.bureau"></span>
       </button>
     </div>
 

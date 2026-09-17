@@ -1,7 +1,8 @@
 /* Menu du HUB — feuille de style.
    Lu à trois mètres, piloté sans souris : tout est proportionnel au petit côté de
    l'écran (même rendu en 1280×800 dans la VM et en 3840×2160 sur la TV), et la
-   sélection se voit de loin (carte qui s'avance, liseré qui tourne, halo). */
+   sélection se voit de loin (pastille pleine sous l'onglet, tuile qui s'avance avec un
+   liseré détaché). */
 
 :root {
   --encre: #06070c;
@@ -10,9 +11,6 @@
      touches rapides et les aides du pied descendaient à 1,7–3,2:1. */
   --texte-doux: rgba(226, 232, 250, .9);
   --texte-pale: rgba(226, 232, 250, .62);
-  /* Voile des cartes non sélectionnées : elles s'effaçaient par opacity, texte compris. */
-  --voile-carte: rgba(6, 7, 12, .35);
-  --voile-carte-focus: rgba(6, 7, 12, .16);
   /* Texte à la couleur d'un mode (--c) : la teinte pure, turquoise sur verre turquoise,
      ne dépassait pas 3:1. On la mêle à --ton-accent dans la proportion --part-accent. */
   --ton-accent: #fff;
@@ -43,6 +41,9 @@
   --grain: .045;
   --vignette: rgba(3, 4, 8, .75);
   --focus-texte: #ffffff;
+  /* Texte posé sur la pastille pleine de l'onglet sélectionné. */
+  --encre-pastille: #06070c;
+  --fond-base: 6 7 12;
   --tv: 62 224 208;
   --jeux: 179 107 255;
   --bureau: 255 181 71;
@@ -68,10 +69,13 @@
   --t-2: 1rem;      /* texte courant, aides, boutons */
   --t-3: 1.2rem;    /* titres de rangée, valeurs */
   --t-4: 1.5rem;    /* titres de panneau */
-  --t-5: 2rem;      /* noms des cartes, salutation */
+  --t-5: 2rem;      /* heure de l'en-tête */
   --t-6: 2.8rem;    /* heure, codes à recopier */
   --t-7: 4.5rem;    /* grands chiffres */
   --t-affiche: 10.5rem;
+  /* Le titre du héros de l'accueil : le mode choisi, lu d'un coup d'œil (maquette C, 150 px
+     en 1080p). Réduit à --t-7 quand l'accueil est chargé ou le texte agrandi. */
+  --t-heros: 6rem;
   color-scheme: dark;
 }
 
@@ -82,8 +86,6 @@
      TV 2,3:1, bleu de la pluie 2,27:1. */
   --texte-doux: rgba(14, 19, 34, .74);
   --texte-pale: rgba(14, 19, 34, .64);
-  --voile-carte: transparent;
-  --voile-carte-focus: transparent;
   /* Teinte ×.78 de hub.js assombrie encore : TV ≈ #00756c. */
   --ton-accent: #000;
   --part-accent: 66%;
@@ -103,6 +105,7 @@
   --grain: .03;
   --vignette: rgba(190, 198, 220, .55);
   --focus-texte: #0e1322;
+  --encre-pastille: #fff;
   --tv: 0 158 146;
   --jeux: 134 64 230;
   --bureau: 214 128 0;
@@ -139,6 +142,28 @@ button { font: inherit; color: inherit; border: 0; background: none; outline: no
   width: 100%; height: 100%;
   filter: saturate(1.2);
 }
+/* Les motifs choisissent leurs couleurs directement : pas de filtre plein écran à
+   recalculer à chaque image. Les nappes gardent le leur, et leur rendu d'avant. */
+body:not([data-motif="nappes"]) #fond { filter: none; }
+#fond-lignes {
+  position: fixed; inset: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+}
+/* Le filigrane du motif cinéma : un calque à part, que dessinerFond fait pivoter et
+   flotter (transform seulement : le compositeur le déplace sans le repeindre). Centré
+   sur les ondes, à 77,5 % de la largeur et 40 % de la hauteur, 76 % de haut. */
+#filigrane {
+  position: fixed;
+  left: calc(77.5vw - 38vh); top: 2vh;
+  width: 76vh; height: 76vh;
+  color: #fff;
+  opacity: .13;
+  pointer-events: none;
+  will-change: transform;
+}
+#filigrane svg, .apercu-filigrane svg { display: block; width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: .65; stroke-linecap: round; stroke-linejoin: round; }
+:root[data-theme="clair"] #filigrane { color: #0e1322; opacity: .07; }
 #photos {
   position: fixed; inset: 0;
   overflow: hidden;
@@ -175,6 +200,13 @@ button { font: inherit; color: inherit; border: 0; background: none; outline: no
   background: radial-gradient(120% 90% at 50% 45%, transparent 45%, var(--vignette) 100%);
   pointer-events: none;
 }
+/* Motif cinéma : le bas s'assombrit aussi sur le filigrane et les ondes, sous les rangées
+   (maquette C). Dans ce calque fixe, peint une fois. */
+body[data-motif="cinema"] .vignette {
+  background:
+    linear-gradient(180deg, transparent 50%, rgb(var(--fond-base) / .8) 76%, rgb(var(--fond-base))),
+    radial-gradient(120% 90% at 50% 45%, transparent 45%, var(--vignette) 100%);
+}
 
 /* ── Accueil ─────────────────────────────────────────────────────────────── */
 /* Départ, calque, ambiant : l'accueil s'efface par opacité et échelle, que le
@@ -201,14 +233,14 @@ body.calque-ouvert .ecran *, body.calque-ouvert .ecran *::before, .calque:not(.o
 
 .entete {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 1.52rem;
   animation: apparition .9s var(--souple) both;
 }
 .gauche, .droite { display: flex; align-items: center; gap: .91rem; }
-.gauche { flex: none; }
-.droite { align-items: flex-start; gap: 1.21rem; min-width: 0; }
+.gauche { flex: 0 1 auto; min-width: 0; gap: 1.2rem; }
+.droite { flex: none; max-width: 75%; gap: 1rem; min-width: 0; }
 .marque {
   display: flex; align-items: center; gap: .68rem;
   font-weight: 800;
@@ -285,37 +317,133 @@ body.calque-ouvert .ecran *, body.calque-ouvert .ecran *::before, .calque:not(.o
 .meteo-puce .temp { font-size: var(--t-3); font-weight: 600; color: var(--texte); font-variant-numeric: tabular-nums; }
 .meteo-puce .ville { font-weight: 500; }
 
-.horloge { flex: none; text-align: right; font-variant-numeric: tabular-nums; }
-.heure { font-size: var(--t-6); font-weight: 300; letter-spacing: -.02em; line-height: 1; }
-.date { white-space: nowrap; margin-top: .38rem; font-size: var(--t-2); color: var(--texte-doux); }
+/* L'heure en bout d'en-tête, la date discrète à sa gauche, sur la même ligne. */
+.horloge { flex: none; display: flex; flex-direction: row-reverse; align-items: baseline; gap: .8rem; margin-left: .3rem; font-variant-numeric: tabular-nums; }
+.heure { font-size: var(--t-5); font-weight: 300; letter-spacing: -.02em; line-height: 1; }
+.date { white-space: nowrap; font-size: var(--t-2); color: var(--texte-doux); }
 .date::first-letter { text-transform: uppercase; }
 
-.centre {
-  align-self: center;
-  display: grid;
-  gap: 1.97rem;
-  justify-items: center;
-}
-.salut { text-align: center; animation: apparition .9s .08s var(--souple) both; }
-.salut h1 { font-size: var(--t-5); font-weight: 700; letter-spacing: -.025em; text-wrap: balance; }
-.salut p { margin-top: .34rem; font-size: var(--t-3); color: var(--texte-doux); }
+/* ── Accueil « Cinéma » (maquette C, choisie le 17/09/2026) ────────────────── */
+/* Salutation courte dans l'en-tête ; la ligne du dessous n'apparaît que pour une alerte. */
+.salut { min-width: 0; animation: apparition .9s .08s var(--souple) both; }
+.salut h1 { font-size: var(--t-3); font-weight: 500; letter-spacing: -.01em; color: var(--texte-doux); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.salut p { margin-top: .1rem; font-size: var(--t-2); color: var(--pluie); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-.modes { display: flex; gap: 1.37rem; perspective: 60.69rem; }
-body.avec-reprises .centre { gap: 1.37rem; }
-body.avec-reprises .carte { height: 12.9rem; }
-body.avec-reprises .carte-corps { padding-top: 1.21rem; }
-body.avec-reprises .salut h1 { font-size: var(--t-5); }
+/* Le héros à gauche, les onglets dessous, puis les rangées. Le contenu est en retrait de
+   l'en-tête (150 px contre 96 dans la maquette), l'air vient d'ici. */
+.centre {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 1.5rem;
+  padding: 1rem 2.2rem 1.4rem;
+}
+.heros {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-width: 40rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  gap: .8rem;
+  animation: apparition .9s .1s var(--souple) both;
+}
+.heros-sur { font-size: var(--t-2); font-weight: 700; letter-spacing: .18em; text-transform: uppercase; color: var(--accent-texte); }
+.heros-titre { margin-left: -.05em; font-size: var(--t-heros); font-weight: 800; line-height: .92; letter-spacing: -.04em; }
+.heros-texte { max-width: 30rem; font-size: var(--t-3); line-height: 1.35; color: var(--texte-doux); text-wrap: pretty; }
+.heros-services { display: flex; flex-wrap: wrap; gap: .55rem; }
+.heros-services:empty { display: none; }
+.heros-services span {
+  display: flex; align-items: center;
+  height: 2.1rem; padding: 0 .9rem;
+  border-radius: 99rem;
+  font-size: var(--t-1); font-weight: 600;
+  color: var(--texte);
+  background: var(--verre-fort);
+  box-shadow: inset 0 0 0 1px var(--liseré);
+}
+/* Dit ce que fait OK sur l'onglet ; pas une cible de plus (la souris peut cliquer). */
+.lancer {
+  margin-top: .5rem;
+  display: flex; align-items: center; gap: .75rem;
+  height: 3.1rem; padding: 0 1.5rem 0 .55rem;
+  border-radius: 99rem;
+  font-size: var(--t-3); font-weight: 700;
+  color: var(--encre);
+  background: var(--texte);
+  box-shadow: 0 .8rem 2rem -.6rem rgb(var(--accent) / .85);
+}
+.lancer kbd { min-width: 0; padding: .3rem .65rem; border-radius: 99rem; font-size: var(--t-1); color: var(--texte); background: var(--encre); box-shadow: none; }
+
+/* Les modes en onglets de même largeur. Une pastille à la couleur du mode glisse derrière
+   l'onglet choisi (transform, 180 ms) : pleine quand l'onglet a le focus, en retrait quand
+   le focus est sur une autre rangée. C'est elle l'indicateur de focus (WCAG 2.4.13 : 3:1
+   entre les deux états et contre le rail, mesuré par tests/menu/lisibilite.test.js). */
+.modes {
+  --bord: .4rem;
+  --ecart: .5rem;
+  position: relative;
+  align-self: flex-start;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(8.6rem, 1fr);
+  gap: var(--ecart);
+  padding: var(--bord);
+  border-radius: 99rem;
+  background: var(--verre);
+  box-shadow: inset 0 0 0 1px var(--liseré);
+  animation: montee .9s .2s var(--souple) both;
+}
+.pastille-onglet {
+  position: absolute;
+  top: var(--bord); bottom: var(--bord); left: var(--bord);
+  width: calc((100% - 2 * var(--bord) - (var(--n, 3) - 1) * var(--ecart)) / var(--n, 3));
+  transform: translateX(calc(var(--i, 0) * (100% + var(--ecart))));
+  border-radius: 99rem;
+  background: rgb(var(--accent) / .22);
+  box-shadow: inset 0 0 0 .1rem rgb(var(--accent) / .6);
+  transition: transform var(--focus-duree) var(--sortie);
+}
+.modes.actif .pastille-onglet {
+  background: linear-gradient(135deg, color-mix(in srgb, rgb(var(--accent)) 70%, #fff), rgb(var(--accent)));
+  box-shadow: 0 .6rem 1.5rem -.45rem rgb(var(--accent) / .85), inset 0 1px 0 rgb(255 255 255 / .45);
+}
+:root[data-theme="clair"] .modes.actif .pastille-onglet {
+  background: linear-gradient(135deg, color-mix(in srgb, rgb(var(--accent)) 74%, #000), color-mix(in srgb, rgb(var(--accent)) 60%, #000));
+}
+.onglet {
+  --c: var(--tv);
+  position: relative;
+  display: flex; align-items: center; justify-content: center; gap: .6rem;
+  height: 2.9rem; padding: 0 1.3rem 0 1rem;
+  border-radius: 99rem;
+  font-size: var(--t-3); font-weight: 600;
+  white-space: nowrap;
+  color: var(--texte-doux);
+  transition: color var(--focus-duree) var(--sortie);
+}
+.onglet[data-mode="gaming"] { --c: var(--jeux); }
+.onglet[data-mode="bureau"] { --c: var(--bureau); }
+.onglet svg { flex: none; width: 1.3rem; height: 1.3rem; fill: none; stroke: rgb(var(--c)); stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.onglet.choisi { color: var(--texte); }
+[data-nav].onglet.focus { outline: none; }
+.modes.actif .onglet.focus { color: var(--encre-pastille); }
+.modes.actif .onglet.focus svg { stroke: currentColor; }
+.onglet.lance { transform: scale(1.08); transition: transform .5s var(--souple); }
+body.depart .heros, body.depart .modes { opacity: 0; transform: scale(.96); transition: opacity .4s var(--souple), transform .5s var(--souple); }
 
 /* ── Continuer à regarder ────────────────────────────────────────────────── */
-.reprises { width: 100%; max-width: 62rem; animation: montee .9s .36s var(--souple) both; }
-.reprises-titre { font-size: var(--t-2); font-weight: 600; letter-spacing: .04em; color: var(--texte-doux); margin: 0 0 .61rem .15rem; }
-.reprises-liste { display: flex; gap: .83rem; }
+.reprises { width: 100%; animation: montee .9s .3s var(--souple) both; }
+.reprises-titre { font-size: var(--t-2); font-weight: 600; letter-spacing: .04em; color: var(--texte-doux); margin: 0 0 .55rem .15rem; }
+.reprises-liste { display: flex; gap: 1rem; }
 .reprise {
   --c: var(--tv);
   position: relative;
-  flex: 0 0 14rem;
-  height: 6.22rem;
-  border-radius: .83rem;
+  flex: 0 0 15rem;
+  height: 6rem;
+  border-radius: .9rem;
   overflow: hidden;
   background: linear-gradient(140deg, rgb(var(--c) / .35), rgb(var(--c) / .08)), var(--verre);
   background-size: cover;
@@ -339,7 +467,7 @@ body.avec-reprises .salut h1 { font-size: var(--t-5); }
   transition: opacity var(--focus-duree), transform var(--focus-duree) var(--sortie);
 }
 .reprise .lecture svg { width: .72rem; height: .72rem; fill: currentColor; margin-left: .11rem; }
-.reprise.focus { opacity: 1; transform: translateY(-.27rem) scale(1.07); box-shadow: 0 1.06rem 2.12rem -.61rem rgb(var(--c) / .55); }
+.reprise.focus { opacity: 1; transform: translateY(-.3rem) scale(1.05); box-shadow: 0 1rem 2rem -.7rem rgb(0 0 0 / .7); }
 .reprise.focus .lecture { opacity: 1; transform: none; }
 
 /* ── Intro à l'allumage ──────────────────────────────────────────────────── */
@@ -361,112 +489,6 @@ body.avec-reprises .salut h1 { font-size: var(--t-5); }
 @keyframes intro-reflet { from { background-position: 100% 0; } to { background-position: 0 0; } }
 @keyframes intro-trait { from { transform: scaleX(0); opacity: 0; } 60% { opacity: 1; } to { transform: scaleX(1); opacity: .7; } }
 
-/* La carte porte le verre, le liseré et la lueur colorée (::after) ; son corps rogne
-   ce qui déborde (halo, reflet, texte). La lueur vit hors de la carte : sous un
-   overflow: hidden, elle aurait été rognée, et c'est pour l'animer par son opacité
-   plutôt que par box-shadow (une ombre de 4,3.79rem repeinte à chaque image) qu'elle
-   est à part. */
-.carte {
-  --c: var(--tv);
-  position: relative;
-  display: block;
-  width: 15rem;
-  height: 15.93rem;
-  border-radius: 1.44rem;
-  background: linear-gradient(160deg, var(--reflet), transparent 55%), linear-gradient(var(--voile-carte), var(--voile-carte)), var(--verre);
-  -webkit-backdrop-filter: blur(24px) saturate(160%);
-  backdrop-filter: blur(24px) saturate(160%);
-  box-shadow:
-    inset 0 0 0 1px var(--liseré),
-    0 1.21rem 2.66rem -.91rem var(--ombre);
-  transform: scale(.96);
-  transition: transform var(--focus-duree) var(--sortie), opacity var(--focus-duree) var(--sortie);
-  animation: montee .9s var(--souple) both;
-  isolation: isolate;
-}
-.carte-corps {
-  position: absolute; inset: 0;
-  padding: 1.52rem 1.44rem 1.37rem;
-  display: flex;
-  flex-direction: column;
-  border-radius: inherit;
-  overflow: hidden;
-  isolation: isolate;
-}
-/* Éclaircissement du verre à la sélection : var(--verre) posé sur var(--verre) donne
-   à peu près var(--verre-fort), dans les deux thèmes, sans transition de background. */
-.carte-corps::before {
-  content: "";
-  position: absolute; inset: 0;
-  background: var(--verre);
-  opacity: 0;
-  transition: opacity var(--focus-duree) var(--sortie);
-  z-index: -1;
-}
-.carte[data-mode="tv"] { --c: var(--tv); animation-delay: .14s; }
-.carte[data-mode="gaming"] { --c: var(--jeux); animation-delay: .22s; }
-.carte[data-mode="bureau"] { --c: var(--bureau); animation-delay: .30s; }
-
-/* Le liseré tournant repeint un dégradé conique masqué à chaque image : il ne tourne
-   que sur la carte sélectionnée, et s'arrête quand l'accueil n'est plus à l'écran. */
-.carte::before {
-  content: "";
-  position: absolute; inset: 0;
-  padding: 2px;
-  border-radius: inherit;
-  background: conic-gradient(from var(--angle),
-    rgb(var(--c) / 0) 0deg, rgb(var(--c)) 70deg, rgb(255 255 255 / .9) 110deg,
-    rgb(var(--c) / 0) 180deg, rgb(var(--c) / .55) 260deg, rgb(var(--c) / 0) 360deg);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  opacity: 0;
-  transition: opacity var(--focus-duree) var(--sortie);
-  animation: tour 4.5s linear infinite paused;
-  z-index: 2;
-  pointer-events: none;
-}
-.carte::after {
-  content: "";
-  position: absolute; inset: 0;
-  border-radius: inherit;
-  box-shadow: 0 1.82rem 3.41rem -.76rem rgb(var(--c) / .35);
-  opacity: 0;
-  transition: opacity var(--focus-duree) var(--sortie);
-  pointer-events: none;
-}
-.carte-corps::after {
-  content: "";
-  position: absolute; inset: -40% -60%;
-  background: linear-gradient(105deg, transparent 42%, rgba(255, 255, 255, .22) 50%, transparent 58%);
-  transform: translateX(-60%);
-  opacity: 0;
-  z-index: 1;
-  pointer-events: none;
-}
-.halo {
-  position: absolute;
-  left: 50%; top: 0;
-  width: 18.21rem; height: 13.66rem;
-  translate: -50% -55%;
-  background: radial-gradient(closest-side, rgb(var(--c) / .55), transparent);
-  opacity: .18;
-  transition: opacity var(--focus-duree) var(--sortie);
-  z-index: -1;
-}
-.carte.focus {
-  background: linear-gradient(160deg, var(--reflet), transparent 55%), linear-gradient(var(--voile-carte-focus), var(--voile-carte-focus)), var(--verre);
-  transform: translateY(-.68rem) scale(1.06);
-  box-shadow:
-    inset 0 0 0 1px rgb(var(--c) / .25),
-    0 1.21rem 2.66rem -.91rem var(--ombre);
-}
-.carte.focus::before { opacity: 1; animation-play-state: running; }
-.carte.focus::after, .carte.focus .carte-corps::before { opacity: 1; }
-body.ambiant .carte::before, body.depart .carte::before { animation-play-state: paused; }
-.carte.focus .carte-corps::after { animation: reflet 1.1s .05s var(--souple); }
-.carte.focus .halo { opacity: .35; }
-
 .pictogramme {
   --c: var(--accent);
   width: 3.94rem; height: 3.94rem;
@@ -475,50 +497,13 @@ body.ambiant .carte::before, body.depart .carte::before { animation-play-state: 
   background: linear-gradient(145deg, rgb(var(--c) / .32), rgb(var(--c) / .08));
   box-shadow: inset 0 0 0 1px rgb(var(--c) / .35), 0 .61rem 1.52rem -.46rem rgb(var(--c) / .5);
   color: rgb(var(--c));
-  transition: transform var(--focus-duree) var(--sortie);
 }
-.carte .pictogramme { --c: inherit; }
 .pictogramme svg {
   width: 2.12rem; height: 2.12rem;
   fill: none; stroke: currentColor;
   stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round;
   filter: drop-shadow(0 0 .38rem rgb(var(--c) / .6));
 }
-.carte.focus .pictogramme { transform: translateY(-.15rem) scale(1.08) rotate(-4deg); }
-.nom { margin-top: auto; font-size: var(--t-5); font-weight: 700; letter-spacing: -.02em; }
-.detail { margin-top: .3rem; font-size: var(--t-2); line-height: 1.4; color: var(--texte-doux); }
-.ouvrir {
-  margin-top: .99rem;
-  display: flex; align-items: center; gap: .46rem;
-  font-size: var(--t-2); font-weight: 600; letter-spacing: .02em;
-  color: color-mix(in srgb, rgb(var(--c)) var(--part-accent), var(--ton-accent));
-  opacity: 0;
-  transform: translateY(.38rem);
-  transition: opacity var(--focus-duree) var(--sortie), transform var(--focus-duree) var(--sortie);
-}
-.ouvrir kbd { border-color: rgb(var(--c) / .45); color: inherit; background: var(--voile-carte); }
-.carte.focus .ouvrir { opacity: 1; transform: none; }
-/* La carte sélectionnée s'éclaire (verre, halo) : son texte secondaire passe en pleine encre. */
-.carte.focus .detail, .carte.focus .touche-rapide { color: var(--texte); }
-.touche-rapide {
-  position: absolute;
-  bottom: 1.37rem; right: 1.29rem;
-  font-size: var(--t-1); font-weight: 700;
-  color: var(--texte-doux);
-}
-.pastille {
-  position: absolute;
-  top: 1.29rem; right: 1.21rem;
-  padding: .27rem .57rem;
-  border-radius: 99rem;
-  font-size: var(--t-1); font-weight: 600; letter-spacing: .06em;
-  text-transform: uppercase;
-  color: var(--texte-doux);
-  background: var(--verre);
-  box-shadow: inset 0 0 0 1px var(--liseré);
-}
-.carte.lance { transform: translateY(-.68rem) scale(1.14); transition: transform .5s var(--souple); }
-body.depart .carte:not(.lance) { opacity: 0; transform: scale(.9); }
 
 .pied {
   display: flex;
@@ -680,19 +665,34 @@ kbd.fleche { font-family: system-ui, sans-serif; font-size: var(--t-2); line-hei
 .option.choisie::before { content: "✓"; margin-right: .35em; }
 .option.focus { color: var(--focus-texte); box-shadow: 0 0 1.21rem -.23rem rgb(var(--accent) / .6); transform: scale(1.06); }
 
-.vignettes { display: grid; grid-template-columns: repeat(3, 1fr); gap: .76rem; }
+/* Réglages → Arrière-plan : chaque vignette est le vrai dessin du motif, figé. */
+.vignettes { display: grid; grid-template-columns: repeat(3, 1fr); gap: .9rem; }
+.vignettes.motifs, .vignettes.couleurs { grid-template-columns: repeat(4, 1fr); }
+:root[data-taille="grande"] .vignettes.motifs, :root[data-taille="grande"] .vignettes.couleurs { grid-template-columns: repeat(3, 1fr); }
 .vignette-fond {
   position: relative;
   aspect-ratio: 16 / 9;
   border-radius: .76rem;
   overflow: hidden;
+  background: var(--encre);
   box-shadow: inset 0 0 0 1px var(--liseré);
   transition: transform var(--focus-duree) var(--sortie);
 }
-.vignette-fond span {
-  position: absolute; left: .61rem; bottom: .46rem;
-  font-size: var(--t-2); font-weight: 600; color: #fff;
-  text-shadow: 0 1px 6px rgb(0 0 0 / .6);
+.vignette-fond canvas, .apercu-cinema, .apercu-photos { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
+.apercu-cinema canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+/* Même place que sur l'écran : centré à 77,5 % × 40 %, 76 % de la hauteur. */
+.apercu-filigrane { position: absolute; left: 56.1%; top: 2%; width: 42.75%; height: 76%; color: #fff; opacity: .13; transform: rotate(-1deg); }
+:root[data-theme="clair"] .apercu-filigrane { color: #0e1322; opacity: .07; }
+/* Le nom sur un fond sombre : lisible sur n'importe quel aperçu, clair ou chargé. */
+.vignette-fond .libelle {
+  position: absolute; left: .45rem; bottom: .4rem;
+  max-width: calc(100% - .9rem);
+  padding: .06rem .55rem;
+  border-radius: 99rem;
+  font-size: var(--t-2); font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  color: #fff;
+  background: rgb(6 7 12 / .7);
 }
 .vignette-fond.choisie::after {
   content: "✓";
@@ -703,16 +703,10 @@ kbd.fleche { font-family: system-ui, sans-serif; font-size: var(--t-2); line-hei
   font-size: var(--t-2); font-weight: 800;
   color: #06070c; background: rgb(var(--accent));
 }
-.vignette-fond.focus { transform: scale(1.06); box-shadow: 0 .76rem 1.82rem -.46rem rgb(var(--accent) / .55); }
-.apercu-aurore { background: radial-gradient(60% 80% at 25% 30%, #1d8f86, transparent), radial-gradient(50% 70% at 80% 20%, #3b2d8f, transparent), #06070c; }
-.apercu-nebuleuse { background: radial-gradient(55% 70% at 30% 60%, #7a2d8f, transparent), radial-gradient(45% 60% at 75% 35%, #c2477a, transparent), radial-gradient(1px 1px at 20% 20%, #fff, transparent), #07050d; }
-.apercu-ocean { background: radial-gradient(70% 60% at 50% 110%, #0a6fb0, transparent), radial-gradient(50% 60% at 15% 20%, #0f3b73, transparent), #030a14; }
-.apercu-braise { background: radial-gradient(60% 70% at 30% 90%, #b0431a, transparent), radial-gradient(45% 60% at 80% 30%, #7a1f3a, transparent), #0c0605; }
-.apercu-minimal { background: linear-gradient(160deg, #1a1d29, #07080d); }
-.apercu-photos { background: linear-gradient(135deg, #3a4a5a, #1a232e); display: grid; place-items: center; }
+.vignette-fond.focus { transform: scale(1.05); box-shadow: 0 .76rem 1.82rem -.46rem rgb(var(--accent) / .55); }
+.apercu-photos { display: grid; place-items: center; background: linear-gradient(135deg, #3a4a5a, #1a232e); }
 .apercu-photos svg { width: 1.82rem; height: 1.82rem; fill: none; stroke: #fff; stroke-width: 1.6; opacity: .8; }
-:root[data-theme="clair"] .apercu-aurore { background: radial-gradient(60% 80% at 25% 30%, #8fe3da, transparent), radial-gradient(50% 70% at 80% 20%, #b9b0f5, transparent), #eef1f7; }
-:root[data-theme="clair"] .apercu-minimal { background: linear-gradient(160deg, #ffffff, #dfe4ee); }
+.vignettes + .aide { margin-top: -.15rem; }
 
 .infos { display: grid; grid-template-columns: repeat(2, 1fr); gap: .76rem; }
 .info { padding: .83rem .99rem; border-radius: .91rem; background: var(--verre); box-shadow: inset 0 0 0 1px var(--liseré); }
@@ -1011,16 +1005,21 @@ body.verrouille .centre, body.verrouille .pied .aides { opacity: .15; pointer-ev
 /* ── Services : tuiles typographiques ────────────────────────────────────── */
 /* Le nom du service dans sa couleur, pas son logo : les marques restent hors du dépôt,
    et une tuile qui ne dit que son nom se lit à trois mètres. */
-.applis { width: 100%; max-width: 62rem; animation: montee .9s .44s var(--souple) both; }
-.applis-liste { display: flex; gap: .61rem; }
+.applis { width: 100%; animation: montee .9s .38s var(--souple) both; }
+/* Seule rangée sous les onglets, elle se passe de titre (maquette C) ; avec les reprises, il
+   faut dire laquelle est laquelle. */
+body:not(.avec-reprises) .applis .reprises-titre { display: none; }
+.applis-liste { display: flex; gap: 1.25rem; }
+/* En L et XL, « prime video » ne tenait plus dans sa tuile. */
+:root[data-taille="grande"] .tuile-service:not(.grande) .marque { font-size: var(--t-1); }
 .tuile-service {
   --c: var(--tv);
   position: relative;
   flex: 1 1 0;
   min-width: 0;
-  height: 3.5rem;
+  height: 3.9rem;
   display: grid; place-items: center;
-  border-radius: .72rem;
+  border-radius: .9rem;
   overflow: hidden;
   background: var(--fond);
   color: var(--encre);
@@ -1035,9 +1034,12 @@ body.verrouille .centre, body.verrouille .pied .aides { opacity: .15; pointer-ev
 .tuile-service .marque { font-size: var(--t-2); line-height: 1; white-space: nowrap; display: inline-block; }
 .tuile-service.focus {
   opacity: 1;
-  transform: translateY(-.23rem) scale(1.1);
-  box-shadow: 0 .91rem 1.97rem -.61rem rgb(var(--accent) / .6);
+  transform: translateY(-.3rem) scale(1.05);
+  box-shadow: 0 1rem 2rem -.7rem rgb(0 0 0 / .7);
 }
+/* Les tuiles s'avancent avec un liseré détaché de .3 rem : l'anneau collé les
+   faisait paraître serrées « surtout avec le border select » (retour sur la TV, 17/09/2026). */
+[data-nav].tuile-service.focus, [data-nav].reprise.focus { outline-offset: .3rem; }
 .tuile-service.lance { transform: scale(1.2); }
 .tuile-service.indisponible { filter: grayscale(.85); opacity: .5; }
 .tuile-service.indisponible.focus { opacity: .8; }
@@ -1048,29 +1050,25 @@ body.verrouille .centre, body.verrouille .pied .aides { opacity: .15; pointer-ev
 }
 body.depart .tuile-service:not(.lance), body.depart .reprise { opacity: 0; }
 
-/* Accueil complet (cartes, reprises, streaming) : on resserre pour tenir dans l'écran. */
-body.avec-applis .centre { gap: 1.37rem; }
-body.avec-applis .carte { height: 12.9rem; }
-body.avec-applis .carte-corps { padding-top: 1.21rem; }
-body.avec-applis.avec-reprises .centre { gap: .91rem; }
-body.avec-applis.avec-reprises .carte { height: 11rem; }
-body.avec-applis.avec-reprises .carte-corps { padding-top: .99rem; }
-body.avec-applis.avec-reprises .carte .detail { display: none; }
-body.avec-applis.avec-reprises .salut p { display: none; }
-body.avec-applis.avec-reprises .reprise { height: 5.01rem; }
+/* Accueil chargé (reprises en plus du streaming) : le héros se resserre. On retire d'abord
+   ce qui se répète ailleurs (la phrase, que les pastilles disent aussi), jamais une cible. */
+body.avec-reprises .centre { gap: 1.1rem; }
+body.avec-reprises .heros { gap: .55rem; }
+body.avec-reprises .heros-titre { font-size: var(--t-7); }
+body.avec-reprises .heros-texte { display: none; }
+body.avec-reprises .lancer { height: 2.7rem; margin-top: .2rem; }
+body.avec-reprises .reprise { height: 4.8rem; }
 
 /* Tailles L et XL (hub.js : data-taille) : 1rem y vaut 27 à 29 px en 1080p, l'écran garde
-   sa hauteur. On retire d'abord ce qui se répète ailleurs (sous-titre du salut, détail des
-   cartes, qu'annonce aussi le nom), jamais une cible. */
-:root[data-taille="grande"] .salut p { display: none; }
-:root[data-taille="grande"] body.avec-applis .centre { gap: 1rem; }
-:root[data-taille="grande"] body.avec-applis .carte { height: 11.5rem; }
-:root[data-taille="grande"] body.avec-applis .carte .detail { display: none; }
-:root[data-taille="grande"] body.avec-applis.avec-reprises .salut { display: none; }
-:root[data-taille="grande"] body.avec-applis.avec-reprises .centre { gap: .8rem; }
-:root[data-taille="grande"] body.avec-applis.avec-reprises .carte { height: 9rem; }
-:root[data-taille="grande"] body.avec-applis.avec-reprises .reprise { height: 4.4rem; }
-:root[data-taille="grande"] body.avec-applis.avec-reprises .reprise .lettre { display: none; }
+   sa hauteur. Même principe : la date, la phrase, puis les titres de rangée. */
+:root[data-taille="grande"] .date { display: none; }
+:root[data-taille="grande"] .heros-titre { font-size: var(--t-7); }
+:root[data-taille="grande"] .heros-texte { display: none; }
+:root[data-taille="grande"] .centre { gap: 1.1rem; padding-block: .5rem .8rem; }
+:root[data-taille="grande"] body.avec-reprises .heros-sur, :root[data-taille="grande"] body.avec-reprises .heros-services, :root[data-taille="grande"] body.avec-reprises .reprises-titre { display: none; }
+:root[data-taille="grande"] body.avec-reprises .centre { gap: .8rem; }
+:root[data-taille="grande"] body.avec-reprises .reprise { height: 4.2rem; }
+:root[data-taille="grande"] body.avec-reprises .reprise .lettre { display: none; }
 :root[data-taille="grande"] #meteo .jour:nth-child(n+4) { display: none; }
 :root[data-taille="grande"] #meteo .heure-meteo .picto-meteo { display: none; }
 :root[data-taille="grande"] .raccourci, :root[data-taille="grande"] .phrase { padding: .12rem 0; }
