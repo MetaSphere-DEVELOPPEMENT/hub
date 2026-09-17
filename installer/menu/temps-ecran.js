@@ -222,7 +222,7 @@ function contenuTemps(zone) {
     const aide = [t("temps.aujourdhui", { d: dureeTexte(utilise) }), reste === null ? t("temps.illimite") : t("temps.restant", { d: dureeTexte(reste) })].join(" · ");
     zone.append(el("div", { class: "rangee large temps-profil" },
       el("div", {},
-        el("div", { class: "titre", style: "display:flex;align-items:center;gap:.9rem" }, avatar(x), x.nom),
+        el("div", { class: "titre", style: "display:flex;align-items:center;gap:.68rem" }, avatar(x), x.nom),
         el("div", { class: "aide" }, aide)),
       historiqueTemps(x),
       el("div", { class: "options" },

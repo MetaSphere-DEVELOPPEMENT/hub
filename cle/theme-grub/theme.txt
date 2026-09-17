@@ -1,4 +1,17 @@
-# Thème GRUB de la clé HUB. Coordonnées en pourcentages : la TV peut être en 1080p ou en 4K.
+# Thème GRUB de la clé HUB.
+#
+# Les polices de GRUB ont une taille fixe en pixels : un bloc placé en pourcentages
+# s'écraserait en 1280×720 (le menu n'y montrait que 2 entrées sur 4). Tout le bloc
+# logo → avertissement est donc en pixels, centré verticalement autour du milieu de l'écran ;
+# seul le pied est accroché au bas de l'écran.
+#
+# Géométrie du menu (grub-core/gfxmenu/gui_list.c) : une entrée avance de
+# item_height + item_spacing, et sa pastille dépasse de 14 px en haut et en bas
+# (rayon des morceaux de generer.py). item_height 36 + 28 = 64 px de pastille ;
+# item_spacing 44 laisse 16 px visibles entre deux pastilles. Entrées visibles :
+# (height + item_spacing − 2×item_padding − 28) ÷ (item_height + item_spacing)
+# = (340 + 44 − 24 − 28) ÷ 80 = 4, quelle que soit la résolution.
+# tests/test_cle_grub.py refait ce calcul et la position de l'avertissement.
 title-text: ""
 desktop-image: "fond.png"
 desktop-color: "#06070c"
@@ -7,15 +20,16 @@ terminal-box: "cadre_*.png"
 
 + image {
     left = 50%-60
-    top = 12%
+    top = 50%-300
     width = 120
     height = 120
     file = "logo.png"
 }
 + label {
     left = 0
-    top = 12%+118
+    top = 50%-180
     width = 100%
+    height = 76
     align = "center"
     text = "H  U  B"
     font = "Ubuntu Bold 64"
@@ -23,44 +37,53 @@ terminal-box: "cadre_*.png"
 }
 + label {
     left = 0
-    top = 12%+200
+    top = 50%-104
     width = 100%
+    height = 32
     align = "center"
     text = "Clé d'installation"
     font = "Ubuntu Regular 24"
     color = "#9aa6bd"
 }
 + boot_menu {
-    left = 28%
-    width = 44%
-    top = 44%
-    height = 40%
+    left = 50%-320
+    width = 640
+    top = 50%-64
+    height = 340
     item_font = "Ubuntu Regular 26"
     selected_item_font = "Ubuntu Bold 26"
     item_color = "#c9d1e1"
     selected_item_color = "#06070c"
-    item_height = 60
-    item_padding = 26
-    item_spacing = 36
+    icon_width = 32
+    icon_height = 32
+    item_icon_space = 14
+    item_height = 36
+    item_padding = 12
+    item_spacing = 44
     item_pixmap_style = "entree_*.png"
     selected_item_pixmap_style = "choix_*.png"
     scrollbar = false
 }
+# Sous la dernière pastille (« Installer le HUB », dernière entrée de grub.cfg) :
+# top du menu + item_padding + 3 × 80 + 64 = 50%-64 + 316, plus 6 px d'air.
+# Aligné sur le texte des entrées (12 + 14 + 32 + 14 = 72 px du bord du menu).
 + label {
-    left = 0
-    top = 86%
-    width = 100%
-    align = "center"
-    text = "↑ ↓  choisir     Entrée  valider"
-    font = "Ubuntu Regular 20"
-    color = "#7c8699"
+    left = 50%-248
+    top = 50%+258
+    width = 568
+    height = 36
+    align = "left"
+    text = "Efface tout le disque interne."
+    font = "Ubuntu Bold 26"
+    color = "#f0b25e"
 }
 + label {
     left = 0
-    top = 90%
+    top = 100%-52
     width = 100%
+    height = 32
     align = "center"
-    text = "« Installer » efface le disque interne. « Aperçu » et « Essayer » ne modifient rien."
-    font = "Ubuntu Regular 20"
-    color = "#e3a85a"
+    text = "↑ ↓  choisir     Entrée  valider     « Aperçu » et « Essayer » ne modifient rien"
+    font = "Ubuntu Regular 24"
+    color = "#9aa6bd"
 }

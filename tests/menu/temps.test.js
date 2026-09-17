@@ -218,12 +218,43 @@ test("cadre photo : diaporama en mode ambiant, souvenirs d'abord, horloge en sur
   }), [PHOTO, souvenir]);
   await page.waitForSelector("#cadre .cadre-photo.visible", { timeout: 5000 });
   assert.ok(await page.evaluate(() => document.body.classList.contains("cadre-actif")));
-  assert.match(await page.evaluate(() => document.querySelector("#cadre .cadre-photo.visible").style.backgroundImage), /souvenir/);
+  assert.match(await page.evaluate(() => document.querySelector("#cadre .cadre-photo.visible").style.getPropertyValue("--photo")), /souvenir/);
   assert.equal(await page.textContent("#cadre-souvenir"), "Il y a 7 ans");
   assert.ok(await page.locator("#cadre .cadre-photo.travelling").count(), "travelling lent avec les animations complètes");
   await touche("ArrowLeft");
   assert.ok(await page.evaluate(() => document.querySelector("#cadre").hidden), "une touche réveille et arrête le diaporama");
   assert.deepEqual(page.erreurs, []);
+});
+
+// Audit du 17/09/2026 : en animations complètes, le travelling faisait passer la copie floutée
+// et assombrie AU-DESSUS de la photo nette. Une mire de bandes noires et blanches de 48 px doit
+// rester nette au centre de l'écran, travelling en cours.
+test("cadre photo : la photo reste nette par-dessus son fond flouté, travelling en cours", async () => {
+  await ouvrir({ ...famille({ actif: "sam" }), reglages: { profils: [{ id: "sam", nom: "Samuel", cadre: { actif: true } }], systeme: { meteo: { active: false } } } });
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  const mire = await page.evaluate(() => {
+    const c = document.createElement("canvas"); c.width = 1920; c.height = 1080;
+    const x = c.getContext("2d");
+    for (let i = 0; i < 40; i++) { x.fillStyle = i % 2 ? "#fff" : "#000"; x.fillRect(i * 48, 0, 48, 1080); }
+    return c.toDataURL("image/png");
+  });
+  await touche("a");
+  await attendreMessage("cadre");
+  await page.evaluate(photo => window.hub.recevoir({ type: "cadre", albums: [], photos: [photo], souvenirs: [] }), mire);
+  await page.waitForSelector("#cadre .cadre-photo.visible.travelling", { timeout: 5000 });
+  // Le fondu d'entrée dure 2,4 s ; ensuite seul le travelling (6 % en 30 s) bouge.
+  await page.waitForTimeout(2800);
+  const png = await page.screenshot({ clip: { x: 760, y: 440, width: 400, height: 200 } });
+  const extremes = await page.evaluate(async b64 => {
+    const i = new Image(); i.src = "data:image/png;base64," + b64; await i.decode();
+    const c = document.createElement("canvas"); c.width = i.width; c.height = i.height;
+    const x = c.getContext("2d"); x.drawImage(i, 0, 0);
+    const d = x.getImageData(0, 100, i.width, 1).data;
+    let min = 255, max = 0;
+    for (let k = 0; k < d.length; k += 4) { const v = (d[k] + d[k + 1] + d[k + 2]) / 3; min = Math.min(min, v); max = Math.max(max, v); }
+    return { min, max };
+  }, png.toString("base64"));
+  assert.ok(extremes.min < 30 && extremes.max > 225, `bandes nettes attendues, lu min ${extremes.min} max ${extremes.max}`);
 });
 
 test("cadre photo : animations réduites, ni fondu ni travelling", async () => {
