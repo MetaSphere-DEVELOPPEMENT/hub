@@ -6,14 +6,24 @@ La page (`index.html`, `hub.js`, `hub.css`, et les extensions `temps-ecran.js`,
 
 ## Les images des modes
 
-`images/mode-tv.webp`, `images/mode-jeux.webp` et `images/mode-bureau.webp` sont les
-images fournies par le propriétaire du HUB, commitées dans ce dépôt public : l'accueil
-montre celle du mode choisi à droite (motif cinéma). WebP, 1168 × 784, paysage, sujet à
-droite sur fond noir avec un dégradé vers le noir à gauche — c'est ce dégradé qui les fait
-se fondre dans le fond sombre. Pour en changer : remplacer le fichier en gardant le nom, le
-format et ces proportions (un fichier plus haut ou plus large est recadré à droite, le tiers
-gauche est mangé). Une image absente ou illisible n'est pas une panne : le pictogramme du
-mode en filigrane reprend sa place. Les noms sont écrits une seule fois, dans `VISUELS_MODE`
+`images/jeu-1/`, `images/jeu-2/` et `images/jeu-3/` contiennent chacun `mode-tv.webp`,
+`mode-jeux.webp` et `mode-bureau.webp` : trois jeux d'images fournis par le propriétaire du
+HUB et commités dans ce dépôt public. L'accueil montre celle du mode choisi à droite, sur le
+motif cinéma. Neuf fichiers, 356 Ko en tout.
+
+Le jeu se choisit par profil dans **Réglages → Arrière-plan → Visuels des modes**, qui offre
+cinq choix : les trois jeux, `pictogramme` (le grand pictogramme du mode en filigrane, comme
+avant les images) et `aucun` (rien à droite, le fond animé et sa teinte de mode suffisent).
+Défaut : `jeu-1` ; un profil enregistré sans la clé `visuels`, ou avec une valeur inconnue,
+y revient. Seul le jeu choisi est chargé — trois fichiers, jamais les neuf — et il l'est une
+fois pour toutes : changer de mode ne fait ensuite que croiser deux opacités.
+
+Les images sont en paysage (du 3/2 au 16/9), sujet à droite sur fond noir, avec un dégradé
+vers le noir à gauche : c'est lui qui les fond dans l'arrière-plan sombre. Pour en changer,
+remplacer le fichier en gardant son nom et ce cadrage ; la boîte à l'écran est plus haute que
+large, l'image est cadrée à droite et c'est son côté gauche, vide, qui est mangé. Une image
+absente ou illisible n'est pas une panne : le pictogramme en filigrane reprend sa place. Les
+noms et les chemins sont écrits une seule fois, dans `JEUX_VISUELS` et `sourceVisuel`
 (`hub.js`).
 
 ## Mesurer la fluidité
@@ -60,16 +70,63 @@ fond. La toile des traits ajoute un envoi de 960×540 pixels par image au GPU.
 
 L'image du mode (17/09/2026) remplace le filigrane, qui était le seul calque que le fond
 déplaçait à chaque image : elle, elle ne bouge pas. Son coût est un calque de plus à
-recomposer par-dessus le fond, large de 104vh sur la droite de l'écran — soit, en 4K, une
-texture de 2 246 × 2 420 pixels mélangée à chaque image. Rien n'y est recalculé : le
-cadrage, le dégradé de masque et l'opacité sont fixes, le changement de mode ne croise que
-deux opacités (160 ms), et les trois images sont décodées une fois pour toutes au
-chargement (≈ 92 Ko de WebP, ≈ 11 Mo décodés). Aucun `filter`, aucun masque animé.
+recomposer par-dessus le fond, large de 104vh et haut de 88vh sur la droite de l'écran —
+soit, en 4K, une texture de 2 246 × 1 901 pixels mélangée à chaque image. Rien n'y est
+recalculé : le cadrage, les deux dégradés de masque (un par élément : `mask-composite` n'est
+pas éprouvé sur la WebKitGTK de la TV) et l'opacité sont fixes, le changement de mode ne
+croise que deux opacités (160 ms), et les trois images du jeu choisi sont décodées une fois
+pour toutes au chargement (de 74 à 177 Ko de WebP selon le jeu, 11 à 17 Mo décodés). Aucun
+`filter`, aucun masque animé.
 
 - [ ] motif cinéma, accueil immobile 30 s : ____ images/s, pire seconde ____
 - [ ] motif aurore boréale (le plus de dessin) : ____ images/s ; CPU WebKitWebProcess ____ %
 - [ ] motif profondeur : les traits du sol restent-ils nets en 4K, sans scintiller ?
 - [ ] nappes (profil d'avant) : rendu identique à la version précédente ?
+
+### Ce que la TV a corrigé (retour du 17/09/2026, version installée)
+
+Une TV rend bien plus contrasté qu'un écran de bureau, et trois défauts ne se voyaient que
+là-bas. Les trois sont mesurés par `tests/menu/fonds.test.js`, sur le fond seul, sans le
+contenu.
+
+**Les fonds paraissaient figés.** Mesuré sur place : la TV plafonne à **30 Hz en 4K** (son
+EDID n'annonce pas de 2160p60, le lien est en HDMI 1.4), et le menu y rend 29,4 images sur
+les 30 possibles — rien n'était en panne, le mouvement était simplement trop lent. Un
+aller-retour de 25 s avance d'un millième d'écran par image : l'œil ne le voit pas. Toutes
+les périodes ont été raccourcies de moitié environ — nappes de 12–29 s à 10–16 s, cinéma de
+9–28 s à 6–14 s, rubans de 5–29 s à 4–15 s, profondeur de 6–30 s à 4–15 s, faisceaux de
+3–30 s à 2,5–16 s — et les amplitudes des nappes élargies d'un cinquième. Elles restent
+toutes différentes les unes des autres, et aucune ne dépasse 30 s. Part de l'image qui change
+en 1 s (les 30 images de la TV), moyenne sur huit instants du cycle : **1,9 → 24,8 %** pour
+les nappes, 11,9 → 26,1 % pour cinéma, 9,9 → 16,2 % pour profondeur ; et en 5 s au pire
+instant du cycle, **9,2 → 18,6 %** pour profondeur. Le propriétaire a depuis basculé la TV en
+1920×1080 à 60 Hz, où le menu rend 60 images/s : le plafond de 30 images par seconde, la
+suspension sous un calque, le ralenti en ambiant et l'image fixe en animations réduites n'ont
+pas bougé, et la zone du héros reste sombre (luminance médiane au plus .07 sur tout un cycle,
+comme avant).
+
+**Le sol de « profondeur » passait devant le contenu.** La grille était l'élément le plus
+lumineux de l'écran ; la rangée d'onglets et les tuiles semblaient posées dessus. Le trait
+du sol est moins blanchi (16 % de blanc au lieu de 35 %), moitié moins opaque, et s'éteint
+en descendant : la bande basse (72 % à 100 % de la hauteur), là où vivent les rangées et le
+pied, est passée de **.126 à .023** de luminance (98e centile, thème sombre). Le voile du
+sol est plus dense, et le soleil de l'horizon respire plus largement — c'est lui, maintenant,
+qui porte le mouvement du motif. Même examen sur les autres : les faisceaux s'éteignent
+avant le bas de l'écran (bande basse .036 → .027) et leur poussière est plus discrète ;
+rubans et nappes n'avaient rien à corriger (leur bas était déjà à .033 et .020).
+
+**Les six couleurs du motif cinéma se ressemblaient toutes.** La teinte du mode, mêlée à
+92 % dans la grande tache, mangeait la palette : la planche motif × couleur montrait six
+vignettes violettes. La couleur choisie tient maintenant la grande tache (un quart de teinte
+du mode), la tache de droite porte franchement la couleur du mode, et les ondes sont à la
+couleur du mode. Écart chromatique minimal entre deux couleurs, côté droit de l'écran :
+**.024 → .232** avec le violet des Jeux, **.055 → .304** avec le turquoise de la TV.
+
+- [ ] sur la TV : le sol de « profondeur » reste-t-il derrière les onglets et les tuiles ?
+- [ ] sur la TV : les six couleurs se reconnaissent-elles d'un coup d'œil, à trois mètres ?
+- [ ] sur la TV : faisceaux et rubans, rien de trop clair en bas de l'écran ?
+- [ ] sur la TV, en 30 Hz comme en 60 Hz : les fonds bougent-ils assez pour qu'on le voie —
+      et pas trop pour qu'on les oublie derrière le texte ?
 
 ### Mesure indicative, hors TV
 
@@ -87,10 +144,12 @@ Ce n'est **ni WebKitGTK, ni l'UHD 630, ni un rendu GPU** : ces chiffres comparen
 versions de la page entre elles, ils ne disent rien de la TV. L'accueil reste lent
 dans ce rendu logiciel : le coût du plein écran 4K y domine tout le reste.
 
-Même mesure, motif cinéma cette fois, avant et après l'image du mode (17/09/2026, même
-Chromium, 3840×2160, sur 6 s) : accueil immobile 17,1 → 17,3 images/s, et après trois
-changements de mode 17,5 → 17,3. L'écart est dans le bruit de cette machine : le calque en
-plus ne se voit pas ici, ce qui ne dit toujours rien de l'UHD 630.
+Même mesure, motif cinéma cette fois, avant et après l'image du mode et l'accélération des
+mouvements (17/09/2026, même Chromium, 3840×2160, sur 6 s) : accueil immobile 16,9 → 16,8
+images/s, et après trois changements de mode 16,9 → 17,4. L'écart est dans le bruit de cette
+machine : ni le calque en plus, ni des périodes deux fois plus courtes (le même dessin, à un
+autre instant) ne coûtent quoi que ce soit de mesurable ici — ce qui ne dit toujours rien de
+l'UHD 630.
 
 ### Sur le M720q
 

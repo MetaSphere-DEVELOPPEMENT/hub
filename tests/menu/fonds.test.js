@@ -98,28 +98,58 @@ test("dessin : chaque motif, dans chaque couleur, en sombre et en clair, sans er
   }
 });
 
-// Le reproche du 17/09/2026 : « le fond n'est toujours pas animé ». Entre t et t + 5 s, une
-// part visible de l'image change, pour chaque motif.
-test("mouvement : chaque motif change visiblement en 5 s, et aucune période ne dépasse 30 s", async () => {
+// Le reproche du 17/09/2026, deux fois : « le fond n'est toujours pas animé », puis, mesure
+// à l'appui (la TV plafonne à 30 Hz en 4K, le menu y rend 29,4 images/s), « pas du tout
+// animés ». Rien n'est en panne : c'est le mouvement qui était trop lent. À 30 images par
+// seconde, un aller-retour de 25 s avance d'un millième d'écran par image et l'œil ne voit
+// rien bouger. On mesure donc la part de l'image qui change en 1 s (30 images de la TV) et
+// en 5 s, à huit instants du cycle — la moyenne pour le rythme d'ensemble, le pire instant
+// pour qu'aucun motif ne se fige au passage d'un extremum.
+test("mouvement : chaque motif change visiblement en 1 s et en 5 s, et aucune période ne dépasse 30 s", async () => {
   await ouvrir({});
-  const releve = await page.evaluate(motifs => motifs.map(motif => {
-    const { apercuFond, periodesMotif, periodesFond } = window.hubFond;
-    const periodes = motif === "nappes" ? periodesFond("aurore") : periodesMotif(motif);
-    const image = s => apercuFond(motif, "aurore", "sombre", s, [62, 224, 208], true).getContext("2d").getImageData(0, 0, 480, 270).data;
-    const a = image(10), b = image(15);
-    let changes = 0;
-    for (let i = 0; i < a.length; i += 4) if (Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]) > 24) changes++;
-    return { motif, periodes, part: changes / (a.length / 4) };
-  }), MOTIFS);
-  for (const { motif, periodes, part } of releve) {
+  const releve = await page.evaluate(motifs => {
+    const { peindreFond, periodesMotif, periodesFond } = window.hubFond;
+    // Deux toiles pour toute la mesure, repeintes à chaque instant : en créer une par
+    // instant (seize par motif) dépasse ce que Chromium garde en mémoire, et les suivantes
+    // revenaient vides. La couche basse porte les nappes et les taches, celle des lignes le
+    // sol, les étoiles et la poussière : un pixel compte si l'une des deux a changé.
+    const [basse, lignes] = [0, 1].map(() => { const t = document.createElement("canvas"); t.width = 480; t.height = 270; return t.getContext("2d"); });
+    const image = (motif, s) => {
+      peindreFond(motif, "aurore", "sombre", s, [62, 224, 208], true, basse, lignes, true);
+      return [basse.getImageData(0, 0, 480, 270).data, lignes.getImageData(0, 0, 480, 270).data];
+    };
+    const part = (A, B) => {
+      let c = 0;
+      for (let i = 0; i < A[0].length; i += 4) {
+        const db = Math.abs(A[0][i] - B[0][i]) + Math.abs(A[0][i + 1] - B[0][i + 1]) + Math.abs(A[0][i + 2] - B[0][i + 2]);
+        const dl = Math.abs(A[1][i] - B[1][i]) + Math.abs(A[1][i + 1] - B[1][i + 1]) + Math.abs(A[1][i + 2] - B[1][i + 2]) + Math.abs(A[1][i + 3] - B[1][i + 3]);
+        if (db > 24 || dl > 24) c++;
+      }
+      return c / (A[0].length / 4);
+    };
+    return motifs.map(motif => {
+      const periodes = motif === "nappes" ? periodesFond("aurore") : periodesMotif(motif);
+      const parts = d => [2, 5, 8, 11, 14, 17, 20, 23].map(t => part(image(motif, t), image(motif, t + d)));
+      const une = parts(1), cinq = parts(5);
+      return { motif, periodes, moyenne1s: une.reduce((a, b) => a + b) / une.length, pire5s: Math.min(...cinq) };
+    });
+  }, MOTIFS);
+  for (const { motif, periodes, moyenne1s, pire5s } of releve) {
     assert.ok(periodes.length > 0, motif);
     assert.ok(Math.max(...periodes) <= 30, `${motif} : période la plus longue ${Math.max(...periodes)} s`);
-    assert.ok(part >= .05, `${motif} : ${(part * 100).toFixed(1)} % de l'image change en 5 s`);
+    // Avant d'accélérer : 1,9 % en 1 s pour les nappes, 9,2 % en 5 s pour profondeur.
+    // Après : de 16 à 26 % en 1 s, de 19 à 60 % en 5 s au pire instant.
+    assert.ok(moyenne1s >= .12, `${motif} : ${(moyenne1s * 100).toFixed(1)} % de l'image change en 1 s`);
+    assert.ok(pire5s >= .15, `${motif} : ${(pire5s * 100).toFixed(1)} % en 5 s au pire instant`);
   }
+  // Balayés finement plutôt qu'à trois instants : les périodes ont raccourci, et trois
+  // instants bien espacés tombaient tous au même point du cycle (0° d'amplitude mesurée
+  // pour un filigrane qui pivote pourtant de 16°).
   const pendules = await page.evaluate(() => {
     const { mouvementFiligrane, mouvementFaisceaux } = window.hubFond;
-    const f = [0, 7, 14, 21].map(s => mouvementFiligrane(s).angle);
-    const b = [0, 5, 10].map(s => mouvementFaisceaux(s)[0].angle * 180 / Math.PI);
+    const instants = Array.from({ length: 120 }, (_, i) => i * .25);
+    const f = instants.map(s => mouvementFiligrane(s).angle);
+    const b = instants.map(s => mouvementFaisceaux(s)[0].angle * 180 / Math.PI);
     return { filigrane: Math.max(...f) - Math.min(...f), faisceau: Math.max(...b) - Math.min(...b) };
   });
   assert.ok(pendules.filigrane >= 10, `le filigrane pivote de ${pendules.filigrane.toFixed(1)}°`);
@@ -178,8 +208,9 @@ test("réglage : motif puis couleur enregistrés ; minimal puis une couleur ram�
   await ouvrir(profil({ fond: "ocean" }), "&ecran=reglages&section=fond");
   await page.waitForFunction(() => document.querySelector("#reglages.ouvert"));
   const vignettes = await page.evaluate(() => [...document.querySelectorAll("#contenu-reglages .vignette-fond")].map(v => [v.dataset.cle, v.classList.contains("choisie"), !!v.querySelector("canvas")]));
-  assert.deepEqual(vignettes.map(v => v[0]), [...MOTIFS.map(m => `motif-${m}`), "motif-minimal", "motif-photos", ...COULEURS.map(c => `couleur-${c}`)]);
-  assert.deepEqual(vignettes.filter(v => v[1]).map(v => v[0]), ["motif-nappes", "couleur-ocean"], "l'ancien profil : nappes, océan");
+  assert.deepEqual(vignettes.map(v => v[0]), [...MOTIFS.map(m => `motif-${m}`), "motif-minimal", "motif-photos",
+    ...COULEURS.map(c => `couleur-${c}`), "visuels-jeu-1", "visuels-jeu-2", "visuels-jeu-3", "visuels-pictogramme", "visuels-aucun"]);
+  assert.deepEqual(vignettes.filter(v => v[1]).map(v => v[0]), ["motif-nappes", "couleur-ocean", "visuels-jeu-1"], "l'ancien profil : nappes, océan, jeu par défaut");
   assert.ok(vignettes.filter(v => v[0] !== "motif-photos").every(v => v[2]), "un vrai aperçu dessiné par vignette");
   await page.click('[data-cle="motif-faisceaux"]');
   await attendreReglages(d => d.profils[0].motif === "faisceaux" && d.profils[0].fond === "ocean");
@@ -228,28 +259,94 @@ test("héros : il suit l'onglet, garde le dernier mode sur une tuile, et le fili
   assert.deepEqual(page.erreurs, []);
 });
 
-// L'image du mode, à droite de l'accueil : une photo par mode, posée dans le dépôt
-// (installer/menu/images). Elles sont locales : chargées une fois au départ, jamais
-// relues en changeant de mode.
+// Retour de la TV du 17/09/2026, planche motif × couleur : les six couleurs du motif cinéma
+// étaient toutes violettes, la teinte du mode (92 % sur la grande tache) avait mangé la
+// palette. On mesure la chromaticité moyenne du côté droit — là où vit la grande tache — et
+// on demande que deux couleurs ne se ressemblent jamais, quel que soit le mode affiché.
+test("fond : les six couleurs du motif cinéma se distinguent, teinte du mode allumée", async () => {
+  await ouvrir({});
+  const ecarts = await page.evaluate(([couleurs, accents]) => accents.map(([mode, accent]) => {
+    // Chromaticité : la couleur moyenne ramenée à somme constante, la luminosité mise de côté.
+    const chroma = couleur => {
+      const v = window.hubFond.apercuFond("cinema", couleur, "sombre", 8, accent, true);
+      const d = v.getContext("2d").getImageData(0, 0, v.width, v.height).data;
+      let r = 0, g = 0, b = 0, n = 0;
+      for (let y = 0; y < Math.round(v.height * .6); y++) for (let x = Math.round(v.width * .45); x < v.width; x++) {
+        const i = 4 * (y * v.width + x); r += d[i]; g += d[i + 1]; b += d[i + 2]; n++;
+      }
+      const s = (r + g + b) / n || 1;
+      return [r / n / s * 3, g / n / s * 3];
+    };
+    const points = couleurs.map(c => ({ c, xy: chroma(c) }));
+    let pire = { ecart: Infinity };
+    for (let i = 0; i < points.length; i++) for (let j = i + 1; j < points.length; j++) {
+      const ecart = Math.hypot(points[i].xy[0] - points[j].xy[0], points[i].xy[1] - points[j].xy[1]);
+      if (ecart < pire.ecart) pire = { mode, paire: `${points[i].c}/${points[j].c}`, ecart: +ecart.toFixed(3) };
+    }
+    return pire;
+  }), [COULEURS, [["jeux", [179, 107, 255]], ["tv", [62, 224, 208]]]]);
+  // Avant correction : .024 avec le violet des Jeux, .055 avec le turquoise de la TV.
+  for (const p of ecarts) assert.ok(p.ecart >= .12, `mode ${p.mode} : ${p.paire} se ressemblent (${p.ecart})`);
+  // Et le mode change quand même quelque chose : les mêmes couleurs, deux modes, deux rendus.
+  assert.notDeepEqual(ecarts[0], ecarts[1]);
+});
+
+// Retour de la TV du 17/09/2026 : sur le motif profondeur, la grille du sol était l'élément
+// le plus lumineux de l'écran, et les onglets, les tuiles et le pied semblaient posés
+// dessus. Un écran de salon rend bien plus contrasté qu'un écran de bureau : la bande basse,
+// là où vivent les rangées et le pied, doit rester calme sur tous les motifs. Mesuré sur le
+// fond seul, sans le contenu : le 98e centile de luminance (le pixel presque le plus clair).
+test("fond : sombre, la bande basse reste calme sur chaque motif et chaque couleur", async () => {
+  await ouvrir({});
+  const bandes = await page.evaluate(([motifs, couleurs]) => {
+    const lin = v => { v /= 255; return v <= .03928 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4; };
+    const centile = (d, largeur, hauteur, a, b) => {
+      const px = [];
+      for (let y = Math.round(a * hauteur); y < Math.round(b * hauteur); y++)
+        for (let x = 0; x < largeur; x++) { const i = 4 * (y * largeur + x); px.push(.2126 * lin(d[i]) + .7152 * lin(d[i + 1]) + .0722 * lin(d[i + 2])); }
+      px.sort((u, w) => u - w);
+      return +px[Math.floor(px.length * .98)].toFixed(3);
+    };
+    const r = [];
+    for (const motif of motifs) for (const couleur of couleurs) {
+      const v = window.hubFond.apercuFond(motif, couleur, "sombre", 8, [179, 107, 255], true);
+      const d = v.getContext("2d").getImageData(0, 0, v.width, v.height).data;
+      r.push({ motif, couleur, bas: centile(d, v.width, v.height, .72, 1) });
+    }
+    return r;
+  }, [MOTIFS, COULEURS]);
+  // Avant correction, le sol de profondeur montait à .126 ; il est à .023 aujourd'hui.
+  const trop = bandes.filter(b => b.bas > .09);
+  assert.deepEqual(trop, [], `bande basse trop lumineuse : ${JSON.stringify(bandes)}`);
+});
+
+// L'image du mode, à droite de l'accueil : trois jeux d'images posés dans le dépôt
+// (installer/menu/images), le profil choisit le sien. Elles sont locales : seul le jeu
+// choisi est chargé, une fois au départ, et jamais relu en changeant de mode.
 const visuelVisible = () => page.evaluate(() => {
   const v = document.getElementById("visuel-mode");
   const vue = [...v.children].filter(i => i.classList.contains("visible")).map(i => i.dataset.visuel);
-  return { cache: v.hidden, vue, filigrane: document.getElementById("filigrane").hidden, images: v.children.length };
+  return { cache: v.hidden, vue, filigrane: document.getElementById("filigrane").hidden, images: v.children.length, jeu: v.dataset.jeu };
+});
+// Chemins demandés au navigateur : « jeu-1/mode-tv.webp ».
+const suivreImages = (demandes) => p => p.on("request", r => {
+  const m = r.url().match(/\/images\/([^/]+\/mode-[^/]+)$/);
+  if (m) demandes.push(m[1]);
 });
 
 test("image du mode : celle du mode choisi s'affiche à droite, change avec l'onglet, chargée une seule fois", async () => {
   const demandes = [];
-  await ouvrir(profil({ motif: "cinema", dernier: "tv" }), "",
-    p => p.on("request", r => { if (/\/images\/mode-/.test(r.url())) demandes.push(r.url().split("/").pop()); }));
-  assert.deepEqual(await visuelVisible(), { cache: false, vue: ["tv"], filigrane: true, images: 3 });
+  await ouvrir(profil({ motif: "cinema", dernier: "tv" }), "", suivreImages(demandes));
+  assert.deepEqual(await visuelVisible(), { cache: false, vue: ["tv"], filigrane: true, images: 3, jeu: "jeu-1" });
   await touche("ArrowRight");
-  assert.deepEqual(await visuelVisible(), { cache: false, vue: ["jeux"], filigrane: true, images: 3 });
+  assert.deepEqual(await visuelVisible(), { cache: false, vue: ["jeux"], filigrane: true, images: 3, jeu: "jeu-1" });
   await touche("ArrowRight");
-  assert.deepEqual(await visuelVisible(), { cache: false, vue: ["bureau"], filigrane: true, images: 3 });
+  assert.deepEqual(await visuelVisible(), { cache: false, vue: ["bureau"], filigrane: true, images: 3, jeu: "jeu-1" });
   await touche("ArrowLeft", "ArrowLeft", "ArrowRight");
-  assert.deepEqual(await visuelVisible(), { cache: false, vue: ["jeux"], filigrane: true, images: 3 });
-  // Préchargement : les trois images, une fois chacune, et rien de plus après six changements.
-  assert.deepEqual(demandes.sort(), ["mode-bureau.webp", "mode-jeux.webp", "mode-tv.webp"]);
+  assert.deepEqual(await visuelVisible(), { cache: false, vue: ["jeux"], filigrane: true, images: 3, jeu: "jeu-1" });
+  // Préchargement : les trois images du jeu choisi, une fois chacune — pas les neuf — et
+  // rien de plus après six changements de mode.
+  assert.deepEqual(demandes.sort(), ["jeu-1/mode-bureau.webp", "jeu-1/mode-jeux.webp", "jeu-1/mode-tv.webp"]);
   // Le fondu d'une image à l'autre reste court, et le masque ne bouge jamais.
   const fondu = await page.evaluate(() => {
     const cs = getComputedStyle(document.querySelector("#visuel-mode img"));
@@ -260,7 +357,7 @@ test("image du mode : celle du mode choisi s'affiche à droite, change avec l'on
   // Un autre motif n'a ni image ni filigrane.
   await page.evaluate(() => { profil().motif = "rubans"; appliquerTout(); });
   await page.waitForTimeout(150);
-  assert.deepEqual(await visuelVisible(), { cache: true, vue: [], filigrane: true, images: 3 });
+  assert.deepEqual(await visuelVisible(), { cache: true, vue: [], filigrane: true, images: 3, jeu: "jeu-1" });
   assert.deepEqual(page.erreurs, []);
 });
 
@@ -271,13 +368,69 @@ test("image du mode : animations réduites, aucun fondu ; image absente, le pict
   // Une image qui manque du dossier, ou illisible : elle quitte la page, le filigrane revient.
   await page.close();
   await ouvrir(profil({ motif: "cinema", dernier: "tv" }), "", p => p.route(/mode-jeux\.webp/, r => r.abort()));
-  assert.deepEqual(await visuelVisible(), { cache: false, vue: ["tv"], filigrane: true, images: 2 });
+  assert.deepEqual(await visuelVisible(), { cache: false, vue: ["tv"], filigrane: true, images: 2, jeu: "jeu-1" });
   await touche("ArrowRight");
-  assert.deepEqual(await visuelVisible(), { cache: true, vue: [], filigrane: false, images: 2 });
+  assert.deepEqual(await visuelVisible(), { cache: true, vue: [], filigrane: false, images: 2, jeu: "jeu-1" });
   assert.equal(await page.evaluate(() => document.getElementById("filigrane").dataset.picto), "jeux");
   assert.ok(await page.evaluate(() => document.querySelector("#filigrane svg").innerHTML.length > 0), "le pictogramme du mode est bien dessiné");
   await touche("ArrowLeft");
-  assert.deepEqual(await visuelVisible(), { cache: false, vue: ["tv"], filigrane: true, images: 2 });
+  assert.deepEqual(await visuelVisible(), { cache: false, vue: ["tv"], filigrane: true, images: 2, jeu: "jeu-1" });
+  assert.deepEqual(page.erreurs, []);
+});
+
+test("image du mode : le jeu se choisit dans les réglages, s'enregistre, et « aucun » rend la place au filigrane", async () => {
+  const demandes = [];
+  await ouvrir(profil({ motif: "cinema", dernier: "tv", visuels: "jeu-2" }), "", suivreImages(demandes));
+  assert.deepEqual(await visuelVisible(), { cache: false, vue: ["tv"], filigrane: true, images: 3, jeu: "jeu-2" });
+  // Seul le jeu choisi est chargé : trois fichiers, jamais les neuf.
+  assert.deepEqual(demandes.sort(), ["jeu-2/mode-bureau.webp", "jeu-2/mode-jeux.webp", "jeu-2/mode-tv.webp"]);
+  // La rangée des réglages : quatre vignettes, celle du profil cochée, traduites.
+  await page.evaluate(() => ACTIONS.reglages("fond"));
+  await page.waitForTimeout(300);
+  const rangee = await page.evaluate(() => [...document.querySelectorAll(".vignettes.visuels .vignette-fond")].map(v => ({
+    cle: v.dataset.cle, choisie: v.classList.contains("choisie"), libelle: v.querySelector(".libelle").textContent,
+    apercu: v.querySelector(".apercu-visuel img")?.getAttribute("src") || (v.querySelector(".apercu-filigrane") ? "filigrane" : null),
+  })));
+  assert.deepEqual(rangee, [
+    { cle: "visuels-jeu-1", choisie: false, libelle: "Jeu 1", apercu: "images/jeu-1/mode-tv.webp" },
+    { cle: "visuels-jeu-2", choisie: true, libelle: "Jeu 2", apercu: "images/jeu-2/mode-tv.webp" },
+    { cle: "visuels-jeu-3", choisie: false, libelle: "Jeu 3", apercu: "images/jeu-3/mode-tv.webp" },
+    { cle: "visuels-pictogramme", choisie: false, libelle: "Filigrane", apercu: "filigrane" },
+    { cle: "visuels-aucun", choisie: false, libelle: "Aucun", apercu: null },
+  ]);
+  // Choisir « Jeu 3 » : l'accueil change de jeu, et le choix part dans les réglages enregistrés.
+  await page.click('[data-cle="visuels-jeu-3"]');
+  await attendreReglages(d => d.profils[0].visuels === "jeu-3");
+  await page.evaluate(() => fermerTout());
+  await page.waitForTimeout(300);
+  assert.deepEqual(await visuelVisible(), { cache: false, vue: ["tv"], filigrane: true, images: 3, jeu: "jeu-3" });
+  assert.deepEqual(demandes.filter(d => d.startsWith("jeu-3")).sort(), ["jeu-3/mode-bureau.webp", "jeu-3/mode-jeux.webp", "jeu-3/mode-tv.webp"]);
+  // « Pictogramme » : plus d'image, le grand pictogramme du mode en filigrane reprend sa place.
+  await page.evaluate(() => { profil().visuels = "pictogramme"; appliquerTout(); });
+  await page.waitForTimeout(200);
+  assert.deepEqual(await visuelVisible(), { cache: true, vue: [], filigrane: false, images: 0, jeu: "pictogramme" });
+  // « Aucun » : rien à droite du tout, le fond animé et sa teinte de mode y suffisent.
+  await page.evaluate(() => { profil().visuels = "aucun"; appliquerTout(); });
+  await page.waitForTimeout(200);
+  assert.deepEqual(await visuelVisible(), { cache: true, vue: [], filigrane: true, images: 0, jeu: "aucun" });
+  // Ni l'un ni l'autre ne demande un fichier de plus (les vignettes des réglages ont chargé
+  // les trois images de tête, c'est tout ce qui a bougé depuis).
+  const avant = demandes.length;
+  await page.evaluate(() => { profil().visuels = "pictogramme"; appliquerTout(); profil().visuels = "aucun"; appliquerTout(); });
+  await page.waitForTimeout(300);
+  assert.equal(demandes.length, avant, `fichiers chargés en trop : ${demandes.slice(avant)}`);
+  // Une valeur inconnue (réglages écrits à la main) revient au jeu par défaut.
+  await page.evaluate(() => { profil().visuels = "jeu-9"; appliquerTout(); });
+  await page.waitForTimeout(200);
+  assert.equal((await visuelVisible()).jeu, "jeu-1");
+  assert.deepEqual(page.erreurs, []);
+});
+
+test("image du mode : en anglais, la rangée des jeux est traduite", async () => {
+  await ouvrir(profil({ motif: "cinema", langue: "en" }));
+  await page.evaluate(() => ACTIONS.reglages("fond"));
+  await page.waitForTimeout(300);
+  assert.match(await page.textContent("#contenu-reglages"), /Mode pictures.*Set 1.*Set 2.*Set 3.*Watermark.*None/s);
   assert.deepEqual(page.erreurs, []);
 });
 

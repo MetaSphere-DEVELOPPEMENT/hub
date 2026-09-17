@@ -154,22 +154,27 @@ test("contrastes : thème clair et initiales des avatars à 4,5:1 au moins", asy
 });
 
 // L'image du mode (installer/menu/images) occupe la moitié droite de l'accueil : le héros
-// reste à gauche, l'heure et le profil passent au-dessus d'elle. Mesuré sur les trois
-// images, dans les deux thèmes, fond figé. Le titre du héros est un texte d'affiche : 3:1
-// suffirait (WCAG 1.4.3), on le tient au même seuil que le reste.
-test("contrastes : le héros et l'en-tête au-dessus de chaque image de mode, sombre et clair", async () => {
+// reste à gauche, l'heure et le profil passent au-dessus d'elle. Mesuré sur les trois images
+// de chacun des trois jeux, dans les deux thèmes, fond figé — le jeu 2, le plus lumineux,
+// est celui à surveiller. Le titre du héros est un texte d'affiche : 3:1 suffirait
+// (WCAG 1.4.3), on le tient au même seuil que le reste.
+test("contrastes : le héros et l'en-tête au-dessus de chaque image, les trois jeux, sombre et clair", async () => {
   const faibles = [], mesures = [];
   for (const theme of ["sombre", "clair"]) {
-    for (const [mode, image] of [["tv", "tv"], ["gaming", "jeux"], ["bureau", "bureau"]]) {
-      await page?.close();
-      await ouvrir({ ...reglages({}, { theme, animations: "reduites", motif: "cinema" }), reprises: REPRISES });
-      await page.evaluate(m => definirFocus(document.querySelector(`.onglet[data-mode="${m}"]`), true), mode);
-      await page.waitForTimeout(250);
-      assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll("#visuel-mode img.visible")].map(i => i.dataset.visuel)), [image],
-        `${theme} ${mode} : ce n'est pas l'image du mode qui est montrée`);
-      const m = await contrastes(["#heros-titre", ".heure", "#nom-profil", ...TEXTES_ACCUEIL]);
-      mesures.push(...m.map(x => ({ theme, image, ...x })));
-      faibles.push(...m.filter(x => x.ratio < 4.5).map(x => ({ theme, image, ...x })));
+    for (const jeu of ["jeu-1", "jeu-2", "jeu-3"]) {
+      for (const [mode, image] of [["tv", "tv"], ["gaming", "jeux"], ["bureau", "bureau"]]) {
+        await page?.close();
+        await ouvrir({ ...reglages({}, { theme, animations: "reduites", motif: "cinema", visuels: jeu }), reprises: REPRISES });
+        await page.evaluate(m => definirFocus(document.querySelector(`.onglet[data-mode="${m}"]`), true), mode);
+        await page.waitForTimeout(250);
+        assert.deepEqual(await page.evaluate(() => {
+          const v = document.getElementById("visuel-mode");
+          return [v.dataset.jeu, ...[...v.querySelectorAll("img.visible")].map(i => i.dataset.visuel)];
+        }), [jeu, image], `${theme} ${jeu} ${mode} : ce n'est pas l'image attendue`);
+        const m = await contrastes(["#heros-titre", ".heure", "#nom-profil", ...TEXTES_ACCUEIL]);
+        mesures.push(...m.map(x => ({ theme, jeu, image, ...x })));
+        faibles.push(...m.filter(x => x.ratio < 4.5).map(x => ({ theme, jeu, image, ...x })));
+      }
     }
   }
   assert.deepEqual(faibles, [], JSON.stringify(mesures));

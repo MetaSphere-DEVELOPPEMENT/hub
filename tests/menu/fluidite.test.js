@@ -47,10 +47,11 @@ test("fond : chaque mouvement de nappe revient en 30 s au plus, sur une amplitud
   const releve = await page.evaluate(fonds => fonds.map(choix => {
     const { mouvementNappe, periodesFond } = window.hubFond;
     const periodes = periodesFond(choix);
-    // Pour chaque nappe : l'étendue parcourue en 30 s, en largeur et en hauteur.
+    // Pour chaque nappe : l'étendue parcourue en 8 s (c'était 30 s), en largeur et en
+    // hauteur — on regarde le fond quelques secondes, pas une demi-minute.
     const etendues = [0, 1, 2, 3].map(i => {
       const xs = [], ys = [];
-      for (let s = 0; s <= 30; s += .1) { const m = mouvementNappe(choix, i, s); xs.push(m.x); ys.push(m.y); }
+      for (let s = 0; s <= 8; s += .1) { const m = mouvementNappe(choix, i, s); xs.push(m.x); ys.push(m.y); }
       return { x: Math.max(...xs) - Math.min(...xs), y: Math.max(...ys) - Math.min(...ys) };
     });
     return { choix, periodes, etendues };
@@ -69,12 +70,14 @@ test("fond : les mouvements sont périodiques, les braises s'éteignent avant de
   const ecarts = await page.evaluate(() => {
     const { mouvementNappe } = window.hubFond;
     const r = [];
-    for (const [choix, t] of [["ocean", 22], ["aurore", 23]]) {
+    // Période en x de la première nappe, accélérée le 17/09/2026 avec les autres (22 → 13,
+    // 23 → 12) : à 30 images par seconde, un aller-retour de 22 s paraissait immobile.
+    for (const [choix, t] of [["ocean", 13], ["aurore", 12]]) {
       const a = mouvementNappe(choix, 0, 3.7), b = mouvementNappe(choix, 0, 3.7 + t);
       r.push(Math.abs(a.x - b.x));
     }
-    // Braise, nappe 0 (phase nulle) : traversée de 26 s ; juste avant et juste après le rebouclage.
-    const avant = mouvementNappe("braise", 0, 26 - .01), apres = mouvementNappe("braise", 0, 26 + .01);
+    // Braise, nappe 0 (phase nulle) : traversée de 15 s ; juste avant et juste après le rebouclage.
+    const avant = mouvementNappe("braise", 0, 15 - .01), apres = mouvementNappe("braise", 0, 15 + .01);
     return { r, avant: avant.eclat, apres: apres.eclat };
   });
   for (const e of ecarts.r) assert.ok(e < 1e-9);
