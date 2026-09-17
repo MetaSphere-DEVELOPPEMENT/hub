@@ -86,3 +86,46 @@ for (const [largeur, hauteur] of [[1280, 720], [1920, 1080], [3840, 2160]]) {
     }
   });
 }
+
+// Contraste réel sur le fond peint : on photographie la page sans ses textes, puis on compare la
+// couleur de chaque texte (opacités des ancêtres comprises) à la médiane des pixels sous lui.
+// Le fond animé est figé (animations réduites) pour que la mesure se répète.
+async function contrastes(selecteurs) {
+  const textes = await page.evaluate(sels => sels.flatMap(sel => [...document.querySelectorAll(sel)].filter(e => e.getClientRects().length).map(e => {
+    let o = 1; for (let x = e; x; x = x.parentElement) o *= parseFloat(getComputedStyle(x).opacity);
+    const c = getComputedStyle(e).color, v = c.match(/[\d.]+/g).map(Number);
+    const rgb = c.startsWith("color(srgb") ? v.slice(0, 3).map(x => x * 255) : v.slice(0, 3);
+    const a = (c.startsWith("color(srgb") ? v[3] : v[3]) ?? 1;
+    const r = e.getBoundingClientRect();
+    return { sel, texte: e.textContent.trim().slice(0, 20), rgb, a: a * o, x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) };
+  })), selecteurs);
+  const style = await page.addStyleTag({ content: "*, *::before, *::after { color: transparent !important; -webkit-text-fill-color: transparent !important; text-shadow: none !important; } svg { visibility: hidden !important; } kbd { box-shadow: none !important; }" });
+  await page.waitForTimeout(100);
+  const png = (await page.screenshot()).toString("base64");
+  await style.evaluate(s => s.remove());
+  return page.evaluate(async ({ png, textes }) => {
+    const i = new Image(); i.src = "data:image/png;base64," + png; await i.decode();
+    const c = document.createElement("canvas"); c.width = i.width; c.height = i.height;
+    const x = c.getContext("2d"); x.drawImage(i, 0, 0);
+    const lin = v => { v /= 255; return v <= .03928 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4; };
+    const L = ([r, g, b]) => .2126 * lin(r) + .7152 * lin(g) + .0722 * lin(b);
+    return textes.map(t => {
+      const d = x.getImageData(t.x, t.y, Math.max(1, t.w), Math.max(1, t.h)).data, px = [];
+      for (let k = 0; k < d.length; k += 4) px.push([d[k], d[k + 1], d[k + 2]]);
+      px.sort((p, q) => L(p) - L(q));
+      const fond = px[px.length >> 1];
+      const texte = t.rgb.map((v, k) => v * t.a + fond[k] * (1 - t.a));
+      const [a, b] = [L(texte), L(fond)];
+      return { sel: t.sel, texte: t.texte, ratio: +((Math.max(a, b) + .05) / (Math.min(a, b) + .05)).toFixed(2) };
+    });
+  }, { png, textes });
+}
+
+test("contrastes : accueil sombre, textes secondaires à 4,5:1 au moins", async () => {
+  await ouvrir(reglages({}, { animations: "reduites" }));
+  await page.evaluate(() => definirFocus(document.querySelector('[data-mode="gaming"]'), true));
+  await page.waitForTimeout(200);
+  const mesures = await contrastes([".carte:not(.focus) .detail", ".carte .touche-rapide", ".aides > span > span", ".carte.focus .ouvrir > span", ".reprises-titre"]);
+  const faibles = mesures.filter(m => m.ratio < 4.5);
+  assert.deepEqual(faibles, [], JSON.stringify(mesures));
+});

@@ -6,8 +6,16 @@
 :root {
   --encre: #06070c;
   --texte: #f3f5fb;
-  --texte-doux: rgba(226, 232, 250, .64);
-  --texte-pale: rgba(226, 232, 250, .40);
+  /* Mesurés sur le fond réel le 17/09/2026 : à .64 et .40, le détail des cartes, les
+     touches rapides et les aides du pied descendaient à 1,7–3,2:1. */
+  --texte-doux: rgba(226, 232, 250, .84);
+  --texte-pale: rgba(226, 232, 250, .62);
+  /* Voile des cartes non sélectionnées : elles s'effaçaient par opacity, texte compris. */
+  --voile-carte: rgba(6, 7, 12, .35);
+  /* Texte à la couleur d'un mode (--c) : la teinte pure, turquoise sur verre turquoise,
+     ne dépassait pas 3:1. On la mêle à --ton-accent dans la proportion --part-accent. */
+  --ton-accent: #fff;
+  --part-accent: 25%;
   --verre: rgba(255, 255, 255, .055);
   --verre-fort: rgba(255, 255, 255, .11);
   --verre-feuille: rgba(14, 16, 26, .62);
@@ -50,6 +58,9 @@
   --texte: #0e1322;
   --texte-doux: rgba(14, 19, 34, .64);
   --texte-pale: rgba(14, 19, 34, .42);
+  --voile-carte: transparent;
+  --ton-accent: #000;
+  --part-accent: 78%;
   --verre: rgba(255, 255, 255, .42);
   --verre-fort: rgba(255, 255, 255, .72);
   --verre-feuille: rgba(248, 250, 255, .74);
@@ -276,14 +287,13 @@ body.avec-reprises .salut h1 { font-size: var(--t-5); }
   background-size: cover;
   background-position: center 25%;
   box-shadow: inset 0 0 0 1px var(--liseré), 0 .76rem 1.67rem -.76rem var(--ombre);
-  opacity: .82;
   transition: transform .5s var(--ressort), opacity .35s;
 }
 .reprise::before { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, transparent 25%, rgb(0 0 0 / .82)); }
 .reprise .lettre { position: absolute; top: .46rem; left: .68rem; font-size: var(--t-6); font-weight: 800; color: rgb(255 255 255 / .18); }
 .reprise .textes { position: absolute; left: .68rem; right: .68rem; bottom: .72rem; color: #fff; text-align: left; }
 .reprise .t1 { font-size: var(--t-2); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.reprise .t2 { font-size: var(--t-1); opacity: .75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: .08rem; }
+.reprise .t2 { font-size: var(--t-1); opacity: .88; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: .08rem; }
 .reprise .barre { position: absolute; left: 0; right: 0; bottom: 0; height: .24rem; background: rgb(255 255 255 / .18); }
 .reprise .barre i { position: absolute; inset: 0 auto 0 0; background: rgb(var(--c)); box-shadow: 0 0 .61rem rgb(var(--c)); }
 .reprise .lecture {
@@ -329,13 +339,12 @@ body.avec-reprises .salut h1 { font-size: var(--t-5); }
   width: 15rem;
   height: 15.93rem;
   border-radius: 1.44rem;
-  background: linear-gradient(160deg, var(--reflet), transparent 55%), var(--verre);
+  background: linear-gradient(160deg, var(--reflet), transparent 55%), linear-gradient(var(--voile-carte), var(--voile-carte)), var(--verre);
   -webkit-backdrop-filter: blur(24px) saturate(160%);
   backdrop-filter: blur(24px) saturate(160%);
   box-shadow:
     inset 0 0 0 1px var(--liseré),
     0 1.21rem 2.66rem -.91rem var(--ombre);
-  opacity: .74;
   transform: scale(.96);
   transition: transform .55s var(--ressort), opacity .45s var(--souple);
   animation: montee .9s var(--souple) both;
@@ -412,7 +421,7 @@ body.avec-reprises .salut h1 { font-size: var(--t-5); }
   z-index: -1;
 }
 .carte.focus {
-  opacity: 1;
+  background: linear-gradient(160deg, var(--reflet), transparent 55%), var(--verre);
   transform: translateY(-.68rem) scale(1.06);
   box-shadow:
     inset 0 0 0 1px rgb(var(--c) / .25),
@@ -422,7 +431,7 @@ body.avec-reprises .salut h1 { font-size: var(--t-5); }
 .carte.focus::after, .carte.focus .carte-corps::before { opacity: 1; }
 body.ambiant .carte::before, body.depart .carte::before { animation-play-state: paused; }
 .carte.focus .carte-corps::after { animation: reflet 1.1s .05s var(--souple); }
-.carte.focus .halo { opacity: .75; }
+.carte.focus .halo { opacity: .5; }
 
 .pictogramme {
   --c: var(--accent);
@@ -448,18 +457,20 @@ body.ambiant .carte::before, body.depart .carte::before { animation-play-state: 
   margin-top: .99rem;
   display: flex; align-items: center; gap: .46rem;
   font-size: var(--t-2); font-weight: 600; letter-spacing: .02em;
-  color: rgb(var(--c));
+  color: color-mix(in srgb, rgb(var(--c)) var(--part-accent), var(--ton-accent));
   opacity: 0;
   transform: translateY(.38rem);
   transition: opacity .4s var(--souple), transform .5s var(--souple);
 }
-.ouvrir kbd { border-color: rgb(var(--c) / .45); color: rgb(var(--c)); }
+.ouvrir kbd { border-color: rgb(var(--c) / .45); color: inherit; background: var(--voile-carte); }
 .carte.focus .ouvrir { opacity: 1; transform: none; }
+/* La carte sélectionnée s'éclaire (verre, halo) : son texte secondaire passe en pleine encre. */
+.carte.focus .detail, .carte.focus .touche-rapide { color: var(--texte); }
 .touche-rapide {
   position: absolute;
   bottom: 1.37rem; right: 1.29rem;
   font-size: var(--t-1); font-weight: 700;
-  color: var(--texte-pale);
+  color: var(--texte-doux);
 }
 .pastille {
   position: absolute;
@@ -482,7 +493,7 @@ body.depart .carte:not(.lance) { opacity: 0; transform: scale(.9); }
   animation: apparition .9s .38s var(--souple) both;
 }
 /* Des rappels, pas des cibles : ceux qui ne tiennent pas sur la ligne passent sous le pli. */
-.aides { display: flex; flex-wrap: wrap; align-items: center; height: 2rem; min-width: 0; overflow: hidden; column-gap: 1.37rem; row-gap: 3rem; font-size: var(--t-2); color: var(--texte-pale); }
+.aides { display: flex; flex-wrap: wrap; align-items: center; height: 2rem; min-width: 0; overflow: hidden; column-gap: 1.37rem; row-gap: 3rem; font-size: var(--t-2); color: var(--texte-doux); }
 .aides span { white-space: nowrap; display: flex; align-items: center; gap: .42rem; }
 .actions { display: flex; gap: .68rem; align-items: center; }
 kbd {
@@ -960,7 +971,6 @@ body.verrouille .centre, body.verrouille .pied .aides { opacity: .15; pointer-ev
   background: var(--fond);
   color: var(--encre);
   box-shadow: inset 0 0 0 1px rgb(255 255 255 / .12), 0 .68rem 1.52rem -.76rem var(--ombre);
-  opacity: .8;
   transition: transform .5s var(--ressort), opacity .35s;
 }
 .tuile-service::after {
