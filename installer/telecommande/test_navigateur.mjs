@@ -157,6 +157,11 @@ test("encart iPhone : gestes de Safari et avertissement sur le code à retaper",
   const contour = await page.evaluate(() => { const cs = getComputedStyle(document.activeElement); return [cs.outlineStyle, parseFloat(cs.outlineWidth)]; });
   assert.ok(contour[0] !== "none" && contour[1] >= 2, `contour de focus : ${contour}`);
   assert.deepEqual(page.erreurs, []);
+  // iPhone SE (375×667), encart toujours ouvert : Retour et Accueil encore dans l'écran.
+  await page.setViewportSize({ width: 375, height: 667 });
+  await page.waitForTimeout(300);
+  const se = await page.evaluate(() => ({ h: innerHeight, retour: document.querySelector('[data-cmd="retour"]').getBoundingClientRect().bottom, encart: !!document.getElementById("encart").getClientRects().length }));
+  assert.ok(se.encart && se.retour <= se.h, `375×667 : Retour à ${se.retour} pour ${se.h}`);
   await page.context().close();
 });
 

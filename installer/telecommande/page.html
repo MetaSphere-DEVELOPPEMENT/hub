@@ -16,8 +16,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#06070c">
-<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#06070c" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#e9edf5" media="(prefers-color-scheme: light)">
+<meta name="color-scheme" content="dark light">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -28,20 +29,64 @@
 <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
 <title>HUB · Télécommande</title>
 <style>
+/* Mêmes jetons que le menu de la TV (installer/menu/hub.css) : encre, verre, liseré,
+   couleurs des modes. Le téléphone est la télécommande du HUB, il doit en avoir l'air. */
 :root {
   --encre: #06070c;
   --texte: #f3f5fb;
-  --texte-doux: rgba(226, 232, 250, .64);
-  --texte-pale: rgba(226, 232, 250, .40);
+  --texte-doux: rgba(226, 232, 250, .84);
+  --texte-pale: rgba(226, 232, 250, .62);
   --verre: rgba(255, 255, 255, .055);
   --verre-fort: rgba(255, 255, 255, .11);
-  --lisere: rgba(255, 255, 255, .10);
+  --lisere: rgba(255, 255, 255, .13);
+  --reflet: rgba(255, 255, 255, .10);
+  --ombre: rgba(0, 0, 0, .6);
+  --feuille: #10121b;
+  --voile: rgba(4, 5, 10, .6);
+  --anneau: #fff;
+  --nappe-1: rgb(62 224 208 / .20);
+  --nappe-2: rgb(110 90 255 / .16);
+  --nappe-3: rgb(62 140 255 / .10);
   --tv: 62 224 208;
   --jeux: 179 107 255;
   --bureau: 255 181 71;
   --arret: 255 107 107;
-  --souple: cubic-bezier(.2, .8, .2, 1);
+  --accent: var(--tv);
+  /* Texte à la couleur d'un mode, lisible sur le verre (même mélange que le menu). */
+  --ton-accent: #fff;
+  --part-accent: 70%;
+  --encre-accent: #03201d;
+  --souple: cubic-bezier(.2, .7, .3, 1);
   --rayon: 22px;
+  color-scheme: dark;
+}
+/* Le téléphone en clair : les jetons clairs du menu. */
+@media (prefers-color-scheme: light) {
+  :root {
+    --encre: #e9edf5;
+    --texte: #0e1322;
+    --texte-doux: rgba(14, 19, 34, .74);
+    --texte-pale: rgba(14, 19, 34, .64);
+    --verre: rgba(255, 255, 255, .55);
+    --verre-fort: rgba(255, 255, 255, .85);
+    --lisere: rgba(40, 52, 90, .14);
+    --reflet: rgba(255, 255, 255, .9);
+    --ombre: rgba(40, 52, 90, .22);
+    --feuille: #f6f8fc;
+    --voile: rgba(225, 230, 242, .7);
+    --anneau: #0e1322;
+    --nappe-1: rgb(120 230 215 / .55);
+    --nappe-2: rgb(190 175 255 / .45);
+    --nappe-3: rgb(255 214 186 / .40);
+    --tv: 0 158 146;
+    --jeux: 134 64 230;
+    --bureau: 214 128 0;
+    --arret: 200 50 50;
+    --ton-accent: #000;
+    --part-accent: 66%;
+    --encre-accent: #fff;
+    color-scheme: light;
+  }
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 [hidden] { display: none !important; }
@@ -51,16 +96,18 @@ body {
   font-size: 16px;
   -webkit-font-smoothing: antialiased;
   overscroll-behavior: none;
+  /* Le fond « aurore » du menu, figé : trois nappes de couleur sur l'encre. */
   background:
-    radial-gradient(120% 60% at 0% 0%, rgb(var(--tv) / .13), transparent 60%),
-    radial-gradient(90% 50% at 100% 100%, rgb(var(--jeux) / .12), transparent 60%),
+    radial-gradient(90% 55% at 12% 0%, var(--nappe-1), transparent 70%),
+    radial-gradient(80% 50% at 100% 30%, var(--nappe-2), transparent 70%),
+    radial-gradient(90% 50% at 30% 100%, var(--nappe-3), transparent 70%),
     var(--encre);
   background-attachment: fixed;
 }
 button, input { font: inherit; color: inherit; }
-/* Clavier Bluetooth, contrôle de sélection, lecteur d'écran : la cible doit se voir.
+/* Clavier Bluetooth, contrôle de sélection, lecteur d'écran : l'anneau du menu, plein et décalé.
    :focus-visible ne s'allume pas au toucher, le doigt ne voit donc rien changer. */
-:focus-visible { outline: 3px solid rgb(var(--tv)); outline-offset: 3px; }
+:focus-visible { outline: 3px solid var(--anneau); outline-offset: 3px; }
 button {
   touch-action: manipulation;
   -webkit-user-select: none; user-select: none;
@@ -68,6 +115,14 @@ button {
   cursor: pointer;
 }
 svg { display: block; }
+/* Le verre des cartes du menu : reflet en biais, liseré, ombre portée. Pas de flou
+   d'arrière-plan : sur un téléphone, il se recalcule à chaque défilement. */
+.verre, .touche, .mode, .jauge, .bascule, .rond, .pastille, .pave, .pave-tactile, .encart,
+details.plateforme, .statut-securite, form.texte input, #code {
+  background: linear-gradient(160deg, var(--reflet), transparent 55%), var(--verre);
+  border: 0;
+  box-shadow: inset 0 0 0 1px var(--lisere), 0 14px 30px -18px var(--ombre);
+}
 
 .ecran {
   max-width: 480px;
@@ -80,75 +135,84 @@ svg { display: block; }
   gap: 16px;
 }
 
+/* ── Marque, comme en haut à gauche du menu ──────────────────────────────── */
+.marque {
+  display: flex; align-items: center; gap: 12px;
+  font-weight: 800; letter-spacing: .5em; font-size: 17px;
+  color: var(--texte);
+}
+.marque i {
+  width: 14px; height: 14px; border-radius: 5px; flex: none;
+  background: rgb(var(--accent));
+  box-shadow: 0 0 16px rgb(var(--accent) / .9);
+}
+
 /* ── Appairage ───────────────────────────────────────────────────────────── */
 #appairage { justify-content: center; text-align: center; gap: 22px; }
-.marque {
-  font-weight: 800; letter-spacing: .32em; font-size: 15px; padding-left: .32em;
-  color: var(--texte-doux);
-}
-.marque b { color: var(--texte); }
-#appairage .marque { font-size: 18px; }
-#appairage h1 { margin: 0; font-size: 30px; line-height: 1.15; font-weight: 700; letter-spacing: -.01em; }
+#appairage .marque { justify-content: center; font-size: 22px; padding-left: .5em; }
+#appairage h1 { margin: 0; font-size: 30px; line-height: 1.15; font-weight: 700; letter-spacing: -.02em; }
 #appairage p { margin: 0; color: var(--texte-doux); line-height: 1.5; }
-.chemin { display: inline-block; color: var(--texte); background: var(--verre-fort); border-radius: 8px; padding: 1px 8px; }
+.chemin { display: inline-block; color: var(--texte); background: var(--verre-fort); border-radius: 8px; padding: 1px 8px; box-shadow: inset 0 0 0 1px var(--lisere); }
 #code {
   width: 100%;
   font-size: 44px; font-weight: 700; letter-spacing: .38em; text-align: center; text-indent: .38em;
   font-variant-numeric: tabular-nums;
   padding: 18px 8px;
-  background: var(--verre); border: 1px solid var(--lisere); border-radius: var(--rayon);
-  outline: none; caret-color: rgb(var(--tv));
-  transition: border-color .2s, box-shadow .2s;
+  border-radius: var(--rayon);
+  outline: none; caret-color: rgb(var(--accent));
+  transition: box-shadow .18s var(--souple);
 }
-/* Un halo à 15 % se confondait avec le fond : le champ actif porte un anneau plein. */
-#code:focus { border-color: rgb(var(--tv)); box-shadow: 0 0 0 3px rgb(var(--tv) / .75); }
+/* Le champ actif porte l'anneau des cibles sélectionnées du menu, en plein. */
+#code:focus { box-shadow: 0 0 0 3px var(--anneau), inset 0 0 0 1px var(--lisere), 0 0 28px -4px rgb(var(--accent) / .6); }
 #code::placeholder { color: var(--texte-pale); }
 .secoue { animation: secoue .38s var(--souple); }
 @keyframes secoue { 20% { transform: translateX(-10px); } 45% { transform: translateX(8px); } 70% { transform: translateX(-5px); } }
 .principal {
   width: 100%; min-height: 60px; border: 0; border-radius: var(--rayon);
-  background: rgb(var(--tv)); color: #03201d; font-weight: 700; font-size: 18px;
-  transition: transform .12s var(--souple), opacity .2s;
+  background: linear-gradient(160deg, rgb(255 255 255 / .22), transparent 55%), rgb(var(--accent));
+  color: var(--encre-accent); font-weight: 700; font-size: 18px;
+  box-shadow: 0 14px 30px -14px rgb(var(--accent) / .7);
+  transition: transform .12s var(--souple), opacity .18s;
 }
 .principal:active { transform: scale(.98); }
-.principal:disabled { opacity: .45; }
-.erreur { min-height: 1.5em; color: rgb(var(--arret)) !important; font-weight: 600; }
+.principal:disabled { opacity: .45; box-shadow: none; }
+.erreur { min-height: 1.5em; color: color-mix(in srgb, rgb(var(--arret)) var(--part-accent), var(--ton-accent)) !important; font-weight: 600; }
 
 /* ── En-tête ─────────────────────────────────────────────────────────────── */
 header { display: flex; align-items: center; gap: 10px; min-height: 44px; }
 header .marque { margin-right: auto; }
 .pastille {
   display: inline-flex; align-items: center; gap: 8px;
-  padding: 7px 12px; border-radius: 999px;
-  background: var(--verre); border: 1px solid var(--lisere);
-  font-size: 14px; color: var(--texte-doux);
+  padding: 7px 14px; border-radius: 999px;
+  font-size: 14px; font-weight: 600; color: var(--texte-doux);
 }
 .pastille::before {
   content: ""; width: 8px; height: 8px; border-radius: 50%;
   background: var(--texte-pale);
 }
-.pastille.menu::before { background: rgb(var(--tv)); box-shadow: 0 0 10px rgb(var(--tv)); }
-.pastille.kodi::before { background: rgb(var(--tv)); box-shadow: 0 0 10px rgb(var(--tv)); }
+.pastille.menu::before, .pastille.kodi::before { background: rgb(var(--tv)); box-shadow: 0 0 10px rgb(var(--tv)); }
 .pastille.bureau::before { background: rgb(var(--bureau)); box-shadow: 0 0 10px rgb(var(--bureau)); }
-.pastille.hors-ligne { color: rgb(var(--arret)); }
+.pastille.hors-ligne { color: color-mix(in srgb, rgb(var(--arret)) var(--part-accent), var(--ton-accent)); }
 .pastille.hors-ligne::before { background: rgb(var(--arret)); }
-.rond {
-  width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--lisere);
-  background: var(--verre); display: grid; place-items: center;
-}
+.rond { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; }
 
-/* ── Modes ───────────────────────────────────────────────────────────────── */
+/* ── Modes : les cartes de l'accueil, en petit ───────────────────────────── */
 .modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .mode {
   --c: var(--tv);
-  min-height: 78px; border-radius: var(--rayon);
-  border: 1px solid rgb(var(--c) / .28);
-  background: linear-gradient(160deg, rgb(var(--c) / .20), rgb(var(--c) / .05));
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
-  font-weight: 650; font-size: 15px;
-  transition: transform .12s var(--souple), background .15s;
+  min-height: 92px; border-radius: 24px;
+  display: flex; flex-direction: column; align-items: flex-start; justify-content: space-between; gap: 8px;
+  padding: 12px 12px 10px;
+  font-weight: 700; font-size: 17px; letter-spacing: -.01em;
+  transition: transform .12s var(--souple), box-shadow .18s var(--souple);
 }
-.mode svg { color: rgb(var(--c)); }
+/* Le pictogramme des cartes : carré arrondi teinté, trait à la couleur du mode. */
+.mode svg {
+  width: 40px; height: 40px; padding: 8px; border-radius: 12px;
+  color: rgb(var(--c));
+  background: linear-gradient(145deg, rgb(var(--c) / .32), rgb(var(--c) / .08));
+  box-shadow: inset 0 0 0 1px rgb(var(--c) / .35);
+}
 .mode.jeux { --c: var(--jeux); }
 .mode.bureau { --c: var(--bureau); }
 
@@ -159,11 +223,6 @@ header .marque { margin-right: auto; }
   width: min(84vw, 330px); aspect-ratio: 1;
   border-radius: 50%;
   overflow: hidden;
-  background:
-    radial-gradient(circle at 50% 35%, rgba(255, 255, 255, .09), transparent 70%),
-    rgba(255, 255, 255, .045);
-  border: 1px solid var(--lisere);
-  box-shadow: 0 30px 60px -30px rgba(0, 0, 0, .9), inset 0 1px 0 rgba(255, 255, 255, .08);
 }
 /* Les quatre secteurs sont des boutons pleine taille découpés en triangles : la zone
    tactile suit la forme dessinée, et le pouce qui glisse un peu vers le coin appuie
@@ -177,44 +236,41 @@ header .marque { margin-right: auto; }
 .secteur.bas { clip-path: polygon(50% 50%, 100% 100%, 0 100%); justify-content: center; align-items: flex-end; padding-bottom: 11%; }
 .secteur.gauche { clip-path: polygon(50% 50%, 0 100%, 0 0); justify-content: flex-start; align-items: center; padding-left: 11%; }
 .secteur.droite { clip-path: polygon(50% 50%, 100% 0, 100% 100%); justify-content: flex-end; align-items: center; padding-right: 11%; }
-.secteur.appui { background: rgb(var(--tv) / .16); color: var(--texte); }
+.secteur.appui { background: rgb(var(--accent) / .22); color: var(--texte); }
 .pave::after {
   content: ""; position: absolute; inset: 0; pointer-events: none;
-  background: repeating-conic-gradient(from 45deg, rgba(255, 255, 255, .08) 0 .5deg, transparent .5deg 90deg);
+  background: repeating-conic-gradient(from 45deg, var(--lisere) 0 .5deg, transparent .5deg 90deg);
 }
 .ok {
   position: absolute; inset: 30%; z-index: 1;
-  border-radius: 50%; border: 1px solid rgba(255, 255, 255, .16);
-  background: radial-gradient(circle at 50% 30%, #2a2f3d, #141722);
-  box-shadow: 0 10px 30px -8px rgba(0, 0, 0, .8), inset 0 1px 0 rgba(255, 255, 255, .12);
+  border: 0; border-radius: 50%;
+  background: linear-gradient(160deg, var(--reflet), transparent 60%), var(--feuille);
+  box-shadow: inset 0 0 0 1px var(--lisere), 0 10px 30px -8px var(--ombre);
   font-weight: 800; font-size: 22px; letter-spacing: .06em;
   transition: transform .1s var(--souple), background .12s;
 }
-.ok.appui { transform: scale(.95); background: radial-gradient(circle at 50% 30%, rgb(var(--tv) / .55), rgb(var(--tv) / .25)); }
+.ok.appui { transform: scale(.95); background: rgb(var(--accent) / .3); box-shadow: inset 0 0 0 3px var(--anneau), 0 0 30px -6px rgb(var(--accent) / .7); }
 
 /* ── Pavé tactile ────────────────────────────────────────────────────────── */
 .bascule {
   display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px;
-  border-radius: 999px; background: var(--verre); border: 1px solid var(--lisere);
+  border-radius: 999px;
 }
 .bascule button {
   min-height: 44px; border: 0; border-radius: 999px; background: transparent;
-  color: var(--texte-doux); font-size: 14px; font-weight: 600;
+  color: var(--texte-doux); font-size: 15px; font-weight: 600;
 }
-.bascule button[aria-pressed="true"] { background: var(--verre-fort); color: var(--texte); }
+/* L'option choisie du menu : teinte d'accent et coche, pas la seule couleur. */
+.bascule button[aria-pressed="true"] { background: rgb(var(--accent) / .22); color: var(--texte); box-shadow: inset 0 0 0 1px rgb(var(--accent) / .55); }
+.bascule button[aria-pressed="true"]::before { content: "✓ "; }
 .zone-tactile { display: grid; grid-template-columns: 1fr 66px; gap: 10px; }
 .gaucher .zone-tactile { grid-template-columns: 66px 1fr; }
 .gaucher .colonne-volume { order: -1; }
 .pave-tactile {
   position: relative; overflow: hidden;
   /* Hauteur réduite par ajusterPave() quand Retour et Accueil passeraient sous le pli. */
-  height: min(46dvh, 400px); min-height: 200px;
+  height: min(46dvh, 400px); min-height: 160px;
   border-radius: 28px;
-  background:
-    radial-gradient(90% 70% at 50% 0%, rgb(var(--tv) / .10), transparent 70%),
-    rgba(255, 255, 255, .04);
-  border: 1px solid var(--lisere);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06);
   /* Aucun geste du navigateur ici (défilement, zoom, double-toucher) : chaque
      glissement est à nous, et pointermove arrive sans pointercancel. */
   touch-action: none;
@@ -228,22 +284,21 @@ header .marque { margin-right: auto; }
 .pave-tactile.utilise .aide { opacity: 0; }
 .pave-tactile .reperes {
   position: absolute; inset: 0; pointer-events: none;
-  background:
-    radial-gradient(circle at 50% 50%, rgba(255, 255, 255, .07) 0 2px, transparent 3px) 0 0 / 28px 28px;
+  background: radial-gradient(circle at 50% 50%, var(--lisere) 0 2px, transparent 3px) 0 0 / 28px 28px;
   mask-image: radial-gradient(circle at 50% 45%, #000 20%, transparent 75%);
   -webkit-mask-image: radial-gradient(circle at 50% 45%, #000 20%, transparent 75%);
 }
 .impact {
   position: absolute; width: 84px; height: 84px; margin: -42px 0 0 -42px; left: 50%; top: 50%;
   border-radius: 50%; pointer-events: none; opacity: 0;
-  background: radial-gradient(circle, rgb(var(--tv) / .45), rgb(var(--tv) / 0) 70%);
+  background: radial-gradient(circle, rgb(var(--accent) / .45), rgb(var(--accent) / 0) 70%);
   transition: opacity .18s;
 }
 .pave-tactile.touche .impact { opacity: 1; }
 .pave-tactile.long .impact { background: radial-gradient(circle, rgb(var(--bureau) / .5), rgb(var(--bureau) / 0) 70%); }
 .fleche {
   position: absolute; left: 50%; top: 50%; width: 72px; height: 72px; margin: -36px 0 0 -36px;
-  color: rgb(var(--tv)); opacity: 0; pointer-events: none;
+  color: rgb(var(--accent)); opacity: 0; pointer-events: none;
 }
 .fleche.eclair { animation: eclair .32s var(--souple); }
 @keyframes eclair { from { opacity: .95; transform: rotate(var(--angle, 0deg)) translateY(0) scale(1); } to { opacity: 0; transform: rotate(var(--angle, 0deg)) translateY(-26px) scale(.9); } }
@@ -253,7 +308,7 @@ header .marque { margin-right: auto; }
 .disposition-pave #zone-croix, .disposition-pave #rangee-volume { display: none; }
 .disposition-boutons #zone-tactile { display: none; }
 /* L'anneau de focus serait découpé par la forme des secteurs : on les éclaire comme au toucher. */
-.secteur:focus-visible { outline: none; background: rgb(var(--tv) / .22); color: var(--texte); }
+.secteur:focus-visible { outline: none; background: rgb(var(--accent) / .3); color: var(--texte); }
 /* Le pouce tombe du côté de la main qui tient : « Retour », le plus fréquent, y va. */
 body:not(.gaucher) #rangee-retour [data-cmd="retour"] { order: 2; }
 .haptique { position: fixed; left: -200px; top: 0; opacity: 0; pointer-events: none; }
@@ -262,25 +317,29 @@ body:not(.gaucher) #rangee-retour [data-cmd="retour"] { order: 2; }
 .rangee { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .touche {
   min-height: 62px; border-radius: var(--rayon);
-  background: var(--verre); border: 1px solid var(--lisere);
   display: flex; align-items: center; justify-content: center; gap: 10px;
   font-weight: 600; font-size: 16px;
-  transition: transform .1s var(--souple), background .12s;
+  transition: transform .1s var(--souple), box-shadow .12s;
 }
 .touche svg { color: var(--texte-doux); }
-.appui.touche, .appui.mode, .appui.rond { transform: scale(.96); background: var(--verre-fort); }
+/* Appui : l'état « sélectionné » d'une carte du menu (teinte, anneau, lueur), le temps du doigt. */
+.appui.touche, .appui.mode, .appui.rond {
+  transform: scale(.96);
+  background: linear-gradient(160deg, var(--reflet), transparent 55%), rgb(var(--c, var(--accent)) / .2);
+  box-shadow: inset 0 0 0 2px var(--anneau), 0 0 26px -6px rgb(var(--c, var(--accent)) / .6);
+}
 
 .volume { display: grid; grid-template-columns: 62px 1fr 62px; gap: 10px; align-items: center; }
 .volume .touche { font-size: 28px; font-weight: 400; }
 .jauge {
-  height: 62px; border-radius: var(--rayon); background: var(--verre); border: 1px solid var(--lisere);
+  height: 62px; border-radius: var(--rayon);
   position: relative; overflow: hidden;
   display: flex; align-items: center; justify-content: center; gap: 8px;
   color: var(--texte-doux); font-size: 15px; font-variant-numeric: tabular-nums;
 }
 .jauge .remplissage {
   position: absolute; inset: 0 auto 0 0; width: 0;
-  background: linear-gradient(90deg, rgb(var(--tv) / .10), rgb(var(--tv) / .28));
+  background: linear-gradient(90deg, rgb(var(--accent) / .10), rgb(var(--accent) / .32));
   transition: width .25s var(--souple);
 }
 .jauge span, .jauge svg { position: relative; }
@@ -288,25 +347,25 @@ body:not(.gaucher) #rangee-retour [data-cmd="retour"] { order: 2; }
 form.texte { display: grid; grid-template-columns: 1fr auto; gap: 10px; }
 form.texte input {
   min-width: 0; min-height: 58px; padding: 0 18px;
-  border-radius: var(--rayon); border: 1px solid var(--lisere); background: var(--verre);
+  border-radius: var(--rayon);
   outline: none; font-size: 17px;
 }
-form.texte input:focus { border-color: rgb(var(--tv)); box-shadow: 0 0 0 3px rgb(var(--tv) / .75); }
+form.texte input:focus { box-shadow: 0 0 0 3px var(--anneau), inset 0 0 0 1px var(--lisere); }
 form.texte input::placeholder { color: var(--texte-pale); }
 form.texte button {
   min-width: 58px; border: 0; border-radius: var(--rayon);
-  background: rgb(var(--tv)); color: #03201d; display: grid; place-items: center;
+  background: rgb(var(--accent)); color: var(--encre-accent); display: grid; place-items: center;
 }
 
 .raccourcis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
-.raccourcis .touche { flex-direction: column; gap: 5px; min-height: 70px; font-size: 13px; font-weight: 550; color: var(--texte-doux); }
+.raccourcis .touche { flex-direction: column; gap: 5px; min-height: 70px; font-size: 13px; font-weight: 600; color: var(--texte-doux); }
 
 /* ── Encart « écran d'accueil » ──────────────────────────────────────────── */
 .encart {
   position: relative;
   padding: 14px 50px 14px 16px; border-radius: var(--rayon);
-  background: linear-gradient(160deg, rgb(var(--tv) / .12), rgb(var(--tv) / .03));
-  border: 1px solid rgb(var(--tv) / .25);
+  background: linear-gradient(160deg, var(--reflet), transparent 55%), linear-gradient(rgb(var(--accent) / .10), rgb(var(--accent) / .10)), var(--verre);
+  box-shadow: inset 0 0 0 1px rgb(var(--accent) / .35), 0 14px 30px -18px var(--ombre);
   font-size: 14px; line-height: 1.45; color: var(--texte-doux);
 }
 .encart strong { color: var(--texte); display: block; margin-bottom: 4px; font-size: 15px; }
@@ -318,29 +377,30 @@ form.texte button {
   border: 0; border-radius: 50%; background: transparent; color: var(--texte-doux); font-size: 20px;
 }
 .encart .principal { min-height: 46px; margin-top: 10px; font-size: 16px; }
-.symbole { display: inline-block; padding: 0 6px; border-radius: 6px; background: var(--verre-fort); color: var(--texte); }
+.symbole { display: inline-block; padding: 0 6px; border-radius: 6px; background: var(--verre-fort); color: var(--texte); box-shadow: inset 0 0 0 1px var(--lisere); }
 
-/* ── Feuilles ────────────────────────────────────────────────────────────── */
+/* ── Feuilles : les panneaux du menu, posés en bas ───────────────────────── */
 dialog {
   width: min(480px, 100vw); max-width: 100vw; max-height: 90dvh;
   margin: auto auto 0; padding: 10px 16px max(18px, env(safe-area-inset-bottom));
-  border: 1px solid var(--lisere); border-bottom: 0; border-radius: 26px 26px 0 0;
-  background: #10121b; color: var(--texte);
+  border: 0; border-radius: 28px 28px 0 0;
+  background: linear-gradient(165deg, var(--reflet), transparent 40%), var(--feuille);
+  box-shadow: inset 0 1px 0 var(--lisere), 0 -20px 50px -20px var(--ombre);
+  color: var(--texte);
 }
-dialog[open] { animation: monte .28s var(--souple); }
+dialog[open] { animation: monte .24s var(--souple); }
 @keyframes monte { from { transform: translateY(40px); opacity: 0; } }
-dialog::backdrop { background: rgba(0, 0, 0, .55); }
-.poignee { width: 40px; height: 5px; border-radius: 3px; background: var(--verre-fort); margin: 2px auto 12px; }
-dialog h2 { font-size: 18px; margin: 4px 4px 14px; }
+dialog::backdrop { background: var(--voile); }
+.poignee { width: 40px; height: 5px; border-radius: 3px; background: var(--texte-pale); opacity: .5; margin: 2px auto 12px; }
+dialog h2 { font-size: 20px; margin: 4px 4px 14px; letter-spacing: -.02em; }
 .liste { display: flex; flex-direction: column; gap: 8px; }
 .liste .touche { justify-content: flex-start; padding: 0 18px; }
-.liste .danger { color: rgb(var(--arret)); }
-.liste .danger svg { color: rgb(var(--arret)); }
+.liste .danger, .liste .danger svg { color: color-mix(in srgb, rgb(var(--arret)) var(--part-accent), var(--ton-accent)); }
 
 .apercu {
   width: min(62vw, 240px); aspect-ratio: 1; margin: 6px auto 16px;
   border-radius: 50%; overflow: hidden;
-  background: var(--verre); border: 2px solid rgb(var(--tv) / .5);
+  background: var(--verre); box-shadow: inset 0 0 0 2px rgb(var(--accent) / .55);
   display: grid; place-items: center; color: var(--texte-pale);
 }
 .apercu canvas { width: 100%; height: 100%; }
@@ -352,29 +412,23 @@ dialog h2 { font-size: 18px; margin: 4px 4px 14px; }
   width: 100%; min-height: 60px; touch-action: none;
   -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
 }
-.micro svg { color: rgb(var(--tv)); }
+.micro svg { color: rgb(var(--accent)); }
 .micro.ecoute {
-  background: rgb(var(--arret) / .20); border-color: rgb(var(--arret) / .55); transform: scale(.98);
+  background: rgb(var(--arret) / .20); box-shadow: inset 0 0 0 2px rgb(var(--arret) / .7); transform: scale(.98);
   animation: ecoute 1.1s ease-in-out infinite;
 }
 .micro.ecoute svg { color: rgb(var(--arret)); }
 .micro.analyse { opacity: .7; }
-@keyframes ecoute { 50% { box-shadow: 0 0 0 8px rgb(var(--arret) / .12); } }
+@keyframes ecoute { 50% { box-shadow: inset 0 0 0 2px rgb(var(--arret) / .7), 0 0 0 8px rgb(var(--arret) / .12); } }
 
 /* ── Connexion sécurisée ─────────────────────────────────────────────────── */
 .explication { margin: 0 4px 12px; color: var(--texte-doux); line-height: 1.5; font-size: 15px; }
-.statut-securite {
-  margin: 0 0 12px; padding: 10px 14px; border-radius: 14px;
-  background: var(--verre); border: 1px solid var(--lisere); font-size: 14px; color: var(--texte-doux);
-}
-.statut-securite.bon { color: rgb(var(--tv)); border-color: rgb(var(--tv) / .35); }
+.statut-securite { margin: 0 0 12px; padding: 10px 14px; border-radius: 14px; font-size: 14px; color: var(--texte-doux); }
+.statut-securite.bon { color: color-mix(in srgb, rgb(var(--tv)) var(--part-accent), var(--ton-accent)); box-shadow: inset 0 0 0 1px rgb(var(--tv) / .45); }
 .etapes { margin: 0 0 12px; padding-left: 22px; color: var(--texte-doux); line-height: 1.5; font-size: 14px; }
 .etapes li + li { margin-top: 8px; }
 .etapes a.touche { min-height: 52px; color: var(--texte); text-decoration: none; margin-top: 4px; }
-details.plateforme {
-  margin: 0 0 10px; padding: 10px 14px; border-radius: 14px;
-  background: var(--verre); border: 1px solid var(--lisere); font-size: 14px; color: var(--texte-doux); line-height: 1.5;
-}
+details.plateforme { margin: 0 0 10px; padding: 10px 14px; border-radius: 14px; font-size: 14px; color: var(--texte-doux); line-height: 1.5; }
 details.plateforme summary { color: var(--texte); font-weight: 600; cursor: pointer; }
 details.plateforme ol { margin: 8px 0 0; padding-left: 20px; }
 #securite { overflow-y: auto; }
@@ -388,19 +442,26 @@ details.plateforme ol { margin: 8px 0 0; padding-left: 20px; }
   /* left: 50 % borne la largeur spontanée à la moitié de l'écran : sans max-content, un
      message court se coupait en deux lignes. */
   width: max-content; max-width: calc(100vw - 32px);
-  padding: 12px 18px; border-radius: 16px;
-  background: rgba(24, 27, 38, .96); border: 1px solid var(--lisere);
-  box-shadow: 0 16px 40px -12px rgba(0, 0, 0, .8);
-  font-size: 15px; text-align: center;
+  padding: 12px 18px; border-radius: 999px;
+  background: var(--feuille);
+  box-shadow: inset 0 0 0 1px var(--lisere), 0 16px 40px -12px var(--ombre);
+  font-size: 15px; font-weight: 600; text-align: center;
   transition: opacity .2s, transform .25s var(--souple);
   z-index: 10;
 }
 #message.visible { opacity: 1; transform: translate(-50%, 0); }
 
 @media (max-height: 700px) {
-  .ecran { gap: 12px; }
+  /* iPhone SE (375×667), encart ouvert : Retour et Accueil doivent rester au-dessus du pli. */
+  .ecran { gap: 8px; }
+  header { min-height: 44px; }
+  .encart { padding: 8px 46px 8px 12px; line-height: 1.35; }
+  .encart ol { margin-top: 2px; }
+  .encart li + li { margin-top: 0; }
+  .encart .note { margin-top: 4px; }
   .pave { width: min(74vw, 280px); }
-  .mode { min-height: 64px; }
+  .mode { min-height: 64px; padding: 8px 10px; flex-direction: row; align-items: center; justify-content: center; }
+  .mode svg { width: 34px; height: 34px; padding: 6px; }
   .touche { min-height: 54px; }
   .jauge { height: 54px; }
 }
@@ -412,7 +473,7 @@ details.plateforme ol { margin: 8px 0 0; padding-left: 20px; }
 <body>
 
 <main id="appairage" class="ecran" hidden>
-  <div class="marque"><b>HUB</b></div>
+  <div class="marque"><i></i>HUB</div>
   <h1>Relier ce téléphone</h1>
   <p>Tapez le code à 6 chiffres affiché sur la TV, sous le QR code, en laissant cet écran ouvert<br>
     <span class="chemin">Réglages → Télécommande</span></p>
@@ -426,7 +487,7 @@ details.plateforme ol { margin: 8px 0 0; padding-left: 20px; }
 
 <main id="telecommande" class="ecran" hidden>
   <header>
-    <div class="marque"><b>HUB</b></div>
+    <div class="marque"><i></i>HUB</div>
     <span class="pastille" id="contexte" aria-live="polite">…</span>
     <button class="rond" data-action="options" aria-label="Plus d'options">
       <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
@@ -1102,8 +1163,9 @@ function appliquerPreferences() {
 
 // Retour et Accueil servent à chaque instant : ils doivent tenir dans l'écran sans
 // défiler. L'encart du premier appairage (200 px et plus) les poussait sous le pli à
-// 390×844. Le pavé cède la hauteur qui manque, sans descendre sous 200 px, en deçà
-// desquels un glissement n'a plus la place de se distinguer d'un toucher.
+// 390×844. Le pavé cède la hauteur qui manque, sans descendre sous 200 px (160 sur un
+// écran de moins de 700 px), en deçà desquels un glissement n'a plus la place de se
+// distinguer d'un toucher.
 const PAVE_MINIMUM = 200;
 function ajusterPave() {
   const pave = $("pave-tactile");
@@ -1115,7 +1177,9 @@ function ajusterPave() {
   const haut = pave.getBoundingClientRect().top + scrollY;
   const dessous = $("rangee-retour").getBoundingClientRect().bottom - pave.getBoundingClientRect().bottom;
   const reste = innerHeight - 12 - haut - dessous;
-  pave.style.height = `${Math.round(Math.max(PAVE_MINIMUM, Math.min(naturelle, reste)))}px`;  // CSSOM : permis par la CSP
+  // Sur un petit écran (iPhone SE), 160 px suffisent à glisser ; Retour sous le pli, jamais.
+  const minimum = innerHeight < 700 ? 160 : PAVE_MINIMUM;
+  pave.style.height = `${Math.round(Math.max(minimum, Math.min(naturelle, reste)))}px`;  // CSSOM : permis par la CSP
 }
 addEventListener("resize", ajusterPave);
 // L'encart change de hauteur en s'ouvrant, se fermant, ou en changeant de texte.
