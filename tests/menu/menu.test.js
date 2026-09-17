@@ -241,6 +241,22 @@ test("commandes vocales : ouvrir, revenir, lancer", async () => {
   assert.deepEqual(await messages("choix"), [{ type: "choix", mode: "tv" }]);
 });
 
+test("réglages : l'éditeur de profil ouvert depuis Profils passe devant la feuille", async () => {
+  const r = deuxProfils();
+  await ouvrir({ retour: true, reglages: r });
+  await touche("r");
+  await page.click('[data-section="profils"]');
+  await page.click(`[data-cle="modifier-${r.profils[1].id}"]`);
+  assert.deepEqual((await calques()).sort(), ["editeur-profil", "reglages"]);
+  // Le point le plus à droite du dialogue est aussi celui que la feuille recouvrait.
+  await page.waitForTimeout(700);
+  const dessus = await page.evaluate(() => {
+    const b = document.querySelector("#editeur-profil .dialogue, #editeur-profil > *").getBoundingClientRect();
+    return document.elementFromPoint(b.right - 8, b.top + b.height / 2)?.closest(".calque")?.id;
+  });
+  assert.equal(dessus, "editeur-profil");
+});
+
 test("profils : créer un profil au clavier, puis l'utiliser", async () => {
   await ouvrir();
   await touche("p");
