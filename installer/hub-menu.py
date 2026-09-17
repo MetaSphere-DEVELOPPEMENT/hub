@@ -83,6 +83,8 @@ def chemins():
         "telecommande-appairage": execution / "telecommande-appairage",
         "lecture": execution / "lecture.json",
         "recopie-code": execution / "recopie-code.json",
+        # Présent : le menu affiche son compteur d'images (installer/menu/README.md).
+        "mesurer-fluidite": execution / "mesurer-fluidite",
     }
 
 
@@ -1062,6 +1064,34 @@ def page_du_menu():
     return None
 
 
+# ── Fluidité ──────────────────────────────────────────────────────────────
+def mesure_fluidite_demandee(c, environ=os.environ):
+    """HUB_FPS=1 pour un lancement à la main ; le fichier pour la session kiosque, dont
+    on ne change pas l'environnement par SSH. Sous /run : oublié au redémarrage."""
+    return environ.get("HUB_FPS") == "1" or bool(c.get("mesurer-fluidite") and Path(c["mesurer-fluidite"]).exists())
+
+
+def ligne_fps(message):
+    """Le relevé du compteur de la page, en une ligne de journal. Rien d'autre que des
+    nombres et un nom d'écran : la page n'écrit pas ce qu'elle veut dans le journal."""
+    try:
+        valeurs = {k: float(message[k]) for k in ("moyenne", "min", "longues", "pire", "fenetre")}
+    except (KeyError, TypeError, ValueError):
+        return None
+    ecran = message.get("ecran")
+    ecran = ecran if isinstance(ecran, str) and re.fullmatch(r"[a-z-]{1,24}", ecran) else "?"
+    return (f"hub-menu : fluidité {ecran} — {valeurs['moyenne']:.1f} images/s, pire seconde "
+            f"{valeurs['min']:.0f}, {valeurs['longues']:.0f} images > 50 ms (pire {valeurs['pire']:.0f} ms) "
+            f"sur {valeurs['fenetre']:.1f} s")
+
+
+def ligne_rendu(infos):
+    """Ce qui décide de la fluidité et qu'on ne voit pas depuis le canapé, en une ligne
+    au démarrage : `journalctl --user -b | grep "hub-menu : rendu"`."""
+    ordre = ("webkit", "acceleration", "gsk", "ecran", "frequence", "echelle", "environnement")
+    return "hub-menu : rendu " + " ; ".join(f"{k}={infos[k]}" for k in ordre if infos.get(k) not in (None, ""))
+
+
 # ── Interface ─────────────────────────────────────────────────────────────
 def lancer():
     import gi
@@ -1095,6 +1125,28 @@ def lancer():
             fenetre.set_child(self.vue_web(page) if WebKit and page else self.vue_simple())
             fenetre.fullscreen()
             fenetre.present()
+            if self.vue:
+                # Une seconde : le temps que la fenêtre plein écran soit sur son moniteur.
+                GLib.timeout_add_seconds(1, self.journaliser_rendu)
+
+        def journaliser_rendu(self):
+            infos = {}
+            try:
+                infos["webkit"] = f"{WebKit.get_major_version()}.{WebKit.get_minor_version()}.{WebKit.get_micro_version()}"
+                infos["acceleration"] = self.vue.get_settings().get_hardware_acceleration_policy().value_nick
+                infos["gsk"] = type(self.fenetre.get_renderer()).__name__
+                moniteur = self.fenetre.get_display().get_monitor_at_surface(self.fenetre.get_surface())
+                geometrie = moniteur.get_geometry()
+                infos["ecran"] = f"{geometrie.width}x{geometrie.height}"
+                infos["frequence"] = f"{moniteur.get_refresh_rate() / 1000:.2f} Hz"
+                infos["echelle"] = moniteur.get_scale_factor()
+                infos["environnement"] = " ".join(
+                    f"{k}={os.environ[k]}" for k in sorted(os.environ)
+                    if k in ("GSK_RENDERER", "HUB_FPS") or k.startswith("WEBKIT_"))
+            except Exception as erreur:  # un journal incomplet ne doit jamais empêcher le menu
+                infos["environnement"] = f"(relevé interrompu : {erreur})"
+            print(ligne_rendu(infos), file=sys.stderr, flush=True)
+            return False
 
         def do_shutdown(self):
             # Le menu se ferme (un mode démarre) : plus d'écran d'appairage à la TV.
@@ -1127,6 +1179,7 @@ def lancer():
                 "tempsEcran": temps_ecran(),
                 "allumage": etat_allumage(),
                 "reveilProgramme": reveil_programme(deja_ouvert=deja_ouvert),
+                "fps": mesure_fluidite_demandee(c),
             }
             cache = lire_json(c["meteo"])
             if cache and "donnees" in cache:
@@ -1254,6 +1307,10 @@ def lancer():
                         r = meteo(c, lat, lon)
                         return r and {"type": "meteo", "donnees": r["donnees"], "releveLe": r["releve"] * 1000, "horsLigne": r["horsLigne"]}
                     self.en_fond(releve)
+            elif genre == "fps":
+                ligne = ligne_fps(message)
+                if ligne:
+                    print(ligne, file=sys.stderr, flush=True)
             elif genre == "geocodage" and isinstance(message.get("nom"), str):
                 self.en_fond(lambda: {"type": "geocodage", "resultats": geocodage(message["nom"], message.get("langue", "fr"))})
             elif genre == "appairage":

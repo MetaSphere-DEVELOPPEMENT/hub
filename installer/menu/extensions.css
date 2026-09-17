@@ -45,3 +45,13 @@ body.cadre-actif .ambiant-heure { font-size: 6rem; font-weight: 300; }
 body.cadre-actif .ambiant-date { font-size: 1.4rem; margin-top: .3rem; color: rgb(255 255 255 / .85); }
 body.cadre-actif .ambiant-meteo { justify-content: flex-end; font-size: 1.3rem; margin-top: .8rem; color: rgb(255 255 255 / .85); }
 body.cadre-actif .ambiant-meteo .picto-meteo { width: 2.4rem; height: 2.4rem; }
+
+/* ── Compteur d'images (fluidite.js, éteint par défaut) ─────────────────────
+   Opaque et sans flou : l'instrument ne doit pas coûter ce qu'il mesure. */
+.compteur-fps {
+  position: fixed; top: .6rem; left: .6rem; z-index: 60;
+  padding: .3rem .7rem; border-radius: .5rem;
+  font: 600 .9rem/1.3 ui-monospace, "Ubuntu Sans Mono", monospace; font-variant-numeric: tabular-nums;
+  color: #fff; background: rgb(0 0 0 / .7);
+  pointer-events: none;
+}

@@ -453,6 +453,9 @@ supposent pas :
 - [ ] sortie audio HDMI : présence, canaux, passthrough
 - [ ] débit Ethernet réel, mesuré vers la box
 
+La fluidité du menu en 4K sur l'UHD 630 ne se mesure aussi qu'à sa place : procédure
+et cases à remplir dans `installer/menu/README.md`.
+
 ## Avant la réinstallation
 
 - [x] Sauvegarde de `/home` archivée sur le disque externe, intégrité vérifiée.
