@@ -2700,7 +2700,59 @@ const LIGNES_APPAIRAGE = [
   { cle: "empreinteRacine", rendre: v => el("div", { class: "empreinte-paires", title: t("telecommande.empreinte") },
     groupesEmpreinte(v).map(ligne => el("div", {}, ligne))) },
   { cle: "telephones", toujours: true, rendre: v => el("div", { class: "aide" }, t("telecommande.telephones", { n: v ?? 0 })) },
+  { cle: "listeTelephones", rendre: v => listeTelephones(v) },
 ];
+
+// Le dernier usage en toutes lettres : « aujourd'hui », « il y a 3 jours », puis la
+// date. Ce qu'on veut savoir devant la TV, c'est lequel de ces téléphones ne sert plus.
+function dernierUsage(ms) {
+  if (typeof ms !== "number" || !isFinite(ms) || ms <= 0) return t("telecommande.vu.jamais");
+  const jours = Math.floor((Date.now() - ms) / 86400000);
+  if (jours <= 0) return t("telecommande.vu.aujourdhui");
+  if (jours === 1) return t("telecommande.vu.hier");
+  if (jours < 30) return t("telecommande.vu.jours", { n: jours });
+  return new Date(ms).toLocaleDateString(locale(), { day: "numeric", month: "long", year: "numeric" });
+}
+
+// Les téléphones reliés, chacun avec sa dernière utilisation et de quoi le retirer.
+// Un même téléphone n'y figure qu'une fois : le ré-appairer renouvelle son entrée au
+// lieu d'en ajouter une (installer/telecommande, Jetons.creer).
+//
+// Retirer demande deux appuis : le premier change le bouton en « Confirmer », le
+// second envoie. Pas de fenêtre de confirmation — à la télécommande, un second appui
+// sur le même bouton se comprend mieux qu'un dialogue où il faut retrouver le focus.
+let retraitAConfirmer = null;
+let minuterieRetrait = null;
+function listeTelephones(liste) {
+  if (!Array.isArray(liste) || !liste.length) return null;
+  return el("ul", { class: "telephones" }, liste.slice(0, 20).map(p => {
+    const confirme = retraitAConfirmer === p.id;
+    return el("li", {},
+      el("div", { class: "telephone-nom" }, p.nom || t("telecommande.telephone")),
+      el("div", { class: "aide" }, t("telecommande.vu", { quand: dernierUsage(p.vu) })),
+      el("button", {
+        class: `option${confirme ? " confirme" : ""}`, "data-nav": true, "data-cle": `retirer-${p.id}`,
+        onclick: () => retirerTelephone(p.id),
+      }, confirme ? t("telecommande.retirer.confirmer") : t("telecommande.retirer")));
+  }));
+}
+
+function retirerTelephone(id) {
+  clearTimeout(minuterieRetrait);
+  if (retraitAConfirmer !== id) {
+    retraitAConfirmer = id;
+    son("ok");
+    // Le doigt part ailleurs, la confirmation s'oublie : on ne laisse pas un bouton
+    // « Confirmer » armé sur l'écran d'appairage.
+    minuterieRetrait = setTimeout(() => { retraitAConfirmer = null; if (surTelecommande()) rendreSection(); }, 8000);
+    return rendreSection();
+  }
+  retraitAConfirmer = null;
+  envoyer({ type: "telecommande-retirer", id });
+  son("ok");
+  annoncer(t("telecommande.retire"));
+  rendreSection();
+}
 
 // « AB:CD:… » (32 paires) → quatre lignes de huit paires, coupées en deux groupes de
 // quatre : on compare sur le téléphone groupe par groupe, sans perdre sa ligne.
@@ -2741,10 +2793,14 @@ setInterval(() => {
 // hub-telecommande n'ouvre l'appairage que pendant que cet écran est à la TV : on dit à
 // hub-menu quand il apparaît et disparaît (changement de section, fermeture, mode ambiant).
 let appairageAffiche = false;
+const surTelecommande = () => pile.at(-1) === "reglages" && sectionCourante === "telecommande";
 function majAppairage() {
-  const affiche = pile.at(-1) === "reglages" && sectionCourante === "telecommande";
+  const affiche = surTelecommande();
   if (affiche === appairageAffiche) return;
   appairageAffiche = affiche;
+  // Quitter l'écran désarme un « Confirmer » resté en place : y revenir ne doit pas
+  // retirer un téléphone au premier appui.
+  if (!affiche) { clearTimeout(minuterieRetrait); retraitAConfirmer = null; }
   envoyer({ type: "appairage", affiche });
 }
 

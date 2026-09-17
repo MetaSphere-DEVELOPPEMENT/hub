@@ -194,6 +194,11 @@ header .marque { margin-right: auto; }
 .pastille.bureau::before { background: rgb(var(--bureau)); box-shadow: 0 0 10px rgb(var(--bureau)); }
 .pastille.hors-ligne { color: color-mix(in srgb, rgb(var(--arret)) var(--part-accent), var(--ton-accent)); }
 .pastille.hors-ligne::before { background: rgb(var(--arret)); }
+/* Le HUB n'a pas répondu, mais la page réessaie toute seule : ambre et non rouge,
+   parce qu'il n'y a rien à faire — surtout pas retaper un code. */
+.pastille.reconnexion { color: color-mix(in srgb, rgb(var(--bureau)) var(--part-accent), var(--ton-accent)); }
+.pastille.reconnexion::before { background: rgb(var(--bureau)); animation: battement 1.4s var(--souple) infinite; }
+@keyframes battement { 50% { opacity: .25; } }
 .rond { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; }
 
 /* ── Modes : les cartes de l'accueil, en petit ───────────────────────────── */
@@ -757,15 +762,27 @@ details.plateforme ol { margin: 8px 0 0; padding-left: 20px; }
 
 const $ = id => document.getElementById(id);
 const CLE_JETON = "hub-telecommande-jeton";
+// L'identifiant d'appareil, tiré par le HUB et rendu au téléphone à l'appairage. Il
+// n'ouvre rien tout seul : il ne sert qu'à dire au HUB, APRÈS un code juste, « c'est le
+// même téléphone qu'avant » — le HUB renouvelle alors son entrée au lieu d'en ajouter
+// une. Gardé même quand le jeton est effacé : c'est justement ce cas qu'il rattrape.
+const CLE_APPAREIL = "hub-telecommande-appareil";
 const COTE_PHOTO = 512;
 
 // localStorage peut être refusé (navigation privée sur certains navigateurs) : la
 // télécommande marche alors le temps de la page, et redemande le code au rechargement.
 let jetonMemoire = null;
+let appareilMemoire = null;
 function lireJeton() { try { return localStorage.getItem(CLE_JETON) || jetonMemoire; } catch { return jetonMemoire; } }
 function garderJeton(j) {
   jetonMemoire = j;
   try { if (j) localStorage.setItem(CLE_JETON, j); else localStorage.removeItem(CLE_JETON); } catch { /* mémoire seule */ }
+}
+function lireAppareil() { try { return localStorage.getItem(CLE_APPAREIL) || appareilMemoire; } catch { return appareilMemoire; } }
+function garderAppareil(a) {
+  if (!/^[0-9a-f]{32}$/.test(a || "")) return;
+  appareilMemoire = a;
+  try { localStorage.setItem(CLE_APPAREIL, a); } catch { /* mémoire seule */ }
 }
 
 // Retour haptique. Android : l'API de vibration. iOS n'a pas cette API, mais Safari
@@ -803,6 +820,14 @@ const RAISONS = {
 
 class JetonRefuse extends Error {}
 
+// Deux 401 d'affilée avant de se croire délié, jamais un seul. Un 401 est une réponse
+// du HUB, donc une révocation… sauf pendant les quelques secondes où le service
+// redémarre (changement de session, mise à jour) et relit son fichier : un seul refus
+// ne doit pas effacer le jeton et renvoyer à l'écran d'appairage, c'est exactement ce
+// qui faisait ré-appairer — et donc compter deux fois — le même téléphone. Une vraie
+// révocation, elle, arrive au refus suivant : au plus six secondes de sursis.
+let refusJeton = 0;
+
 async function api(chemin, corps, type = "application/json") {
   const options = { method: corps === undefined ? "GET" : "POST", headers: {}, cache: "no-store" };
   const jeton = lireJeton();
@@ -815,12 +840,18 @@ async function api(chemin, corps, type = "application/json") {
   let donnees = null;
   try { donnees = await reponse.json(); } catch { /* corps vide */ }
   if (reponse.status === 401 && chemin !== "/api/appairer") {
+    if (++refusJeton < 2) {
+      // Pastille « Reconnexion… » et relance armée : on saura dans une seconde.
+      marquerEnLigne(false);
+      throw new JetonRefuse();
+    }
     // Jeton révoqué depuis le HUB : on revient à l'appairage plutôt que d'échouer en silence.
     garderJeton(null);
     afficher("appairage");
     message("Ce téléphone n'est plus relié au HUB");
     throw new JetonRefuse();
   }
+  if (reponse.status !== 401) refusJeton = 0;
   return { statut: reponse.status, donnees };
 }
 
@@ -865,9 +896,13 @@ async function relier() {
   reliage = true;
   $("relier").disabled = true;
   try {
-    const { statut, donnees } = await api("/api/appairer", { code, nom: nomDuTelephone() });
+    // L'appareil accompagne le code : le HUB renouvelle l'entrée de CE téléphone au
+    // lieu d'en ajouter une (et le jeton précédent, s'il en reste un, passe avant).
+    const { statut, donnees } = await api("/api/appairer",
+                                          { code, nom: nomDuTelephone(), appareil: lireAppareil() });
     if (statut === 200 && donnees?.jeton) {
       garderJeton(donnees.jeton);
+      garderAppareil(donnees.appareil);
       vibrer([15, 60, 25]);
       $("code").blur();
       afficher("telecommande");
@@ -913,7 +948,7 @@ function envoyer(nom, extra = {}) {
       if (donnees.ok && nom === "eteindre") message("Confirmez sur la TV");
       return donnees;
     } catch (e) {
-      if (!(e instanceof JetonRefuse)) { marquerEnLigne(false); message("HUB injoignable"); }
+      if (!(e instanceof JetonRefuse)) { marquerEnLigne(false); message("HUB injoignable — reconnexion…"); }
       return null;
     } finally {
       enAttente--;
@@ -984,20 +1019,51 @@ $("form-texte").addEventListener("submit", async e => {
   if (r?.ok) { champ.value = ""; champ.blur(); message("Texte envoyé"); }
 });
 
-// ── État ───────────────────────────────────────────────────────────────────
+// ── État et reconnexion ────────────────────────────────────────────────────
+// POURQUOI UNE RECONNEXION. Entrer dans un mode peut couper la télécommande quelques
+// secondes : le mode Bureau change de session (le service redémarre avec elle), une
+// mise à jour la relance, le wifi du téléphone se rendort. Rien de tout cela n'annule
+// l'appairage — le jeton reste valable. La page doit donc revenir toute seule au lieu
+// de rester sur « HUB injoignable », qui donnait l'impression d'être délié et faisait
+// retaper un code (et compter un téléphone de plus).
 const LIBELLES = { menu: "Menu", kodi: "Kodi", bureau: "Bureau" };
+// Relances espacées : tout de suite, puis 1, 2, 4, 8 s… jusqu'à 15 s. Assez vif pour
+// que le retour d'un mode soit invisible, assez calme pour ne pas vider la batterie
+// si le HUB est éteint pour la nuit.
+const RELANCES_MS = [1000, 2000, 4000, 8000, 15000];
+let relance = null;
+let essaisReconnexion = 0;
+
 function marquerEnLigne(enLigne) {
-  if (!enLigne) {
-    const p = $("contexte");
-    p.className = "pastille hors-ligne";
-    p.textContent = "Hors ligne";
+  const p = $("contexte");
+  if (enLigne) {
+    essaisReconnexion = 0;
+    clearTimeout(relance);
+    relance = null;
+    return;
   }
+  // Tant qu'on réessaie, on le dit : « Hors ligne » seulement quand ça dure, sinon
+  // on annonce une panne là où il n'y a qu'un mode qui démarre.
+  const perdu = essaisReconnexion > RELANCES_MS.length;
+  p.className = `pastille ${perdu ? "hors-ligne" : "reconnexion"}`;
+  p.textContent = perdu ? "Hors ligne" : "Reconnexion…";
+  programmerRelance();
 }
-async function lireEtat() {
-  if (!lireJeton() || document.hidden) return;
+
+function programmerRelance() {
+  if (relance) return;
+  const attente = RELANCES_MS[Math.min(essaisReconnexion, RELANCES_MS.length - 1)];
+  essaisReconnexion++;
+  relance = setTimeout(() => { relance = null; lireEtat(true); }, attente);
+}
+
+async function lireEtat(malgreCache = false) {
+  // Écran éteint : inutile de sonder, mais la relance reste armée pour le réveil.
+  if (!lireJeton() || (document.hidden && !malgreCache)) return;
   try {
     const { statut, donnees } = await api("/api/etat");
     if (statut !== 200) return;
+    marquerEnLigne(true);
     const p = $("contexte");
     p.className = `pastille ${donnees.contexte || ""}`;
     p.textContent = LIBELLES[donnees.contexte] || "En veille";
@@ -1005,8 +1071,18 @@ async function lireEtat() {
     if (!(e instanceof JetonRefuse)) marquerEnLigne(false);
   }
 }
-setInterval(lireEtat, 6000);
-document.addEventListener("visibilitychange", lireEtat);
+setInterval(() => lireEtat(), 6000);
+// Retour sur la page, réveil de l'écran, wifi retrouvé : on ne fait pas attendre la
+// prochaine relance, on redemande tout de suite.
+function reprendre() {
+  if (document.hidden) return;
+  clearTimeout(relance);
+  relance = null;
+  lireEtat();
+}
+document.addEventListener("visibilitychange", reprendre);
+addEventListener("online", reprendre);
+addEventListener("pageshow", reprendre);
 
 // ── Pavé tactile ───────────────────────────────────────────────────────────
 // Glisser = une flèche ; rester posé après le glissement = la flèche se répète ;
@@ -1478,6 +1554,7 @@ async function arriverParTransfert() {
     const { statut, donnees } = await api("/api/appairer", { transfert: trouve[1], nom: nomDuTelephone() });
     if (statut === 200 && donnees?.jeton) {
       garderJeton(donnees.jeton);
+      garderAppareil(donnees.appareil);
       afficher("telecommande");
       message("Connexion sécurisée : dictée disponible");
       return true;
