@@ -182,19 +182,19 @@ function lancementRefuse(mode) { return extensions.avantLancer.some(f => f(mode)
 // marques déposées n'ont rien à faire dans le dépôt. tests/test_hub_web.py vérifie
 // que les identifiants sont les mêmes des deux côtés.
 const SERVICES = [
-  { id: "youtube", halo: "#ff3b30", categorie: "streaming", nom: "YouTube", fond: "linear-gradient(135deg, #ff3b30, #b3001b)", encre: "#fff", style: "font-weight:800;letter-spacing:-.035em" },
-  { id: "netflix", halo: "#e50914", categorie: "streaming", nom: "NETFLIX", fond: "radial-gradient(120% 140% at 50% 120%, #4a0508, #0b0b0b 65%)", encre: "#e50914", style: "font-weight:900;letter-spacing:.06em;transform:scaleY(1.15)" },
-  { id: "primevideo", halo: "#1f9bff", categorie: "streaming", nom: "prime video", fond: "linear-gradient(135deg, #1f9bff, #0f171e 72%)", encre: "#fff", style: "font-weight:700;letter-spacing:-.02em;text-transform:lowercase" },
-  { id: "disneyplus", halo: "#3d6bff", categorie: "streaming", nom: "Disney+", fond: "linear-gradient(140deg, #2a55d9, #0b1650 58%, #040a2c)", encre: "#fff", style: "font-weight:600;font-style:italic;letter-spacing:-.02em" },
-  { id: "canalplus", halo: "#c8ccd4", categorie: "streaming", nom: "CANAL+", fond: "linear-gradient(160deg, #2b2b2b, #000 60%)", encre: "#fff", style: "font-weight:900;letter-spacing:.02em" },
-  { id: "twitch", halo: "#a970ff", categorie: "streaming", nom: "twitch", fond: "linear-gradient(135deg, #a970ff, #6a2bd9)", encre: "#fff", style: "font-weight:800;letter-spacing:-.02em" },
-  { id: "arte", halo: "#ff6a2b", categorie: "streaming", nom: "arte", fond: "linear-gradient(135deg, #ff6a2b, #d8350c)", encre: "#fff", style: "font-weight:800;letter-spacing:-.04em" },
-  { id: "francetv", halo: "#3b4bff", categorie: "streaming", nom: "france.tv", fond: "linear-gradient(135deg, #3b4bff, #0b1b8f)", encre: "#fff", style: "font-weight:700;letter-spacing:-.02em" },
-  { id: "geforcenow", halo: "#76b900", categorie: "jeux", nom: "GeForce NOW", fond: "linear-gradient(150deg, #1c1c1c, #070707 70%)", encre: "#76b900", style: "font-weight:800;letter-spacing:-.01em" },
-  { id: "xcloud", halo: "#17a317", categorie: "jeux", nom: "Xbox Cloud", fond: "linear-gradient(135deg, #17a317, #0b4d0b)", encre: "#fff", style: "font-weight:700;letter-spacing:-.01em" },
-  { id: "boosteroid", halo: "#ff3d8b", categorie: "jeux", nom: "Boosteroid", fond: "linear-gradient(135deg, #6a2cff, #ff3d8b)", encre: "#fff", style: "font-weight:800;letter-spacing:-.02em" },
-  { id: "steam", halo: "#66c0f4", categorie: "jeux", nom: "STEAM", appli: true, fond: "linear-gradient(135deg, #2a475e, #171a21)", encre: "#c7d5e0", style: "font-weight:700;letter-spacing:.22em" },
-  { id: "moonlight", halo: "#aab4c8", categorie: "jeux", nom: "Moonlight", appli: true, fond: "linear-gradient(135deg, #3a3f4b, #16181d)", encre: "#e8ecf5", style: "font-weight:600;letter-spacing:-.01em" },
+  { id: "youtube", categorie: "streaming", halo: "#ff3b30", nom: "YouTube", fond: "linear-gradient(135deg, #ff3b30, #b3001b)", encre: "#fff", style: "font-weight:800;letter-spacing:-.035em" },
+  { id: "netflix", categorie: "streaming", halo: "#e50914", nom: "NETFLIX", fond: "radial-gradient(120% 140% at 50% 120%, #4a0508, #0b0b0b 65%)", encre: "#e50914", style: "font-weight:900;letter-spacing:.06em;transform:scaleY(1.15)" },
+  { id: "primevideo", categorie: "streaming", halo: "#1f9bff", nom: "prime video", fond: "linear-gradient(135deg, #1f9bff, #0f171e 72%)", encre: "#fff", style: "font-weight:700;letter-spacing:-.02em;text-transform:lowercase" },
+  { id: "disneyplus", categorie: "streaming", halo: "#3d6bff", nom: "Disney+", fond: "linear-gradient(140deg, #2a55d9, #0b1650 58%, #040a2c)", encre: "#fff", style: "font-weight:600;font-style:italic;letter-spacing:-.02em" },
+  { id: "canalplus", categorie: "streaming", halo: "#c8ccd4", nom: "CANAL+", fond: "linear-gradient(160deg, #2b2b2b, #000 60%)", encre: "#fff", style: "font-weight:900;letter-spacing:.02em" },
+  { id: "twitch", categorie: "streaming", halo: "#a970ff", nom: "twitch", fond: "linear-gradient(135deg, #a970ff, #6a2bd9)", encre: "#fff", style: "font-weight:800;letter-spacing:-.02em" },
+  { id: "arte", categorie: "streaming", halo: "#ff6a2b", nom: "arte", fond: "linear-gradient(135deg, #ff6a2b, #d8350c)", encre: "#fff", style: "font-weight:800;letter-spacing:-.04em" },
+  { id: "francetv", categorie: "streaming", halo: "#3b4bff", nom: "france.tv", fond: "linear-gradient(135deg, #3b4bff, #0b1b8f)", encre: "#fff", style: "font-weight:700;letter-spacing:-.02em" },
+  { id: "geforcenow", categorie: "jeux", halo: "#76b900", nom: "GeForce NOW", fond: "linear-gradient(150deg, #1c1c1c, #070707 70%)", encre: "#76b900", style: "font-weight:800;letter-spacing:-.01em" },
+  { id: "xcloud", categorie: "jeux", halo: "#17a317", nom: "Xbox Cloud", fond: "linear-gradient(135deg, #17a317, #0b4d0b)", encre: "#fff", style: "font-weight:700;letter-spacing:-.01em" },
+  { id: "boosteroid", categorie: "jeux", halo: "#ff3d8b", nom: "Boosteroid", fond: "linear-gradient(135deg, #6a2cff, #ff3d8b)", encre: "#fff", style: "font-weight:800;letter-spacing:-.02em" },
+  { id: "steam", categorie: "jeux", halo: "#66c0f4", nom: "STEAM", appli: true, fond: "linear-gradient(135deg, #2a475e, #171a21)", encre: "#c7d5e0", style: "font-weight:700;letter-spacing:.22em" },
+  { id: "moonlight", categorie: "jeux", halo: "#aab4c8", nom: "Moonlight", appli: true, fond: "linear-gradient(135deg, #3a3f4b, #16181d)", encre: "#e8ecf5", style: "font-weight:600;letter-spacing:-.01em" },
 ];
 function modeDuService(s) { return s.categorie === "jeux" ? "gaming" : "tv"; }
 function etatService(s) { return INITIAL.services?.services?.[s.id] || null; }
