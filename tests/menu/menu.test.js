@@ -630,6 +630,22 @@ test("mise à jour : un état « terminee » ancien ne relance pas le menu", asy
   assert.deepEqual(await messages("relancer"), []);
 });
 
+test("mise à jour : une version plus récente rend le bouton Installer malgré un « terminee » ancien", async () => {
+  await ouvrir({ retour: true });
+  // L'état d'une installation réussie reste dans /run jusqu'au redémarrage du HUB.
+  await page.evaluate(() => window.hub.recevoir({ type: "maj", etat: { etape: "terminee", version: "2c75d626e96d" } }));
+  await touche("r");
+  await page.click('[data-section="apropos"]');
+  await page.evaluate(() => window.hub.recevoir({ type: "maj", verification: { disponible: true, distant: "7e3a551abcde", installee: "2c75d62", verifiable: true } }));
+  await page.waitForTimeout(150);
+  assert.equal(await page.locator('[data-cle="maj-appliquer"]').count(), 1, "bouton Installer affiché");
+  assert.ok(!(await page.isHidden("#pastille-maj-apropos")), "pastille affichée");
+  // Le même état, mais pour la version que la source propose : rien à installer.
+  await page.evaluate(() => window.hub.recevoir({ type: "maj", verification: { disponible: true, distant: "2c75d626e96d", installee: "2c75d62", verifiable: true } }));
+  await page.waitForTimeout(150);
+  assert.equal(await page.locator('[data-cle="maj-appliquer"]').count(), 0, "rien de plus récent : pas de bouton");
+});
+
 test("aperçu depuis la clé : bandeau, et aucun mode lancé", async () => {
   page = await navigateur.newPage({ viewport: { width: 1920, height: 1080 } });
   await page.route(/open-meteo\.com/, route => route.abort());
