@@ -20,16 +20,20 @@
 <body>
 <canvas id="fond" width="192" height="108"></canvas>
 <div id="photos" hidden></div>
-<!-- Les traits fins des motifs (sol, ondes, étoiles, poussière), plus nets que le fond. -->
+<!-- Les traits fins des motifs (sol, étoiles, poussière), plus nets que le fond. -->
 <canvas id="fond-lignes" width="960" height="540" hidden></canvas>
-<!-- Motif cinéma : l'image du mode choisi, à droite, fondue dans le fond. Les trois sont
-     dans la page dès le départ (hub.js les y pose) : elles sont locales et ne se chargent
-     qu'une fois. Le pictogramme en filigrane, qui pivote lentement, reprend si l'une
-     manque ou ne se charge pas. -->
-<div id="visuel-mode" hidden></div>
 <div id="filigrane" hidden><svg viewBox="0 0 32 32"></svg></div>
 <canvas class="grain" id="grain"></canvas>
 <div class="vignette"></div>
+<!-- Motif cinéma : l'image du mode choisi, à droite. Elle vient APRÈS le grain et la
+     vignette, et donc par-dessus eux : le fond, sa teinte et son voile du bas passent
+     derrière elle, et la photo garde ses couleurs et son contraste (retour de la TV du
+     18/09/2026 : « la couleur du fond passe sur la totalité de l'image »). Ce sont ses
+     propres dégradés qui l'éteignent avant l'en-tête et avant les rangées. Les trois
+     images sont dans la page dès le départ (hub.js les y pose) : elles sont locales et ne
+     se chargent qu'une fois. Le pictogramme en filigrane, qui pivote lentement et reste
+     sous le voile, reprend si l'une manque ou ne se charge pas. -->
+<div id="visuel-mode" hidden></div>
 <div id="intro" hidden><div class="intro-mot"><span>H</span><span>U</span><span>B</span></div><div class="intro-ligne"></div></div>
 
 <main class="ecran" id="accueil">
