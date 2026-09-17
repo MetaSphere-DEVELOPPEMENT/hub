@@ -2034,8 +2034,21 @@ addEventListener("keydown", e => {
   if (raccourcis[touche]) { e.preventDefault(); raccourcis[touche](); }
 });
 
-addEventListener("mousemove", () => { document.body.classList.add("souris"); reveiller(); });
+// Un contenu redessiné sous un pointeur immobile (section des réglages changée au
+// clavier) déclenche « mouseover » : sans bouger, la souris volait alors la sélection
+// qu'on venait de donner au clavier. Le pointeur doit avoir bougé depuis la dernière touche.
+const pointeur = { x: null, y: null, touche: false };
+addEventListener("keydown", () => { pointeur.touche = true; }, true);
+addEventListener("mousemove", e => {
+  if (e.clientX !== pointeur.x || e.clientY !== pointeur.y) pointeur.touche = false;
+  pointeur.x = e.clientX; pointeur.y = e.clientY;
+  document.body.classList.add("souris"); reveiller();
+});
 addEventListener("mouseover", e => {
+  const immobile = e.clientX === pointeur.x && e.clientY === pointeur.y;
+  pointeur.x = e.clientX; pointeur.y = e.clientY;
+  if (immobile && pointeur.touche) return;
+  pointeur.touche = false;
   const cible = e.target.closest("[data-nav]");
   if (cible && calqueActif().contains(cible) && !verrou) definirFocus(cible, true);
 });
