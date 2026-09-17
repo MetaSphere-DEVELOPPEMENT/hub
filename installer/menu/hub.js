@@ -861,6 +861,13 @@ function voisin(depart, direction) {
   if (dansZone) return dansZone;
   // Le contenu d'une feuille est un cul-de-sac en haut et en bas : le sommaire est à
   // gauche, pas au-dessus. Gauche ramène sur l'entrée de la section affichée.
+  // Du sommaire vers la droite : le premier réglage dans l'ordre de lecture, pas celui qui
+  // se trouve à la hauteur de l'entrée (dans À propos, « Rechercher » n'était atteint que
+  // par un détour, audit du 17/09/2026).
+  if (zone?.classList.contains("sommaire") && direction === "droite") {
+    const premier = liste.find(e => e.closest(".contenu") && zone.parentElement.contains(e));
+    if (premier) return premier;
+  }
   if (zone?.classList.contains("contenu")) {
     if (direction !== "gauche") return null;
     return liste.find(e => e.dataset.section === sectionCourante) || null;

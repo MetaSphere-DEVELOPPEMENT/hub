@@ -807,3 +807,22 @@ test("accueil : rangées qui s'arrêtent au bout, et chaque déplacement se déf
   }
   assert.deepEqual(irreversibles, []);
 });
+
+test("réglages : Droite depuis le sommaire va au premier réglage ; Rechercher et Fermer se rejoignent sans détour", async () => {
+  await ouvrir({ retour: true });
+  await touche("r");
+  await page.evaluate(() => definirFocus(document.querySelector('[data-section="apropos"]')));
+  await page.evaluate(() => window.hub.recevoir({ type: "maj", verification: { disponible: false }, etat: null }));
+  await touche("ArrowRight");
+  assert.equal(await focus(), "maj-verifier");
+  await touche("ArrowDown");
+  assert.equal(await focus(), "fermer-reglages");
+  await touche("ArrowUp");
+  assert.equal(await focus(), "maj-verifier");
+  await touche("ArrowDown", "ArrowLeft");
+  assert.equal(await focus(), "section-apropos", "Gauche depuis Fermer revient à la section, sans en ouvrir une autre");
+  assert.equal(await page.evaluate(() => sectionCourante), "apropos");
+  await page.evaluate(() => definirFocus(document.querySelector('[data-section="services"]')));
+  await touche("ArrowRight");
+  assert.equal(await focus(), await page.evaluate(() => document.querySelector("#contenu-reglages [data-nav]").dataset.cle));
+});
