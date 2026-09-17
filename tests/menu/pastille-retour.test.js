@@ -68,6 +68,13 @@ const pointPastille = (largeur, hauteur) => [Math.round(largeur * .05) + 30, Mat
 const pastilleVisible = async (page, largeur = 1920, hauteur = 1080) =>
   (await auPoint(page, ...pointPastille(largeur, hauteur))) === "hub-retour";
 const focusSurPastille = page => page.evaluate(() => document.activeElement?.localName === "hub-retour");
+// Le message « retour » repart par une fonction exposée : il arrive un peu après le geste,
+// pas avec lui. Lu tout de suite, « appels » était encore vide dès que la machine était
+// chargée (la suite complète lance dix fichiers en parallèle).
+const attendreAppels = async (appels, n = 1) => {
+  for (let i = 0; i < 40 && appels.length < n; i++) await new Promise(fin => setTimeout(fin, 50));
+  return appels;
+};
 
 test("visible 5 s au chargement, masquée ensuite, sans gêner le site autour", async () => {
   const { page } = await ouvrir();
@@ -112,7 +119,7 @@ test("Échap court : montrée avec l'aide et focalisée ; second Échap : masqu�
   // OK sur la pastille focalisée : retour.
   await page.keyboard.press("Escape");
   await page.keyboard.press("Enter");
-  assert.deepEqual(appels, [{ type: "retour" }]);
+  assert.deepEqual(await attendreAppels(appels), [{ type: "retour" }]);
   await page.close();
 });
 
@@ -140,7 +147,7 @@ test("Échap maintenue 2 s : retour, comme avant", async () => {
     await page.waitForTimeout(100);
   }
   await page.keyboard.up("Escape");
-  assert.deepEqual(appels, [{ type: "retour" }]);
+  assert.deepEqual(await attendreAppels(appels), [{ type: "retour" }]);
   assert.ok(!(await focusSurPastille(page)), "un appui long ne donne pas le focus");
   await page.close();
 });
@@ -149,7 +156,7 @@ test("clic sur la pastille : message « retour », le clic n'atteint pas le site
   const { page, appels } = await ouvrir();
   await page.evaluate(() => { window.__clics = 0; document.addEventListener("click", () => window.__clics++); });
   await page.mouse.click(...pointPastille(1920, 1080));
-  assert.deepEqual(appels, [{ type: "retour" }]);
+  assert.deepEqual(await attendreAppels(appels), [{ type: "retour" }]);
   assert.equal(await page.evaluate(() => window.__clics), 0);
   await page.close();
 });
@@ -184,10 +191,11 @@ test("au-dessus d'un élément en plein écran", async () => {
   // Attendre qu'elle soit revenue plutôt que 100 ms fixes : la suite complète charge la
   // machine (dix fichiers en parallèle) et le fondu arrivait après le clic.
   for (let i = 0; i < 40 && !(await pastilleVisible(page)); i++) await page.waitForTimeout(50);
+  assert.ok(await pastilleVisible(page), "revenue au mouvement de la souris");
   // Un clic plutôt qu'elementFromPoint : en plein écran, Chromium rend inerte tout ce
   // qui est hors de l'élément plein écran, même dessiné devant (vu : visible, clic perdu).
   await page.mouse.click(...pointPastille(1920, 1080));
-  assert.deepEqual(appels, [{ type: "retour" }], "réapparaît et reçoit le clic au-dessus du plein écran");
+  assert.deepEqual(await attendreAppels(appels), [{ type: "retour" }], "réapparaît et reçoit le clic au-dessus du plein écran");
   await page.close();
 });
 
