@@ -1982,7 +1982,7 @@ function recevoirVoix(etat, texte) {
   const pastille = $("voix-pastille");
   pastille.hidden = !reglages.systeme.voix;
   reveiller();
-  if (etat === "eveil") { pastille.classList.add("eveil"); $("voix-texte").textContent = t("voix.ecoute"); bulle(t("voix.ecoute"), 0, true); son("deplacer"); }
+  if (etat === "eveil") { pastille.classList.add("eveil"); bulle(t("voix.ecoute"), 0, true); son("deplacer"); }
   else if (etat === "entendu") { bulle(`« ${texte} »`, 2200); }
   else if (etat === "incompris") { pastille.classList.remove("eveil"); bulle(t("voix.incompris"), 2200); son("erreur"); }
   else if (etat === "repos") { pastille.classList.remove("eveil"); $("voix-texte").textContent = "HUB"; setTimeout(() => $("bulle-voix").classList.remove("visible"), 1500); }

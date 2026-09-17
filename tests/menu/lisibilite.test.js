@@ -235,3 +235,27 @@ test("mouvement : la sélection suit en 200 ms au plus, sans rebond ; rien en to
   await page.evaluate(() => dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", repeat: true })));
   assert.deepEqual(await page.evaluate(() => window.__rotations), [], "aucune rotation pendant la répétition de la touche");
 });
+
+// Défauts mineurs de l'audit du 17/09/2026.
+test("détails : badges et empreinte d'une pièce, pastilles d'étapes rondes, rien ne tourne caché, voix sans doublon", async () => {
+  const telecommande = { url: "http://192.168.1.40:8790/", code: "482913", appairageOuvert: true, empreinteRacineCourte: "1146 7BB0 E51A 4F84", telephones: 0 };
+  await ouvrir({ ...reglages({ meteo: { active: true, ville: "Lyon", lat: 45.7, lon: 4.8 } }), telecommande });
+  await page.evaluate(() => ACTIONS.reglages("apparence"));
+  await page.waitForTimeout(300);
+  const badges = await page.evaluate(() => [...document.querySelectorAll(".portee-hub")].map(b => b.getClientRects().length));
+  assert.ok(badges.length && badges.every(n => n === 1), `badges sur plusieurs lignes : ${badges}`);
+  await page.evaluate(() => ACTIONS.reglages("telecommande"));
+  await page.waitForTimeout(300);
+  const detail = await page.evaluate(() => ({
+    empreinte: document.querySelector(".empreinte-courte").getClientRects().length === 1 && document.querySelector(".empreinte-courte").scrollWidth <= document.querySelector(".empreinte-courte").clientWidth + 1,
+    pastilles: [...document.querySelectorAll(".etape b")].map(b => Math.abs(b.offsetWidth - b.offsetHeight) <= 1),
+    accueilCache: parseFloat(getComputedStyle(document.querySelector(".ecran")).opacity) <= .2,
+    tournentCaches: document.getAnimations().filter(a => a.playState === "running" && a.constructor.name === "CSSAnimation" && a.effect?.target && (a.effect.target.closest?.(".ecran, .calque:not(.ouvert)"))).length,
+  }));
+  assert.deepEqual(detail, { empreinte: true, pastilles: [true, true, true], accueilCache: true, tournentCaches: 0 });
+  await page.evaluate(() => { fermerTout(); window.hub.recevoir({ type: "voix", etat: "micro-present" }); window.hub.recevoir({ type: "voix", etat: "eveil" }); });
+  const ecoute = await page.evaluate(() => [...document.querySelectorAll("#voix-texte, #bulle-texte")].filter(e => e.getClientRects().length && e.textContent.includes("écoute")).length);
+  assert.equal(ecoute, 1, "« J'écoute… » une seule fois à l'écran");
+  await page.evaluate(() => window.hub.recevoir({ type: "recopie-appairage", etat: { code: "4821", jusqua: Date.now() / 1000 + 60 } }));
+  assert.match(await page.evaluate(() => getComputedStyle(document.querySelector("#recopie-appairage")).boxShadow), /100vmax|\d{4,}px/, "voile sous le code de recopie");
+});

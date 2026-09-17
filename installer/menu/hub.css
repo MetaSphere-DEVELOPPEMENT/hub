@@ -192,7 +192,10 @@ button { font: inherit; color: inherit; border: 0; background: none; outline: no
 }
 body.depart .ecran, body.calque-ouvert .ecran, body.ambiant .ecran { will-change: transform, opacity; }
 body.depart .ecran { opacity: 0; transform: scale(1.04); }
-body.calque-ouvert .ecran { transform: scale(.975); opacity: .35; }
+/* À .35, l'accueil se lisait encore entre la feuille et le bord, en double de ce qu'on règle. */
+body.calque-ouvert .ecran { transform: scale(.975); opacity: .12; }
+/* Ce qu'on ne voit pas ne tourne pas : liseré, pictos météo, ondes, curseur des calques fermés. */
+body.calque-ouvert .ecran *, body.calque-ouvert .ecran *::before, .calque:not(.ouvert) *, .annonce:not(.visible) *, .bulle-voix:not(.visible) * { animation-play-state: paused !important; }
 
 .entete {
   display: flex;
@@ -913,7 +916,9 @@ body.ambiant .ecran { opacity: 0; transform: scale(1.05); visibility: hidden; tr
   position: fixed; left: 50%; top: 50%; translate: -50% -50%; z-index: 40;
   padding: 1.82rem 2.73rem; border-radius: 1.52rem; text-align: center;
   background: var(--verre-feuille); -webkit-backdrop-filter: blur(30px); backdrop-filter: blur(30px);
-  box-shadow: inset 0 0 0 1px var(--liseré), 0 1.52rem 3.03rem -.76rem var(--ombre);
+  /* Un voile sur tout l'écran (ombre étalée, pas de calque de plus) : le code se lisait par-dessus
+     les cartes et le fond animé. */
+  box-shadow: inset 0 0 0 1px var(--liseré), 0 1.52rem 3.03rem -.76rem var(--ombre), 0 0 0 100vmax var(--voile-plein);
 }
 .recopie-titre { font-size: var(--t-4); font-weight: 700; }
 .recopie-saisir { margin-top: .3rem; font-size: var(--t-3); color: var(--texte-doux); }
@@ -945,7 +950,7 @@ body.sans-animation *, body.sans-animation *::before, body.sans-animation *::aft
 /* ── Profils : portée, restrictions, code ────────────────────────────────── */
 .portee { display: flex; align-items: center; gap: .53rem; margin: -.61rem 0 .3rem; font-size: var(--t-2); color: var(--texte-doux); }
 .portee .avatar { width: 1.37rem; height: 1.37rem; font-size: var(--t-1); }
-.portee-hub { margin-left: .53rem; padding: .11rem .42rem; border-radius: 99rem; font-size: var(--t-1); font-weight: 600; letter-spacing: .04em; vertical-align: .11rem; color: var(--texte-doux); background: var(--verre); box-shadow: inset 0 0 0 1px var(--liseré); }
+.portee-hub { display: inline-block; white-space: nowrap; margin-left: .53rem; padding: .11rem .42rem; border-radius: 99rem; font-size: var(--t-1); font-weight: 600; letter-spacing: .04em; vertical-align: .11rem; color: var(--texte-doux); background: var(--verre); box-shadow: inset 0 0 0 1px var(--liseré); }
 .cadenas { display: inline-grid; place-items: center; margin-left: .34rem; vertical-align: -.08rem; }
 .cadenas svg { width: 1em; height: 1em; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; opacity: .8; }
 .nom-tuile { display: flex; align-items: center; }
@@ -978,12 +983,12 @@ body.verrouille .centre, body.verrouille .pied .aides { opacity: .15; pointer-ev
 .qr svg { width: 100%; height: 100%; display: block; }
 .etapes { display: flex; flex-direction: column; gap: .68rem; }
 .etape { display: flex; align-items: center; gap: .68rem; font-size: var(--t-3); }
-.etape b { display: grid; place-items: center; width: 1.52rem; height: 1.52rem; border-radius: 50%; font-size: var(--t-2); background: rgb(var(--accent) / .22); box-shadow: inset 0 0 0 1px rgb(var(--accent) / .6); }
+.etape b { flex: none; display: grid; place-items: center; width: 1.52rem; height: 1.52rem; border-radius: 50%; font-size: var(--t-2); background: rgb(var(--accent) / .22); box-shadow: inset 0 0 0 1px rgb(var(--accent) / .6); }
 .code-appairage { margin: .46rem 0 .08rem; font-size: var(--t-6); font-weight: 700; letter-spacing: .12em; font-variant-numeric: tabular-nums; color: var(--accent-texte); }
 .appairage .url { font-family: "Ubuntu Sans Mono", monospace; }
 .code-appairage.attente { font-size: var(--t-4); letter-spacing: 0; opacity: .7; }
 .empreinte-appairage { margin-top: .08rem; }
-.empreinte-courte { margin-top: .15rem; font-family: "Ubuntu Sans Mono", monospace; font-size: var(--t-4); font-weight: 600; letter-spacing: .12em; }
+.empreinte-courte { margin-top: .15rem; white-space: nowrap; font-family: "Ubuntu Sans Mono", monospace; font-size: var(--t-3); font-weight: 600; letter-spacing: .12em; }
 .empreinte-paires { font-family: "Ubuntu Sans Mono", monospace; font-size: var(--t-1); line-height: 1.45; letter-spacing: .04em; white-space: pre; opacity: .6; }
 
 .dialogue .aide-photo.conseil { text-align: left; color: color-mix(in srgb, rgb(var(--bureau)) var(--part-accent), var(--ton-accent)); margin-top: .53rem; }
