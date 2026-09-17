@@ -87,7 +87,11 @@ class Numero(unittest.TestCase):
         menu au dépôt faisait échouer les tests de CHAQUE mise à jour sur le HUB, donc
         bloquait l'installation (constaté le 18/09/2026, « 1.0.2 != 1.0.7 »)."""
         with tempfile.TemporaryDirectory() as d:
-            with unittest.mock.patch.object(hub_menu, "VERSION_INSTALLEE", Path(d) / "absent"):
+            # Les DEUX fichiers posés par l'installateur sont écartés : sur un vrai HUB,
+            # NOUVEAUTES.md installé date de la version installée, pas du dépôt (oubli
+            # constaté le 18/09/2026 : la mise à jour échouait encore à cette ligne).
+            with unittest.mock.patch.object(hub_menu, "VERSION_INSTALLEE", Path(d) / "absent"), \
+                 unittest.mock.patch.object(hub_menu, "NOUVEAUTES_INSTALLEES", Path(d) / "absent.md"):
                 infos = hub_menu.infos()
         self.assertEqual(infos["version"], numero_du_depot())
         self.assertEqual(infos["nouveautes"], hub_menu.nouveautes(NOUVEAUTES))
@@ -98,9 +102,14 @@ class Numero(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             chemin = Path(d) / "VERSION"
             chemin.write_text("0.9.1\nabc1234\n2026-01-02\n")
-            with unittest.mock.patch.object(hub_menu, "VERSION_INSTALLEE", chemin):
+            nouv = Path(d) / "NOUVEAUTES.md"
+            nouv.write_text("# Nouveautés\n\n## 0.9.1 — 2 janvier 2026\n\nCe que la version installée raconte.\n")
+            with unittest.mock.patch.object(hub_menu, "VERSION_INSTALLEE", chemin), \
+                 unittest.mock.patch.object(hub_menu, "NOUVEAUTES_INSTALLEES", nouv):
                 infos = hub_menu.infos()
         self.assertEqual(infos["version"], "0.9.1")
+        self.assertIn("installée raconte", infos["nouveautes"] or "",
+                      "les nouveautés affichées sont celles de la version installée")
         self.assertEqual(infos["commit"], "abc1234")
 
 
