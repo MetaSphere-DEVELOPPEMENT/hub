@@ -118,6 +118,7 @@ git -C /tmp/hub-verif -c gpg.ssh.allowedSignersFile=/etc/hub/signataires-autoris
 | `clone` | Le clone a échoué pour une autre raison (objets refusés par `fsck`…) ou est illisible | le détail ; relancer le `git clone` ci-dessus en root |
 | `disque` | Écriture impossible : place, droits, dossier inattendu dans `/var/lib/hub/versions` | `df -h /var/lib/hub` ; `ls -la /var/lib/hub/versions` |
 | `delai` | Une commande git a dépassé son délai (60 s pour la source, 10 min pour le clone) | débit ; le détail nomme la commande |
+| `outil` | Un outil manque (`runuser`, du paquet `util-linux-extra`) | le détail nomme l'outil et le paquet ; `apt install util-linux-extra` |
 | `configuration` | `/etc/hub/mise-a-jour.json` ou `/etc/hub/mise-a-jour.env` absent ou incomplet | relancer l'installateur |
 | `tests`, `signature`, `signataires`, `installation` | Voir les sections ci-dessus | le détail |
 | `autre` | Erreur imprévue (type et message dans le détail) | `journalctl -u hub-mise-a-jour -b` |

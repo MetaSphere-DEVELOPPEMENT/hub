@@ -215,8 +215,21 @@ class DepotLocal(unittest.TestCase):
         self.pauses = []
         # Réponses simulées de git avant de laisser passer le vrai : [(motif, CompletedProcess | exception)].
         self.pannes = []
+        # runuser n'existe pas sur un Mac, et vit dans /usr/sbin sur Ubuntu : le programme le
+        # cherche par chemin absolu (PATH_ADMIN). On lui en donne un faux, jamais exécuté
+        # puisque lancer() intercepte la commande.
+        self.admin = racine / "admin"
+        self.admin.mkdir()
+        (self.admin / "runuser").write_text("#!/bin/sh\nexit 99\n")
+        os.chmod(self.admin / "runuser", 0o755)
+        self._path_admin = os.environ.get("PATH_ADMIN")
+        os.environ["PATH_ADMIN"] = str(self.admin)
 
     def tearDown(self):
+        if self._path_admin is None:
+            os.environ.pop("PATH_ADMIN", None)
+        else:
+            os.environ["PATH_ADMIN"] = self._path_admin
         self._tmp.cleanup()
 
     def commit(self, test=TEST_OK, cle="autorisee"):
@@ -237,7 +250,7 @@ class DepotLocal(unittest.TestCase):
             self.verifies.append(options["env"].get("HUB_MISE_A_JOUR_VERIFIEE"))
             code = 1 if depot in self.echouer_installation else 0
             return subprocess.CompletedProcess(commande, code, "", "installateur en échec" if code else "")
-        if commande[0] == "runuser":
+        if Path(commande[0]).name == "runuser":
             self.lancements_tests.append((commande, options))
             return maj.executer(commande[4:], **options)
         self.commandes_git.append(commande)
@@ -287,7 +300,8 @@ class DepotLocal(unittest.TestCase):
         self.assertTrue((self.versions / c / ".git").is_dir())
         # Les tests passent par runuser, sous nobody, avec une maison jetable, hors du clone.
         (commande, options), = self.lancements_tests
-        self.assertEqual(commande[:4], ["runuser", "-u", "nobody", "--"])
+        self.assertEqual([Path(commande[0]).name, *commande[1:4]], ["runuser", "-u", "nobody", "--"])
+        self.assertTrue(Path(commande[0]).is_absolute(), "runuser lancé par un chemin absolu, le PATH des tests est réduit")
         self.assertEqual(commande[-5:], ["-m", "unittest", "discover", "-s", "tests"])
         bac = Path(options["cwd"]).parent
         self.assertNotEqual(Path(options["cwd"]).resolve(), (self.versions / c).resolve())
@@ -295,6 +309,24 @@ class DepotLocal(unittest.TestCase):
         self.assertNotIn("SUDO_USER", options["env"])
         self.assertEqual(self.donnes, [(str(bac), "nobody")])
         self.assertFalse(bac.exists(), "copie des tests effacée")
+
+    def test_runuser_absent_le_dit_et_n_installe_rien(self):
+        """Sans util-linux-extra (Ubuntu 26.04), runuser manque : l'échec le nomme au lieu
+        de sortir en « source », et rien n'est installé (constaté sur le HUB le 17/09/2026)."""
+        self.commit()
+        os.environ["PATH_ADMIN"] = str(self.admin / "vide")
+        self.assertEqual(self.appliquer(installee="0000000"), 1)
+        self.assertEqual(self.etats[-1]["raison"], "outil")
+        self.assertIn("util-linux-extra", self.etats[-1]["detail"])
+        self.assertEqual(self.installations, [])
+
+    def test_runuser_cherche_hors_du_path_des_tests(self):
+        """Le PATH donné aux tests ne contient pas /usr/sbin, où vit runuser : il est
+        cherché dans les dossiers d'administration et lancé par son chemin absolu."""
+        self.assertEqual(maj.abaisseur(str(self.admin)), str(self.admin / "runuser"))
+        with self.assertRaises(maj.Echec) as e:
+            maj.abaisseur(str(self.admin / "vide"))
+        self.assertEqual(e.exception.raison, "outil")
 
     def test_clone_superficiel_sans_sous_modules(self):
         c = self.commit()

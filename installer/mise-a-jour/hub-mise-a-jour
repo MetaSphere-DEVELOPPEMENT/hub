@@ -229,6 +229,23 @@ def commit_du_clone(depot, lancer=executer):
     return commit
 
 
+# runuser vit dans /usr/sbin (paquet util-linux-extra sur Ubuntu 26.04), absent du PATH
+# réduit donné aux tests : lancé par son nom, il restait introuvable et l'installation
+# échouait avant même de télécharger (constaté sur le HUB le 17/09/2026). On le cherche
+# donc ici, dans les dossiers d'administration, et on le passe en chemin absolu.
+DOSSIERS_ADMIN = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+
+def abaisseur(chemin=None):
+    """Chemin absolu de runuser, qui fait tourner les tests sous un compte sans droits."""
+    trouve = shutil.which("runuser", path=chemin or os.environ.get("PATH_ADMIN") or DOSSIERS_ADMIN)
+    if not trouve:
+        raise Echec("outil", "runuser est introuvable : installe le paquet util-linux-extra "
+                             "(sudo apt install util-linux-extra), les tests ne peuvent pas "
+                             "tourner sous un compte sans droits.")
+    return trouve
+
+
 def effacer(chemin):
     """Efface un fichier, un lien ou un dossier ; une erreur remonte (classée « disque ») au
     lieu d'être tue : un reste qu'on n'arrive pas à effacer fait échouer la suite."""
@@ -317,7 +334,7 @@ def lancer_tests(depot, lancer=executer, compte=COMPTE_TESTS, donner=donner_au_c
         environnement = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": str(maison), "TMPDIR": str(maison),
                          "LANG": "C.UTF-8", "PYTHONDONTWRITEBYTECODE": "1"}
         try:
-            r = lancer(["runuser", "-u", compte, "--", sys.executable, "-m", "unittest", "discover", "-s", "tests"],
+            r = lancer([abaisseur(), "-u", compte, "--", sys.executable, "-m", "unittest", "discover", "-s", "tests"],
                        cwd=str(copie), env=environnement, timeout=900)
         except subprocess.TimeoutExpired:
             return False, "les tests ont dépassé 15 minutes"

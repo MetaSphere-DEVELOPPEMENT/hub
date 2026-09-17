@@ -659,6 +659,11 @@ etape_mise_a_jour() {
   fi
   # git : une Ubuntu Desktop neuve ne l'a pas, et la mise à jour clone le dépôt.
   installer_paquets -- git || return 1
+  # runuser fait tourner les tests sous un compte sans droits. Depuis Ubuntu 24.04 il est
+  # dans util-linux-extra, absent d'une installation de bureau : sans lui, « Installer »
+  # échouait avant de télécharger (constaté sur le HUB le 17/09/2026).
+  command -v runuser >/dev/null || PATH="$PATH:/usr/sbin" command -v runuser >/dev/null ||
+    installer_paquets -- util-linux-extra || return 1
   poser "$maj/hub-mise-a-jour" /usr/local/bin/hub-mise-a-jour 0755 || return 1
   poser "$maj/hub-mise-a-jour.service" /etc/systemd/system/hub-mise-a-jour.service 0644 || return 1
   if [ -f "$maj/50-hub-mise-a-jour.rules" ]; then
