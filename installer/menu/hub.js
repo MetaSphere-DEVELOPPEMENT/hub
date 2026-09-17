@@ -182,19 +182,19 @@ function lancementRefuse(mode) { return extensions.avantLancer.some(f => f(mode)
 // marques déposées n'ont rien à faire dans le dépôt. tests/test_hub_web.py vérifie
 // que les identifiants sont les mêmes des deux côtés.
 const SERVICES = [
-  { id: "youtube", categorie: "streaming", nom: "YouTube", fond: "linear-gradient(135deg, #ff3b30, #b3001b)", encre: "#fff", style: "font-weight:800;letter-spacing:-.035em" },
-  { id: "netflix", categorie: "streaming", nom: "NETFLIX", fond: "radial-gradient(120% 140% at 50% 120%, #4a0508, #0b0b0b 65%)", encre: "#e50914", style: "font-weight:900;letter-spacing:.06em;transform:scaleY(1.15)" },
-  { id: "primevideo", categorie: "streaming", nom: "prime video", fond: "linear-gradient(135deg, #1f9bff, #0f171e 72%)", encre: "#fff", style: "font-weight:700;letter-spacing:-.02em;text-transform:lowercase" },
-  { id: "disneyplus", categorie: "streaming", nom: "Disney+", fond: "linear-gradient(140deg, #2a55d9, #0b1650 58%, #040a2c)", encre: "#fff", style: "font-weight:600;font-style:italic;letter-spacing:-.02em" },
-  { id: "canalplus", categorie: "streaming", nom: "CANAL+", fond: "linear-gradient(160deg, #2b2b2b, #000 60%)", encre: "#fff", style: "font-weight:900;letter-spacing:.02em" },
-  { id: "twitch", categorie: "streaming", nom: "twitch", fond: "linear-gradient(135deg, #a970ff, #6a2bd9)", encre: "#fff", style: "font-weight:800;letter-spacing:-.02em" },
-  { id: "arte", categorie: "streaming", nom: "arte", fond: "linear-gradient(135deg, #ff6a2b, #d8350c)", encre: "#fff", style: "font-weight:800;letter-spacing:-.04em" },
-  { id: "francetv", categorie: "streaming", nom: "france.tv", fond: "linear-gradient(135deg, #3b4bff, #0b1b8f)", encre: "#fff", style: "font-weight:700;letter-spacing:-.02em" },
-  { id: "geforcenow", categorie: "jeux", nom: "GeForce NOW", fond: "linear-gradient(150deg, #1c1c1c, #070707 70%)", encre: "#76b900", style: "font-weight:800;letter-spacing:-.01em" },
-  { id: "xcloud", categorie: "jeux", nom: "Xbox Cloud", fond: "linear-gradient(135deg, #17a317, #0b4d0b)", encre: "#fff", style: "font-weight:700;letter-spacing:-.01em" },
-  { id: "boosteroid", categorie: "jeux", nom: "Boosteroid", fond: "linear-gradient(135deg, #6a2cff, #ff3d8b)", encre: "#fff", style: "font-weight:800;letter-spacing:-.02em" },
-  { id: "steam", categorie: "jeux", nom: "STEAM", appli: true, fond: "linear-gradient(135deg, #2a475e, #171a21)", encre: "#c7d5e0", style: "font-weight:700;letter-spacing:.22em" },
-  { id: "moonlight", categorie: "jeux", nom: "Moonlight", appli: true, fond: "linear-gradient(135deg, #3a3f4b, #16181d)", encre: "#e8ecf5", style: "font-weight:600;letter-spacing:-.01em" },
+  { id: "youtube", halo: "#ff3b30", categorie: "streaming", nom: "YouTube", fond: "linear-gradient(135deg, #ff3b30, #b3001b)", encre: "#fff", style: "font-weight:800;letter-spacing:-.035em" },
+  { id: "netflix", halo: "#e50914", categorie: "streaming", nom: "NETFLIX", fond: "radial-gradient(120% 140% at 50% 120%, #4a0508, #0b0b0b 65%)", encre: "#e50914", style: "font-weight:900;letter-spacing:.06em;transform:scaleY(1.15)" },
+  { id: "primevideo", halo: "#1f9bff", categorie: "streaming", nom: "prime video", fond: "linear-gradient(135deg, #1f9bff, #0f171e 72%)", encre: "#fff", style: "font-weight:700;letter-spacing:-.02em;text-transform:lowercase" },
+  { id: "disneyplus", halo: "#3d6bff", categorie: "streaming", nom: "Disney+", fond: "linear-gradient(140deg, #2a55d9, #0b1650 58%, #040a2c)", encre: "#fff", style: "font-weight:600;font-style:italic;letter-spacing:-.02em" },
+  { id: "canalplus", halo: "#c8ccd4", categorie: "streaming", nom: "CANAL+", fond: "linear-gradient(160deg, #2b2b2b, #000 60%)", encre: "#fff", style: "font-weight:900;letter-spacing:.02em" },
+  { id: "twitch", halo: "#a970ff", categorie: "streaming", nom: "twitch", fond: "linear-gradient(135deg, #a970ff, #6a2bd9)", encre: "#fff", style: "font-weight:800;letter-spacing:-.02em" },
+  { id: "arte", halo: "#ff6a2b", categorie: "streaming", nom: "arte", fond: "linear-gradient(135deg, #ff6a2b, #d8350c)", encre: "#fff", style: "font-weight:800;letter-spacing:-.04em" },
+  { id: "francetv", halo: "#3b4bff", categorie: "streaming", nom: "france.tv", fond: "linear-gradient(135deg, #3b4bff, #0b1b8f)", encre: "#fff", style: "font-weight:700;letter-spacing:-.02em" },
+  { id: "geforcenow", halo: "#76b900", categorie: "jeux", nom: "GeForce NOW", fond: "linear-gradient(150deg, #1c1c1c, #070707 70%)", encre: "#76b900", style: "font-weight:800;letter-spacing:-.01em" },
+  { id: "xcloud", halo: "#17a317", categorie: "jeux", nom: "Xbox Cloud", fond: "linear-gradient(135deg, #17a317, #0b4d0b)", encre: "#fff", style: "font-weight:700;letter-spacing:-.01em" },
+  { id: "boosteroid", halo: "#ff3d8b", categorie: "jeux", nom: "Boosteroid", fond: "linear-gradient(135deg, #6a2cff, #ff3d8b)", encre: "#fff", style: "font-weight:800;letter-spacing:-.02em" },
+  { id: "steam", halo: "#66c0f4", categorie: "jeux", nom: "STEAM", appli: true, fond: "linear-gradient(135deg, #2a475e, #171a21)", encre: "#c7d5e0", style: "font-weight:700;letter-spacing:.22em" },
+  { id: "moonlight", halo: "#aab4c8", categorie: "jeux", nom: "Moonlight", appli: true, fond: "linear-gradient(135deg, #3a3f4b, #16181d)", encre: "#e8ecf5", style: "font-weight:600;letter-spacing:-.01em" },
 ];
 function modeDuService(s) { return s.categorie === "jeux" ? "gaming" : "tv"; }
 function etatService(s) { return INITIAL.services?.services?.[s.id] || null; }
@@ -469,6 +469,7 @@ function environnementFond(couleur, theme, s, accent, teinter) {
   // sinon, teinte du mode allumée, les six couleurs d'un motif se ressemblaient toutes.
   return {
     theme, clair: theme === "clair", s, palette,
+    accent, teinter,
     base: rvbHex(palette.base), c0: teinte(0, .5), c1: teinte(1, .25), c2: teinte(2, .25), c3: n[3] || n[0],
   };
 }
@@ -498,25 +499,37 @@ function peindreNappes(c, choix, e, accent, teinter) {
 
 // C · Cinéma : un dégradé maillé de trois taches qui dérivent et respirent, le bas
 // assombri pour les rangées. Les ondes et le filigrane sont à part (lignes, calque).
+// Première version (17/09/2026) : teinte du mode mêlée à moitié, taches de 30 % de l'écran :
+// l'accueil par défaut était presque noir, le reproche même de départ. Comme la maquette C,
+// la grande tache prend franchement la couleur du mode et couvre la moitié de l'écran.
 function peindreCinema(c, e) {
   const w = c.canvas.width, h = c.canvas.height, { s, clair } = e, R = RYTHMES.cinema;
+  const n = e.palette.nappes;
+  const vive = (i, part) => e.teinter ? melange(n[i % n.length], e.accent, part) : n[i % n.length];
+  // Couleur saturée : on pousse chaque canal loin du gris (les palettes claires sont pastel).
+  const sature = (col, k) => { const m = (col[0] + col[1] + col[2]) / 3; return col.map(v => borne(m + (v - m) * k, 0, 255)); };
+  const principale = sature(vive(0, .92), clair ? 1.7 : 1.55);
   c.globalCompositeOperation = "source-over";
   c.fillStyle = rgba(e.base, 1);
   c.fillRect(0, 0, w, h);
   c.globalCompositeOperation = clair ? "source-over" : "lighter";
-  [[.76, .38, .42, .52, e.c0, .58], [.95, .9, .36, .46, e.c1, clair ? .5 : .34], [.1, 1, .46, .56, e.c2, clair ? .45 : .3]].forEach(([x, y, rx, ry, couleur, a], i) => {
+  [
+    [.8, .36, .64, .9, principale, clair ? .55 : .9],
+    [.97, .95, .42, .55, sature(vive(1, .2), 1.3), clair ? .45 : .42],
+    [.06, 1.02, .5, .6, sature(vive(2, .2), 1.3), clair ? .4 : .36],
+  ].forEach(([x, y, rx, ry, couleur, a], i) => {
     // Un dixième de l'écran d'amplitude : la maquette en faisait 5 %, invisible à trois mètres.
     const souffle = 1 + .12 * onde(s, R.souffle[i], i);
     tache(c, (x + .09 * onde(s, R.derive[2 * i], i * 1.7)) * w, (y + .07 * Math.cos(2 * Math.PI * s / R.derive[2 * i + 1] + i)) * h,
-      rx * souffle * w, ry * souffle * h, couleur, a);
+      rx * souffle * w, ry * souffle * h, couleur, a, 1, [.45, .55]);
   });
   c.globalCompositeOperation = "source-over";
-  const g = c.createLinearGradient(0, h * .52, 0, h);
+  const g = c.createLinearGradient(0, h * .6, 0, h);
   g.addColorStop(0, rgba(e.base, 0));
-  g.addColorStop(.45, rgba(e.base, .85));
-  g.addColorStop(1, rgba(e.base, 1));
+  g.addColorStop(.5, rgba(e.base, .55));
+  g.addColorStop(1, rgba(e.base, .8));
   c.fillStyle = g;
-  c.fillRect(0, h * .52, w, h * .48);
+  c.fillRect(0, h * .6, w, h * .4);
 }
 function lignesCinema(l, e, k) {
   const w = l.canvas.width, h = l.canvas.height, { s, clair } = e, R = RYTHMES.cinema;
@@ -1540,7 +1553,7 @@ function tuileService(s, grande = false) {
   const tuile = el("button", {
     class: `tuile-service${grande ? " grande" : ""}${indisponible ? " indisponible" : ""}`,
     "data-nav": true, "data-cle": `service-${s.id}`, "data-accent": s.categorie === "jeux" ? "jeux" : "tv",
-    style: `--fond:${s.fond};--encre:${s.encre}`,
+    style: `--fond:${s.fond};--encre:${s.encre};--halo:${s.halo}`,
     onclick: () => lancerService(tuile, s),
   },
   el("span", { class: "marque", style: s.style }, s.nom),

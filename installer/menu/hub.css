@@ -30,6 +30,8 @@
   --anneau: #fff;
   --anneau-epaisseur: .18rem;
   --anneau-decalage: .14rem;
+  /* Liseré des tuiles : clair et translucide, il ne pèse pas comme l'anneau plein. */
+  --liseré-focus: rgb(255 255 255 / .55);
   --verre: rgba(255, 255, 255, .055);
   --verre-fort: rgba(255, 255, 255, .11);
   --verre-feuille: rgba(14, 16, 26, .62);
@@ -94,6 +96,7 @@
   --alerte: #b8322f;
   --depasse: #a8480f;
   --anneau: #0e1322;
+  --liseré-focus: rgb(14 19 34 / .6);
   --verre: rgba(255, 255, 255, .42);
   --verre-fort: rgba(255, 255, 255, .72);
   --verre-feuille: rgba(248, 250, 255, .74);
@@ -204,7 +207,9 @@ body:not([data-motif="nappes"]) #fond { filter: none; }
    (maquette C). Dans ce calque fixe, peint une fois. */
 body[data-motif="cinema"] .vignette {
   background:
-    linear-gradient(180deg, transparent 50%, rgb(var(--fond-base) / .8) 76%, rgb(var(--fond-base))),
+    /* Le haut aussi : la grande tache à la couleur du mode montait sous la date et l'heure
+       (date à 2,86:1 sur l'ambre du Bureau). */
+    linear-gradient(180deg, rgb(var(--fond-base) / .75), rgb(var(--fond-base) / .35) 9%, transparent 16%, transparent 50%, rgb(var(--fond-base) / .8) 76%, rgb(var(--fond-base))),
     radial-gradient(120% 90% at 50% 45%, transparent 45%, var(--vignette) 100%);
 }
 
@@ -427,7 +432,10 @@ body.calque-ouvert .ecran *, body.calque-ouvert .ecran *::before, .calque:not(.o
 .onglet[data-mode="gaming"] { --c: var(--jeux); }
 .onglet[data-mode="bureau"] { --c: var(--bureau); }
 .onglet svg { flex: none; width: 1.3rem; height: 1.3rem; fill: none; stroke: rgb(var(--c)); stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+/* En retrait (focus sur une autre rangée), l'onglet choisi garde un texte en pleine encre du
+   thème et un pictogramme clair : violet sur violet foncé, « Jeux » ne se lisait plus. */
 .onglet.choisi { color: var(--texte); }
+.modes:not(.actif) .onglet.choisi svg { stroke: color-mix(in srgb, rgb(var(--c)) 45%, var(--texte)); }
 [data-nav].onglet.focus { outline: none; }
 .modes.actif .onglet.focus { color: var(--encre-pastille); }
 .modes.actif .onglet.focus svg { stroke: currentColor; }
@@ -467,7 +475,7 @@ body.depart .heros, body.depart .modes { opacity: 0; transform: scale(.96); tran
   transition: opacity var(--focus-duree), transform var(--focus-duree) var(--sortie);
 }
 .reprise .lecture svg { width: .72rem; height: .72rem; fill: currentColor; margin-left: .11rem; }
-.reprise.focus { opacity: 1; transform: translateY(-.3rem) scale(1.05); box-shadow: 0 1rem 2rem -.7rem rgb(0 0 0 / .7); }
+.reprise.focus { opacity: 1; transform: translateY(-.4rem) scale(1.08); }
 .reprise.focus .lecture { opacity: 1; transform: none; }
 
 /* ── Intro à l'allumage ──────────────────────────────────────────────────── */
@@ -1032,14 +1040,21 @@ body:not(.avec-reprises) .applis .reprises-titre { display: none; }
   pointer-events: none;
 }
 .tuile-service .marque { font-size: var(--t-2); line-height: 1; white-space: nowrap; display: inline-block; }
+/* Sélection d'une tuile : elle s'élève, rayonne de sa propre couleur, et un liseré fin et
+   translucide la suit à distance. L'anneau blanc plein, même décalé, restait « le border
+   select » dont le propriétaire se plaignait (captures du 17/09/2026). Le liseré garde
+   l'épaisseur mesurée par les tests (.15 rem au moins, 3:1 contre le fond une fois composé). */
 .tuile-service.focus {
   opacity: 1;
-  transform: translateY(-.3rem) scale(1.05);
-  box-shadow: 0 1rem 2rem -.7rem rgb(0 0 0 / .7);
+  transform: translateY(-.4rem) scale(1.08);
+  box-shadow: 0 1.1rem 2.4rem -.5rem color-mix(in srgb, var(--halo, #fff) 70%, transparent), 0 0 1.6rem -.2rem color-mix(in srgb, var(--halo, #fff) 55%, transparent);
 }
-/* Les tuiles s'avancent avec un liseré détaché de .3 rem : l'anneau collé les
-   faisait paraître serrées « surtout avec le border select » (retour sur la TV, 17/09/2026). */
-[data-nav].tuile-service.focus, [data-nav].reprise.focus { outline-offset: .3rem; }
+.reprise.focus { box-shadow: 0 1.1rem 2.4rem -.5rem rgb(var(--c) / .6), 0 0 1.6rem -.2rem rgb(var(--c) / .45); }
+[data-nav].tuile-service.focus, [data-nav].reprise.focus {
+  /* .17 rem : le navigateur arrondit un contour au pixel inférieur (.15 rem donnait 3 px en 1080p). */
+  outline: .17rem solid var(--liseré-focus);
+  outline-offset: .42rem;
+}
 .tuile-service.lance { transform: scale(1.2); }
 .tuile-service.indisponible { filter: grayscale(.85); opacity: .5; }
 .tuile-service.indisponible.focus { opacity: .8; }
