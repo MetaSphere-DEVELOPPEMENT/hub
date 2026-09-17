@@ -268,6 +268,53 @@ test("sélection : la pastille des onglets est un indicateur de focus conforme",
   }
 });
 
+// Le menu d'arrêt : six entrées, nom en --t-2 et explication en --t-1 (le plancher). Mesuré
+// une entrée sélectionnée, là où le fond change sous le texte, puis sur la confirmation.
+test("contrastes : le menu d'arrêt et sa confirmation, sombre et clair", async () => {
+  const faibles = [], mesures = [];
+  for (const theme of ["sombre", "clair"]) {
+    await page?.close();
+    await ouvrir(reglages({}, { theme, animations: "reduites", motif: "cinema" }));
+    await page.evaluate(() => { ACTIONS.arret(); definirFocus(document.querySelector('[data-cle="arret-eteindre"]'), true); });
+    await page.waitForTimeout(350);
+    const menu = await contrastes(["#arret h2", "#arret .dialogue > p", ".action-nom", ".action-detail"]);
+    await page.evaluate(() => ACTIONS.eteindre());
+    await page.waitForTimeout(350);
+    const confirmation = await contrastes(["#arret-confirmer-titre", "#arret-confirmer-detail", "#arret-confirmer .bouton span"]);
+    mesures.push(...[...menu, ...confirmation].map(m => ({ theme, ...m })));
+    faibles.push(...[...menu, ...confirmation].filter(m => m.ratio < 4.5).map(m => ({ theme, ...m })));
+  }
+  assert.deepEqual(faibles, [], JSON.stringify(mesures));
+});
+
+// Six entrées de deux lignes dans un dialogue : c'est le calque le plus haut du menu. Chaque
+// explication tient sur UNE ligne, en français comme en anglais — deux lignes et la liste
+// perd son rythme, puis sa place à l'écran.
+for (const [largeur, hauteur] of [[1280, 720], [1920, 1080], [3840, 2160]]) {
+  test(`tenue : le menu d'arrêt tient en ${largeur}×${hauteur} de S à XL`, async () => {
+    await ouvrir(reglages(), { largeur, hauteur });
+    await page.evaluate(() => ACTIONS.arret());
+    await page.waitForTimeout(250);
+    for (const langue of ["fr", "en"]) {
+      for (const echelle of [.9, 1, 1.1, 1.2]) {
+        const bilan = await page.evaluate(([e, l]) => {
+          reglages.systeme.echelle = e; profil().langue = l; appliquerTout();
+          const boite = document.querySelector("#arret .dialogue").getBoundingClientRect();
+          const hors = [...document.querySelectorAll("#arret [data-nav]")].filter(x => {
+            const r = x.getBoundingClientRect();
+            return r.bottom > innerHeight || r.right > innerWidth || r.left < 0 || r.top < 0;
+          }).map(x => x.dataset.cle);
+          const surDeuxLignes = [...document.querySelectorAll("#arret .action-detail")]
+            .filter(x => x.clientHeight > parseFloat(getComputedStyle(x).lineHeight) * 1.5)
+            .map(x => x.textContent.slice(0, 24));
+          return { hors, surDeuxLignes, dedans: boite.top >= 0 && boite.bottom <= innerHeight };
+        }, [echelle, langue]);
+        assert.deepEqual(bilan, { hors: [], surDeuxLignes: [], dedans: true }, `${langue}, taille ${echelle}`);
+      }
+    }
+  });
+}
+
 // Audit du 17/09/2026 : les feuilles (réglages, météo, jeux, aide) étaient posées à 3 % du haut
 // et 2,2 % de la droite, quelle que soit la marge de sécurité réglée pour la TV.
 test("zone sûre : les feuilles respectent la marge de sécurité réglée", async () => {

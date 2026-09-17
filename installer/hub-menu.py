@@ -13,9 +13,9 @@ La page est locale : seule la météo a besoin du réseau. Si WebKit manque, le 
 retombe sur des boutons GTK simples plutôt que de laisser la TV sur un écran noir.
 
 CE QU'IL FAIT. Il affiche la page, lui passe les réglages au démarrage, et répond à
-ses demandes (enregistrer les réglages, météo, minuteur, infos machine). Il lui dit
-aussi si le HUB a Internet (NetworkManager), et cherche seul les mises à jour, sans
-jamais les installer. Il relaie
+ses demandes (enregistrer les réglages, météo, minuteur, mise en veille, infos
+machine). Il lui dit aussi si le HUB a Internet (NetworkManager), et cherche seul les
+mises à jour, sans jamais les installer. Il relaie
 aussi les commandes de hub-voix, reçues sur un socket. Quand un mode est choisi, il
 l'écrit sur la sortie standard et se termine : c'est le script de session qui lance
 le mode puis, à sa fin, relance ce menu.
@@ -41,7 +41,9 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
-MODES = ("tv", "gaming", "bureau", "eteindre", "web")
+# « redemarrer » en fin de liste : le repli sans WebKit (vue_simple) n'affiche que les
+# quatre premiers, et le menu de secours n'a pas à proposer plus que les modes et l'arrêt.
+MODES = ("tv", "gaming", "bureau", "eteindre", "web", "redemarrer")
 # « web:<service> » : « HUB, lance Netflix ». Le nom seul voyage, jamais une adresse ;
 # hub-web a la liste blanche qui le traduit (tests/test_hub_web.py vérifie l'accord).
 # Écrit en littéral : installer/telecommande en recopie la liste et la compare.
@@ -308,7 +310,8 @@ def dernier_choix(c):
 
 def retenir(c, choix):
     # « web » n'a pas de carte à resélectionner au retour : le menu reprend la dernière.
-    if choix in MODES and choix not in ("eteindre", "web"):
+    # « eteindre » et « redemarrer » ne sont pas des modes qu'on reprend non plus.
+    if choix in MODES and choix not in ("eteindre", "web", "redemarrer"):
         try:
             ecrire_atomique(c["dernier"], choix + "\n")
         except OSError:
@@ -684,6 +687,25 @@ def minuteur_en_cours(c, maintenant=None):
     except (OSError, ValueError):
         return None
     return fin if fin > (maintenant or time.time()) * 1000 else None
+
+
+# ── Mise en veille de la machine ──────────────────────────────────────────
+# La page demande l'action (« Mettre en veille » du menu d'arrêt), jamais la commande :
+# celle-ci est écrite ici, en toutes lettres, comme le « systemctl poweroff » du minuteur.
+# logind l'autorise à la session locale active, sans mot de passe ni règle polkit à poser.
+# Éteindre et redémarrer, eux, passent par le mode rendu à gnome-kiosk-script : ils ferment
+# le menu, alors que la veille le laisse ouvert pour qu'on le retrouve au réveil.
+COMMANDE_VEILLE = ("systemctl", "suspend")
+
+
+def mettre_en_veille(executer=subprocess.run):
+    try:
+        r = executer(list(COMMANDE_VEILLE), capture_output=True, text=True)
+    except OSError as erreur:
+        return {"resultat": "echec", "raison": str(erreur)[:120]}
+    if getattr(r, "returncode", 1) != 0:
+        return {"resultat": "echec", "raison": (getattr(r, "stderr", "") or "").strip()[-120:] or "systemctl suspend"}
+    return {"resultat": "ok"}
 
 
 # ── Infos machine ─────────────────────────────────────────────────────────
@@ -1517,6 +1539,9 @@ def mode_a_retablir(reglages, lu):
 # plutôt qu'une liste de ce qu'elle refuse : un message ajouté plus tard au menu reste
 # fermé ici tant qu'on ne l'a pas voulu.
 MESSAGES_AMBIANT = frozenset({"meteo", "cadre", "ambiant-fin"})
+# Ces messages-là attendent une réponse : refusés, on le dit, plutôt que de laisser la page
+# croire que la machine s'endort. (Choisir un mode, lui, n'attend rien et reste sans suite.)
+ACTIONS_MACHINE = frozenset({"veille"})
 # La fenêtre qui apparaît sous le pointeur reçoit du compositeur une entrée et parfois
 # un petit mouvement : ce n'est pas quelqu'un qui revient. On laisse passer ces
 # premiers instants et les frôlements ; une touche, un clic, la molette réveillent tout de suite.
@@ -1538,6 +1563,11 @@ def message_permis(genre, ambiant):
     if ambiant:
         return genre in MESSAGES_AMBIANT
     return genre != "ambiant-fin"
+
+
+def refus_ambiant(genre):
+    """Ce que la fenêtre du mode ambiant (bureau) ne fait pas, dit à la page."""
+    return {"type": genre, "resultat": "refus", "raison": "ambiant"} if genre in ACTIONS_MACHINE else None
 
 
 def reveil_ambiant(genre, depuis_s, deplacement_px=0):
@@ -1980,10 +2010,17 @@ def lancer(arguments=None):
                     GLib.idle_add(self.vers_page, reponse)
             threading.Thread(target=executer, daemon=True).start()
 
+        def refuser_message(self, message):
+            """Message arrêté par le filtre : la page en est prévenue quand elle attend une
+            réponse (mettre en veille), sinon rien — et jamais l'action demandée."""
+            refus = refus_ambiant(message["type"]) if message else None
+            if refus:
+                self.vers_page(refus)
+
         def message_recu(self, _contenus, valeur):
             message = lire_message_page(valeur.to_string())
             if not message or not message_permis(message["type"], self.ambiant):
-                return
+                return self.refuser_message(message)
             genre = message["type"]
             if genre == "ambiant-fin":
                 self.quit()
@@ -2034,6 +2071,8 @@ def lancer(arguments=None):
             elif genre == "pin-creer":
                 demande, code = message.get("demande"), message.get("code")
                 self.en_fond(lambda: {"type": "pin", "demande": demande, **creer_pin(code)})
+            elif genre == "veille":
+                self.en_fond(lambda: {"type": "veille", **mettre_en_veille()})
             elif genre == "minuteur" and isinstance(message.get("minutes"), int):
                 minutes = max(0, min(message["minutes"], 240))
                 self.en_fond(lambda: {"type": "minuteur", "fin": programmer_minuteur(c, minutes)})

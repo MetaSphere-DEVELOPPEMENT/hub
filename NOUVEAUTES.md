@@ -7,6 +7,14 @@ lisibles depuis le canapé : le menu affiche cette première section sous « Ins
 **La première section doit porter le numéro du fichier `VERSION`.** Un test le vérifie
 (`tests/test_version.py`). Marche à suivre pour publier : `installer/mise-a-jour/README.md`.
 
+## 1.0.4 — 18 septembre 2026
+
+Le bouton Éteindre ouvre un menu au lieu d'un interrupteur : éteindre, redémarrer, mettre
+le HUB en veille (l'écran s'éteint, la télécommande réveille), passer en écran permanent
+(Always-On Display : horloge, météo et cadre photo, sans rien arrêter) ou changer de
+profil. Chaque entrée dit en une ligne ce qu'elle fait, Annuler est sélectionné d'emblée,
+et éteindre comme redémarrer demandent confirmation.
+
 ## 1.0.2 — 17 septembre 2026
 
 Un HUB installé avant les numéros de version affichait « version inconnue » à côté de

@@ -224,14 +224,54 @@
   </div>
 </div>
 
+<!-- Le bouton Éteindre du pied ouvre ce menu, pas un interrupteur : une entrée par
+     action, son nom et la ligne qui dit ce qu'elle fait. Annuler est en tête et reçoit la
+     sélection à chaque ouverture (hub.js) : sur une télécommande, un OK parti trop vite
+     ne doit rien couper. Ce qui ne se défait pas passe ensuite par #arret-confirmer. -->
 <div class="calque voile" id="arret">
-  <div class="dialogue">
+  <div class="dialogue menu-arret">
     <span class="pictogramme" style="--c: var(--arret)"><svg viewBox="0 0 24 24"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg></span>
     <h2 data-t="arret.titre"></h2>
     <p data-t="arret.detail"></p>
+    <div class="arret-actions">
+      <button class="action-arret" id="arret-annuler" data-nav data-cle="arret-annuler" data-action="fermer">
+        <svg viewBox="0 0 24 24"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+        <span class="action-textes"><span class="action-nom" data-t="annuler"></span><span class="action-detail" data-t="arret.annuler.detail"></span></span>
+      </button>
+      <button class="action-arret danger" data-nav data-cle="arret-eteindre" data-action="eteindre">
+        <svg viewBox="0 0 24 24"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg>
+        <span class="action-textes"><span class="action-nom" data-t="eteindre"></span><span class="action-detail" data-t="arret.eteindre.detail"></span></span>
+      </button>
+      <button class="action-arret danger" data-nav data-cle="arret-redemarrer" data-action="redemarrer">
+        <svg viewBox="0 0 24 24"><path d="M20.5 12a8.5 8.5 0 1 1-2.6-6.1"/><path d="M20.5 3.5V9H15"/></svg>
+        <span class="action-textes"><span class="action-nom" data-t="redemarrer"></span><span class="action-detail" data-t="arret.redemarrer.detail"></span></span>
+      </button>
+      <button class="action-arret" data-nav data-cle="arret-veille" data-action="veille">
+        <svg viewBox="0 0 24 24"><path d="M20.5 14.3A8.5 8.5 0 0 1 9.7 3.5a8.5 8.5 0 1 0 10.8 10.8z"/></svg>
+        <span class="action-textes"><span class="action-nom" data-t="arret.veille"></span><span class="action-detail" data-t="arret.veille.detail"></span></span>
+      </button>
+      <button class="action-arret" data-nav data-cle="arret-ambiant" data-action="ambiant">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.2V12l3 2"/></svg>
+        <span class="action-textes"><span class="action-nom" data-t="arret.ambiant"></span><span class="action-detail" data-t="arret.ambiant.detail"></span></span>
+      </button>
+      <button class="action-arret" data-nav data-cle="arret-profils" data-action="profils">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.6"/><path d="M5 20.5a7 7 0 0 1 14 0"/></svg>
+        <span class="action-textes"><span class="action-nom" data-t="arret.profils"></span><span class="action-detail" data-t="arret.profils.detail"></span></span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Éteindre et Redémarrer ne se défont pas : un second écran, court, où Annuler garde
+     la sélection. Son titre, sa phrase et son bouton sont posés par hub.js. -->
+<div class="calque voile" id="arret-confirmer">
+  <div class="dialogue">
+    <span class="pictogramme" style="--c: var(--arret)"><svg viewBox="0 0 24 24"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg></span>
+    <h2 id="arret-confirmer-titre"></h2>
+    <p id="arret-confirmer-detail"></p>
     <div class="choix">
-      <button class="bouton" data-nav data-action="fermer"><span data-t="annuler"></span></button>
-      <button class="bouton danger" data-nav data-action="eteindre"><span data-t="eteindre"></span></button>
+      <button class="bouton" id="arret-confirmer-annuler" data-nav data-cle="arret-confirmer-annuler" data-action="fermer"><span data-t="annuler"></span></button>
+      <button class="bouton danger" id="arret-confirmer-oui" data-nav data-cle="arret-confirmer-oui" data-action="arret-confirme"><span></span></button>
     </div>
   </div>
 </div>
