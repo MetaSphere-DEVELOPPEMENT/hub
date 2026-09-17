@@ -133,10 +133,7 @@ function majJaugeTemps() {
 }
 
 // ── Prolongation par code parent ──────────────────────────────────────────
-function parentsAvecCode() {
-  return reglages.profils.filter(x => x.pin && !estRestreint(x));
-}
-
+// parentsAvecCode() vient de hub.js : le menu d'arrêt s'en sert aussi.
 function accorderTemps(p, minutes) {
   const parents = parentsAvecCode();
   if (!parents.length) { son("erreur"); return annoncer(t("temps.sans.parent")); }

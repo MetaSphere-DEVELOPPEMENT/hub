@@ -69,6 +69,11 @@ case "$choix" in
   eteindre)
     systemctl poweroff
     ;;
+  redemarrer)
+    # Même chemin que l'extinction : le menu a déjà demandé confirmation, et logind
+    # l'autorise à la session locale active. La boucle ne reprend pas la main.
+    systemctl reboot
+    ;;
 esac
 
 sleep 1
