@@ -7,6 +7,11 @@ lisibles depuis le canapé : le menu affiche cette première section sous « Ins
 **La première section doit porter le numéro du fichier `VERSION`.** Un test le vérifie
 (`tests/test_version.py`). Marche à suivre pour publier : `installer/mise-a-jour/README.md`.
 
+## 1.0.2 — 17 septembre 2026
+
+Un HUB installé avant les numéros de version affichait « version inconnue » à côté de
+l'empreinte de son commit, et ses mises à jour échouaient à l'étape des tests.
+
 ## 1.0.1 — 17 septembre 2026
 
 Le bouton Installer réapparaît quand une version plus récente sort, même si une mise à jour s'est déjà installée depuis le dernier démarrage.

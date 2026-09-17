@@ -14,6 +14,7 @@ import re
 import subprocess
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 RACINE = Path(__file__).resolve().parent.parent
@@ -82,6 +83,18 @@ class Numero(unittest.TestCase):
         infos = hub_menu.infos()
         self.assertEqual(infos["version"], numero_du_depot())
         self.assertEqual(infos["nouveautes"], hub_menu.nouveautes(NOUVEAUTES))
+
+
+    def test_fichier_installe_sans_numero_complete_par_le_depot(self):
+        """Un HUB installé avant les numéros n'a que l'empreinte : le menu affiche quand
+        même le numéro du dépôt, sinon À propos dirait « version inconnue »."""
+        with tempfile.TemporaryDirectory() as d:
+            ancien = Path(d) / "VERSION"
+            ancien.write_text("abc1234\n")
+            with unittest.mock.patch.object(hub_menu, "VERSION_INSTALLEE", ancien):
+                infos = hub_menu.infos()
+        self.assertEqual(infos["version"], numero_du_depot())
+        self.assertEqual(infos["commit"], "abc1234")
 
 
 class FichierInstalle(unittest.TestCase):
