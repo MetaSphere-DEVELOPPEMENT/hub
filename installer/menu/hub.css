@@ -8,14 +8,15 @@
   --texte: #f3f5fb;
   /* Mesurés sur le fond réel le 17/09/2026 : à .64 et .40, le détail des cartes, les
      touches rapides et les aides du pied descendaient à 1,7–3,2:1. */
-  --texte-doux: rgba(226, 232, 250, .84);
+  --texte-doux: rgba(226, 232, 250, .9);
   --texte-pale: rgba(226, 232, 250, .62);
   /* Voile des cartes non sélectionnées : elles s'effaçaient par opacity, texte compris. */
   --voile-carte: rgba(6, 7, 12, .35);
+  --voile-carte-focus: rgba(6, 7, 12, .16);
   /* Texte à la couleur d'un mode (--c) : la teinte pure, turquoise sur verre turquoise,
      ne dépassait pas 3:1. On la mêle à --ton-accent dans la proportion --part-accent. */
   --ton-accent: #fff;
-  --part-accent: 25%;
+  --part-accent: 15%;
   --accent-texte: color-mix(in srgb, rgb(var(--accent)) var(--part-accent), var(--ton-accent));
   /* Couleurs d'état, en texte comme en jauge : jamais en dur, elles changent avec le thème. */
   --pluie: rgb(90 170 255);
@@ -82,6 +83,7 @@
   --texte-doux: rgba(14, 19, 34, .74);
   --texte-pale: rgba(14, 19, 34, .64);
   --voile-carte: transparent;
+  --voile-carte-focus: transparent;
   /* Teinte ×.78 de hub.js assombrie encore : TV ≈ #00756c. */
   --ton-accent: #000;
   --part-accent: 66%;
@@ -453,7 +455,7 @@ body.avec-reprises .salut h1 { font-size: var(--t-5); }
   z-index: -1;
 }
 .carte.focus {
-  background: linear-gradient(160deg, var(--reflet), transparent 55%), var(--verre);
+  background: linear-gradient(160deg, var(--reflet), transparent 55%), linear-gradient(var(--voile-carte-focus), var(--voile-carte-focus)), var(--verre);
   transform: translateY(-.68rem) scale(1.06);
   box-shadow:
     inset 0 0 0 1px rgb(var(--c) / .25),
@@ -463,7 +465,7 @@ body.avec-reprises .salut h1 { font-size: var(--t-5); }
 .carte.focus::after, .carte.focus .carte-corps::before { opacity: 1; }
 body.ambiant .carte::before, body.depart .carte::before { animation-play-state: paused; }
 .carte.focus .carte-corps::after { animation: reflet 1.1s .05s var(--souple); }
-.carte.focus .halo { opacity: .5; }
+.carte.focus .halo { opacity: .35; }
 
 .pictogramme {
   --c: var(--accent);
@@ -767,7 +769,14 @@ body.gestion .tuile-profil .avatar { position: relative; }
 .nuancier { display: flex; gap: .61rem; justify-content: center; margin-top: .91rem; }
 .nuance { width: 2.12rem; height: 2.12rem; border-radius: 50%; background: rgb(var(--c)); box-shadow: inset 0 0 0 2px rgb(255 255 255 / .25); transition: transform var(--focus-duree) var(--sortie); }
 .nuance.choisie { box-shadow: inset 0 0 0 3px #fff; }
-.nuance.choisie::after, .choix-photo.choisie::after { content: "✓"; display: grid; place-items: center; height: 100%; font-size: var(--t-2); font-weight: 800; color: #06070c; text-shadow: 0 0 .3rem #fff; }
+.nuance, .choix-photo { position: relative; }
+/* Une pastille dans le coin, pas par-dessus : l'initiale d'un profil sans photo reste lisible. */
+.nuance.choisie::after, .choix-photo.choisie::after {
+  content: "✓"; position: absolute; right: -.25rem; bottom: -.25rem;
+  display: grid; place-items: center; width: 1.2rem; height: 1.2rem; border-radius: 50%;
+  font-size: var(--t-1); font-weight: 800; line-height: 1; color: #06070c; background: #fff;
+  box-shadow: 0 0 0 2px var(--encre);
+}
 .nuance.focus { transform: scale(1.2); box-shadow: inset 0 0 0 3px #fff, 0 0 1.21rem rgb(var(--c)); }
 .avatar.avec-photo { background-size: cover; background-position: center; color: transparent; text-shadow: none; }
 .galerie-avatars { display: flex; flex-wrap: wrap; gap: .53rem; justify-content: center; max-height: 6.37rem; overflow: hidden; }

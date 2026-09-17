@@ -40,17 +40,26 @@
 .cadre-photo::before { inset: -6%; background-size: cover; filter: blur(40px) brightness(.55); z-index: 0; }
 .cadre-photo::after { inset: 0; background-size: contain; z-index: 1; }
 .cadre-photo.visible { opacity: 1; }
+/* Horloge blanche sur une photo de neige : 1,01:1 une fois la photo nette. Un dégradé sombre
+   dans les coins où vivent l'horloge et la légende, peint une fois, sans flou. */
+#cadre::after {
+  content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none;
+  background:
+    radial-gradient(70% 80% at 100% 100%, rgb(0 0 0 / .62), rgb(0 0 0 / .4) 40%, transparent 100%),
+    radial-gradient(35% 30% at 0% 0%, rgb(0 0 0 / .45), transparent 80%);
+}
+.cadre-souvenir { z-index: 2; }
 .cadre-photo.travelling { animation: cadre-travelling 30s ease-in-out both; }
 @keyframes cadre-travelling { from { transform: scale(1); } to { transform: scale(1.06); } }
 #cadre.reduit .cadre-photo { transition: none; animation: none; }
-.cadre-souvenir { position: absolute; top: calc(var(--marge, 5) * 1vh); left: calc(var(--marge, 5) * 1vw); padding: .34rem .76rem; border-radius: 99rem; font-size: var(--t-3); color: #fff; background: rgb(0 0 0 / .4); backdrop-filter: blur(8px); }
+.cadre-souvenir { position: absolute; top: calc(var(--marge, 5) * 1vh); left: calc(var(--marge, 5) * 1vw); padding: .34rem .76rem; border-radius: 99rem; font-size: var(--t-3); color: #fff; background: rgb(0 0 0 / .6); backdrop-filter: blur(8px); }
 
 /* Horloge et météo passent en surimpression discrète, en bas à droite. */
 body.cadre-actif #ambiant { place-items: end; background: none; }
-body.cadre-actif .ambiant-corps { position: relative; margin: 0 calc(var(--marge, 5) * 1vw) calc(var(--marge, 5) * 1vh) 0; text-align: right; color: #fff; text-shadow: 0 .11rem .91rem rgb(0 0 0 / .7); }
+body.cadre-actif .ambiant-corps { position: relative; z-index: 2; margin: 0 calc(var(--marge, 5) * 1vw) calc(var(--marge, 5) * 1vh) 0; text-align: right; color: #fff; text-shadow: 0 .11rem .91rem rgb(0 0 0 / .7); }
 body.cadre-actif .ambiant-heure { font-size: var(--t-7); font-weight: 300; }
-body.cadre-actif .ambiant-date { font-size: var(--t-3); margin-top: .23rem; color: rgb(255 255 255 / .85); }
-body.cadre-actif .ambiant-meteo { justify-content: flex-end; font-size: var(--t-3); margin-top: .61rem; color: rgb(255 255 255 / .85); }
+body.cadre-actif .ambiant-date { font-size: var(--t-3); margin-top: .23rem; color: #fff; }
+body.cadre-actif .ambiant-meteo { justify-content: flex-end; font-size: var(--t-3); margin-top: .61rem; color: #fff; }
 body.cadre-actif .ambiant-meteo .picto-meteo { width: 1.82rem; height: 1.82rem; }
 
 /* ── Compteur d'images (fluidite.js, éteint par défaut) ─────────────────────
