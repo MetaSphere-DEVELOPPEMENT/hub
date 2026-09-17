@@ -15,6 +15,7 @@
   --reflet: rgba(255, 255, 255, .16);
   --ombre: rgba(0, 0, 0, .6);
   --voile: rgba(4, 5, 10, .45);
+  --voile-plein: rgba(4, 5, 10, .7);
   --grain: .045;
   --vignette: rgba(3, 4, 8, .75);
   --focus-texte: #ffffff;
@@ -43,6 +44,7 @@
   --reflet: rgba(255, 255, 255, .9);
   --ombre: rgba(40, 52, 90, .22);
   --voile: rgba(225, 230, 242, .45);
+  --voile-plein: rgba(225, 230, 242, .7);
   --grain: .03;
   --vignette: rgba(190, 198, 220, .55);
   --focus-texte: #0e1322;
@@ -120,16 +122,21 @@ button { font: inherit; color: inherit; border: 0; background: none; outline: no
 }
 
 /* ── Accueil ─────────────────────────────────────────────────────────────── */
+/* Départ, calque, ambiant : l'accueil s'efface par opacité et échelle, que le
+   compositeur applique sans repeindre. Il se floutait aussi (filter: blur de 2 à
+   20 px, animé) : un flou plein écran recalculé à chaque image, en 3840×2160 sur
+   l'UHD 630. Le voile plus dense des calques tient lieu de flou. */
 .ecran {
   position: relative;
   height: 100%;
   display: grid;
   grid-template-rows: auto 1fr auto;
   padding: calc(var(--marge) * 1vh) calc(var(--marge) * 1vw);
-  transition: opacity .5s var(--souple), transform .6s var(--souple), filter .6s var(--souple);
+  transition: opacity .5s var(--souple), transform .6s var(--souple);
 }
-body.depart .ecran { opacity: 0; transform: scale(1.04); filter: blur(12px); }
-body.calque-ouvert .ecran { transform: scale(.975); filter: blur(2px); opacity: .55; }
+body.depart .ecran, body.calque-ouvert .ecran, body.ambiant .ecran { will-change: transform, opacity; }
+body.depart .ecran { opacity: 0; transform: scale(1.04); }
+body.calque-ouvert .ecran { transform: scale(.975); opacity: .35; }
 
 .entete {
   display: flex;
@@ -159,14 +166,15 @@ body.calque-ouvert .ecran { transform: scale(.975); filter: blur(2px); opacity: 
   display: flex; align-items: center; gap: .7rem;
   padding: .45rem 1.05rem .45rem .45rem;
   border-radius: 99rem;
+  /* Pas de flou d'arrière-plan : sur un fond fait de dégradés doux, flouter ce qui est
+     déjà flou ne change presque rien, et chaque image du fond le recalculait. Le verre
+     dépoli reste sur les cartes et les panneaux. */
   background: var(--verre);
-  -webkit-backdrop-filter: blur(20px) saturate(150%);
-  backdrop-filter: blur(20px) saturate(150%);
   box-shadow: inset 0 0 0 1px var(--liseré);
   font-size: 1rem;
   font-weight: 600;
   color: var(--texte-doux);
-  transition: transform .45s var(--ressort), background .35s, box-shadow .35s, color .35s;
+  transition: transform .45s var(--ressort), background-color .35s, color .35s;
 }
 .puce.focus {
   color: var(--texte);
@@ -196,11 +204,12 @@ body.calque-ouvert .ecran { transform: scale(.975); filter: blur(2px); opacity: 
   color: var(--texte-doux);
   background: var(--verre);
   box-shadow: inset 0 0 0 1px var(--liseré);
-  transition: all .4s var(--souple);
+  transition: color .4s var(--souple), background-color .4s var(--souple), opacity .4s var(--souple);
 }
 .voix-pastille svg { width: 1.2rem; height: 1.2rem; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 .ondes { display: none; gap: .2rem; align-items: center; height: 1.2rem; }
-.ondes i { width: .22rem; border-radius: .2rem; background: currentColor; animation: onde .9s ease-in-out infinite; }
+/* Échelle plutôt que hauteur : l'animation passe par le compositeur, sans mise en page. */
+.ondes i { width: .22rem; height: 1.2rem; border-radius: .2rem; background: currentColor; transform: scaleY(.25); animation: onde .9s ease-in-out infinite; }
 .ondes i:nth-child(2) { animation-delay: .15s; }
 .ondes i:nth-child(3) { animation-delay: .3s; }
 .ondes i:nth-child(4) { animation-delay: .45s; }
@@ -231,7 +240,8 @@ body.calque-ouvert .ecran { transform: scale(.975); filter: blur(2px); opacity: 
 
 .modes { display: flex; gap: 1.8rem; perspective: 80rem; }
 body.avec-reprises .centre { gap: 1.8rem; }
-body.avec-reprises .carte { height: 17rem; padding-top: 1.6rem; }
+body.avec-reprises .carte { height: 17rem; }
+body.avec-reprises .carte-corps { padding-top: 1.6rem; }
 body.avec-reprises .salut h1 { font-size: 2.3rem; }
 
 /* ── Continuer à regarder ────────────────────────────────────────────────── */
@@ -250,7 +260,7 @@ body.avec-reprises .salut h1 { font-size: 2.3rem; }
   background-position: center 25%;
   box-shadow: inset 0 0 0 1px var(--liseré), 0 1rem 2.2rem -1rem var(--ombre);
   opacity: .82;
-  transition: transform .5s var(--ressort), opacity .35s, box-shadow .35s;
+  transition: transform .5s var(--ressort), opacity .35s;
 }
 .reprise::before { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, transparent 25%, rgb(0 0 0 / .82)); }
 .reprise .lettre { position: absolute; top: .6rem; left: .9rem; font-size: 3rem; font-weight: 800; color: rgb(255 255 255 / .18); }
@@ -290,32 +300,55 @@ body.avec-reprises .salut h1 { font-size: 2.3rem; }
 @keyframes intro-reflet { from { background-position: 100% 0; } to { background-position: 0 0; } }
 @keyframes intro-trait { from { transform: scaleX(0); opacity: 0; } 60% { opacity: 1; } to { transform: scaleX(1); opacity: .7; } }
 
+/* La carte porte le verre, le liseré et la lueur colorée (::after) ; son corps rogne
+   ce qui déborde (halo, reflet, texte). La lueur vit hors de la carte : sous un
+   overflow: hidden, elle aurait été rognée, et c'est pour l'animer par son opacité
+   plutôt que par box-shadow (une ombre de 4,5rem repeinte à chaque image) qu'elle
+   est à part. */
 .carte {
   --c: var(--tv);
   position: relative;
+  display: block;
   width: 17.5rem;
   height: 21rem;
-  padding: 2rem 1.9rem 1.8rem;
-  display: flex;
-  flex-direction: column;
   border-radius: 1.9rem;
   background: linear-gradient(160deg, var(--reflet), transparent 55%), var(--verre);
-  -webkit-backdrop-filter: blur(28px) saturate(160%);
-  backdrop-filter: blur(28px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  backdrop-filter: blur(24px) saturate(160%);
   box-shadow:
     inset 0 0 0 1px var(--liseré),
     0 1.6rem 3.5rem -1.2rem var(--ombre);
   opacity: .74;
   transform: scale(.96);
-  transition: transform .55s var(--ressort), opacity .45s var(--souple), box-shadow .45s var(--souple), background .45s var(--souple);
+  transition: transform .55s var(--ressort), opacity .45s var(--souple);
   animation: montee .9s var(--souple) both;
+  isolation: isolate;
+}
+.carte-corps {
+  position: absolute; inset: 0;
+  padding: 2rem 1.9rem 1.8rem;
+  display: flex;
+  flex-direction: column;
+  border-radius: inherit;
   overflow: hidden;
   isolation: isolate;
+}
+/* Éclaircissement du verre à la sélection : var(--verre) posé sur var(--verre) donne
+   à peu près var(--verre-fort), dans les deux thèmes, sans transition de background. */
+.carte-corps::before {
+  content: "";
+  position: absolute; inset: 0;
+  background: var(--verre);
+  opacity: 0;
+  transition: opacity .45s var(--souple);
+  z-index: -1;
 }
 .carte[data-mode="tv"] { --c: var(--tv); animation-delay: .14s; }
 .carte[data-mode="gaming"] { --c: var(--jeux); animation-delay: .22s; }
 .carte[data-mode="bureau"] { --c: var(--bureau); animation-delay: .30s; }
 
+/* Le liseré tournant repeint un dégradé conique masqué à chaque image : il ne tourne
+   que sur la carte sélectionnée, et s'arrête quand l'accueil n'est plus à l'écran. */
 .carte::before {
   content: "";
   position: absolute; inset: 0;
@@ -329,10 +362,20 @@ body.avec-reprises .salut h1 { font-size: 2.3rem; }
   mask-composite: exclude;
   opacity: 0;
   transition: opacity .45s var(--souple);
-  animation: tour 4.5s linear infinite;
+  animation: tour 4.5s linear infinite paused;
   z-index: 2;
+  pointer-events: none;
 }
 .carte::after {
+  content: "";
+  position: absolute; inset: 0;
+  border-radius: inherit;
+  box-shadow: 0 2.4rem 4.5rem -1rem rgb(var(--c) / .35);
+  opacity: 0;
+  transition: opacity .45s var(--souple);
+  pointer-events: none;
+}
+.carte-corps::after {
   content: "";
   position: absolute; inset: -40% -60%;
   background: linear-gradient(105deg, transparent 42%, rgba(255, 255, 255, .22) 50%, transparent 58%);
@@ -354,14 +397,14 @@ body.avec-reprises .salut h1 { font-size: 2.3rem; }
 .carte.focus {
   opacity: 1;
   transform: translateY(-.9rem) scale(1.06);
-  background: linear-gradient(160deg, var(--reflet), transparent 60%), var(--verre-fort);
   box-shadow:
     inset 0 0 0 1px rgb(var(--c) / .25),
-    0 2.4rem 4.5rem -1rem rgb(var(--c) / .35),
     0 1.6rem 3.5rem -1.2rem var(--ombre);
 }
-.carte.focus::before { opacity: 1; }
-.carte.focus::after { animation: reflet 1.1s .05s var(--souple); }
+.carte.focus::before { opacity: 1; animation-play-state: running; }
+.carte.focus::after, .carte.focus .carte-corps::before { opacity: 1; }
+body.ambiant .carte::before, body.depart .carte::before { animation-play-state: paused; }
+.carte.focus .carte-corps::after { animation: reflet 1.1s .05s var(--souple); }
 .carte.focus .halo { opacity: .75; }
 
 .pictogramme {
@@ -445,10 +488,8 @@ kbd.fleche { font-family: system-ui, sans-serif; font-size: 1.05rem; line-height
   font-size: 1rem; font-weight: 600;
   color: var(--texte-doux);
   background: var(--verre);
-  -webkit-backdrop-filter: blur(20px);
-  backdrop-filter: blur(20px);
   box-shadow: inset 0 0 0 1px var(--liseré);
-  transition: color .35s, background .35s, box-shadow .35s, transform .45s var(--ressort);
+  transition: color .35s, background-color .35s, transform .45s var(--ressort);
 }
 .bouton.rond { padding: .85rem; }
 .bouton svg { width: 1.3rem; height: 1.3rem; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
@@ -470,11 +511,10 @@ kbd.fleche { font-family: system-ui, sans-serif; font-size: 1.05rem; line-height
 }
 .calque.ouvert { opacity: 1; visibility: visible; transition: opacity .4s var(--souple); }
 
+/* Voiles plein écran : un fond dense plutôt qu'un flou de 3840×2160 pixels. */
 .voile {
   display: grid; place-items: center;
-  background: var(--voile);
-  -webkit-backdrop-filter: blur(18px) saturate(120%);
-  backdrop-filter: blur(18px) saturate(120%);
+  background: var(--voile-plein);
 }
 .dialogue {
   width: 34rem;
@@ -482,8 +522,8 @@ kbd.fleche { font-family: system-ui, sans-serif; font-size: 1.05rem; line-height
   border-radius: 1.8rem;
   text-align: center;
   background: linear-gradient(160deg, var(--reflet), transparent 70%), var(--verre-feuille);
-  -webkit-backdrop-filter: blur(30px) saturate(150%);
-  backdrop-filter: blur(30px) saturate(150%);
+  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  backdrop-filter: blur(24px) saturate(150%);
   box-shadow: inset 0 0 0 1px var(--liseré), 0 2.5rem 5rem -1rem var(--ombre);
   transform: translateY(1.2rem) scale(.96);
   transition: transform .5s var(--ressort);
@@ -497,7 +537,7 @@ kbd.fleche { font-family: system-ui, sans-serif; font-size: 1.05rem; line-height
 .choix .bouton { flex: 1; justify-content: center; padding: 1rem; border-radius: 1rem; font-size: 1.1rem; }
 
 /* Feuille latérale : réglages, météo. */
-.feuille { background: var(--voile); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+.feuille { background: var(--voile); }
 .feuille-corps {
   position: absolute;
   top: 3vh; bottom: 3vh; right: 2.2vw;
@@ -507,8 +547,8 @@ kbd.fleche { font-family: system-ui, sans-serif; font-size: 1.05rem; line-height
   border-radius: 2rem;
   overflow: hidden;
   background: linear-gradient(165deg, var(--reflet), transparent 40%), var(--verre-feuille);
-  -webkit-backdrop-filter: blur(40px) saturate(170%);
-  backdrop-filter: blur(40px) saturate(170%);
+  -webkit-backdrop-filter: blur(28px) saturate(170%);
+  backdrop-filter: blur(28px) saturate(170%);
   box-shadow: inset 0 0 0 1px var(--liseré), 0 3rem 6rem -1rem var(--ombre);
   transform: translateX(4rem);
   transition: transform .6s var(--souple);
@@ -559,7 +599,7 @@ kbd.fleche { font-family: system-ui, sans-serif; font-size: 1.05rem; line-height
   color: var(--texte-doux);
   background: var(--verre);
   box-shadow: inset 0 0 0 1px var(--liseré);
-  transition: all .3s var(--souple);
+  transition: color .3s var(--souple), background-color .3s var(--souple), transform .3s var(--souple);
   white-space: nowrap;
 }
 .option.choisie { color: var(--texte); background: rgb(var(--accent) / .22); box-shadow: inset 0 0 0 1px rgb(var(--accent) / .55); }
@@ -572,7 +612,7 @@ kbd.fleche { font-family: system-ui, sans-serif; font-size: 1.05rem; line-height
   border-radius: 1rem;
   overflow: hidden;
   box-shadow: inset 0 0 0 1px var(--liseré);
-  transition: transform .45s var(--ressort), box-shadow .3s;
+  transition: transform .45s var(--ressort);
 }
 .vignette-fond span {
   position: absolute; left: .8rem; bottom: .6rem;
@@ -613,9 +653,7 @@ kbd.fleche { font-family: system-ui, sans-serif; font-size: 1.05rem; line-height
 /* ── Profils ─────────────────────────────────────────────────────────────── */
 #profils {
   display: grid; place-items: center;
-  background: var(--voile);
-  -webkit-backdrop-filter: blur(30px) saturate(130%);
-  backdrop-filter: blur(30px) saturate(130%);
+  background: var(--voile-plein);
 }
 .profils-corps { text-align: center; }
 .profils-corps h2 { font-size: 3rem; font-weight: 700; letter-spacing: -.03em; margin-bottom: 3rem; }
@@ -630,7 +668,7 @@ kbd.fleche { font-family: system-ui, sans-serif; font-size: 1.05rem; line-height
   width: 9rem; height: 9rem;
   border-radius: 2.4rem;
   font-size: 3.8rem;
-  transition: box-shadow .4s var(--souple), border-radius .5s var(--souple);
+  transition: border-radius .5s var(--souple);
 }
 .tuile-profil.ajout .avatar { background: var(--verre); color: var(--texte-doux); box-shadow: inset 0 0 0 2px var(--liseré); font-weight: 300; }
 .tuile-profil.focus { transform: translateY(-.6rem) scale(1.08); color: var(--texte); }
@@ -649,12 +687,12 @@ body.gestion .tuile-profil .avatar { position: relative; }
   font-size: 1.3rem; font-weight: 600;
   background: var(--verre);
   box-shadow: inset 0 0 0 1px var(--liseré);
-  transition: all .3s var(--souple);
+  transition: background-color .3s var(--souple);
 }
 .champ .indice { font-size: .9rem; color: var(--texte-pale); font-weight: 500; }
 .champ.focus { box-shadow: inset 0 0 0 2px rgb(var(--accent)), 0 0 1.6rem -.4rem rgb(var(--accent) / .6); }
 .nuancier { display: flex; gap: .8rem; justify-content: center; margin-top: 1.2rem; }
-.nuance { width: 2.8rem; height: 2.8rem; border-radius: 50%; background: rgb(var(--c)); box-shadow: inset 0 0 0 2px rgb(255 255 255 / .25); transition: transform .4s var(--ressort), box-shadow .3s; }
+.nuance { width: 2.8rem; height: 2.8rem; border-radius: 50%; background: rgb(var(--c)); box-shadow: inset 0 0 0 2px rgb(255 255 255 / .25); transition: transform .4s var(--ressort); }
 .nuance.choisie { box-shadow: inset 0 0 0 3px #fff; }
 .nuance.focus { transform: scale(1.2); box-shadow: inset 0 0 0 3px #fff, 0 0 1.6rem rgb(var(--c)); }
 .avatar.avec-photo { background-size: cover; background-position: center; color: transparent; text-shadow: none; }
@@ -664,7 +702,7 @@ body.gestion .tuile-profil .avatar { position: relative; }
   border-radius: 50%;
   background-size: cover; background-position: center;
   box-shadow: inset 0 0 0 2px var(--liseré);
-  transition: transform .4s var(--ressort), box-shadow .3s;
+  transition: transform .4s var(--ressort);
 }
 .choix-photo.sans-photo { display: grid; place-items: center; font-weight: 700; font-size: 1.4rem; color: var(--texte-doux); background: var(--verre); }
 .choix-photo.choisie { box-shadow: inset 0 0 0 3px rgb(var(--accent)); }
@@ -674,14 +712,14 @@ body.gestion .tuile-profil .avatar { position: relative; }
 .dialogue .etiquette-champ { text-align: left; font-size: .9rem; color: var(--texte-doux); margin: 1.2rem 0 .5rem; }
 
 /* ── Clavier à l'écran ───────────────────────────────────────────────────── */
-#clavier { display: grid; place-items: end center; background: var(--voile); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+#clavier { display: grid; place-items: end center; background: var(--voile); }
 .clavier-corps {
   margin-bottom: 5vh;
   padding: 1.8rem;
   border-radius: 1.8rem;
   background: var(--verre-feuille);
-  -webkit-backdrop-filter: blur(40px) saturate(160%);
-  backdrop-filter: blur(40px) saturate(160%);
+  -webkit-backdrop-filter: blur(28px) saturate(160%);
+  backdrop-filter: blur(28px) saturate(160%);
   box-shadow: inset 0 0 0 1px var(--liseré), 0 2.5rem 5rem -1rem var(--ombre);
   transform: translateY(3rem);
   transition: transform .5s var(--souple);
@@ -706,7 +744,7 @@ body.gestion .tuile-profil .avatar { position: relative; }
   font-size: 1.35rem; font-weight: 600;
   background: var(--verre);
   box-shadow: inset 0 0 0 1px var(--liseré);
-  transition: transform .3s var(--ressort), background .2s, box-shadow .2s;
+  transition: transform .3s var(--ressort), background-color .2s;
 }
 .touche.large { grid-column: span 3; font-size: 1rem; }
 .touche.moyenne { grid-column: span 2; font-size: 1rem; }
@@ -767,7 +805,8 @@ body.gestion .tuile-profil .avatar { position: relative; }
 }
 :root[data-theme="clair"] #ambiant { background: rgb(255 255 255 / .25); }
 body.ambiant #ambiant { opacity: 1; visibility: visible; transition: opacity 1.4s var(--souple); }
-body.ambiant .ecran { opacity: 0; filter: blur(20px); transform: scale(1.05); }
+/* Invisible une fois fondu : ses animations (liseré, pictos météo) cessent d'être peintes. */
+body.ambiant .ecran { opacity: 0; transform: scale(1.05); visibility: hidden; transition: opacity .5s var(--souple), transform .6s var(--souple), visibility 0s .6s; }
 .ambiant-corps { text-align: center; transition: transform 3s var(--souple); }
 .ambiant-heure { font-size: 14rem; font-weight: 200; letter-spacing: -.05em; line-height: .9; font-variant-numeric: tabular-nums; }
 .ambiant-date { font-size: 2rem; color: var(--texte-doux); margin-top: 1rem; }
@@ -783,16 +822,18 @@ body.ambiant .ecran { opacity: 0; filter: blur(20px); transform: scale(1.05); }
   border-radius: 99rem;
   font-size: 1.1rem;
   background: var(--verre-feuille);
-  -webkit-backdrop-filter: blur(24px);
-  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
   box-shadow: inset 0 0 0 1px var(--liseré), 0 1rem 2.5rem -1rem var(--ombre);
   opacity: 0;
+  /* Cachées, elles ne gardent pas un flou d'arrière-plan à recalculer sous le fond. */
+  visibility: hidden;
   transform: translate(-50%, 1rem);
-  transition: opacity .35s var(--souple), transform .45s var(--ressort);
+  transition: opacity .35s var(--souple), transform .45s var(--ressort), visibility 0s .45s;
   pointer-events: none;
   z-index: 20;
 }
-.annonce.visible, .bulle-voix.visible { opacity: 1; transform: translate(-50%, 0); }
+.annonce.visible, .bulle-voix.visible { opacity: 1; visibility: visible; transform: translate(-50%, 0); transition: opacity .35s var(--souple), transform .45s var(--ressort); }
 .bulle-voix { top: 14vh; bottom: auto; font-size: 1.5rem; font-weight: 600; display: flex; align-items: center; gap: .8rem; }
 .bulle-voix .ondes { display: flex; color: rgb(var(--accent)); }
 
@@ -813,7 +854,7 @@ body.ambiant .ecran { opacity: 0; filter: blur(20px); transform: scale(1.05); }
 @keyframes montee { from { opacity: 0; transform: translateY(3rem) scale(.92); } }
 @keyframes tour { to { --angle: 360deg; } }
 @keyframes reflet { 0% { opacity: 0; transform: translateX(-60%); } 20% { opacity: 1; } 100% { opacity: 0; transform: translateX(60%); } }
-@keyframes onde { 0%, 100% { height: .3rem; } 50% { height: 1.2rem; } }
+@keyframes onde { 0%, 100% { transform: scaleY(.25); } 50% { transform: scaleY(1); } }
 @keyframes clignote { 50% { opacity: 0; } }
 @keyframes kenburns { from { transform: scale(1) translate(0, 0); } to { transform: scale(1.12) translate(-2%, -1.5%); } }
 @keyframes tour-picto { to { transform: rotate(360deg); } }
@@ -851,13 +892,14 @@ body.sans-animation *, body.sans-animation *::before, body.sans-animation *::aft
 .code-dialogue { width: 26rem; }
 .code-dialogue .editeur-apercu { margin: 0 auto 1rem; width: 5rem; height: 5rem; font-size: 2.2rem; }
 .points { display: flex; justify-content: center; gap: 1.2rem; margin: 1.6rem 0 1.4rem; }
-.points i { width: 1.1rem; height: 1.1rem; border-radius: 50%; box-shadow: inset 0 0 0 2px var(--texte-pale); transition: background .2s, box-shadow .2s, transform .35s var(--ressort); }
+.points i { width: 1.1rem; height: 1.1rem; border-radius: 50%; box-shadow: inset 0 0 0 2px var(--texte-pale); transition: background-color .2s, transform .35s var(--ressort); }
 .points i.plein { background: rgb(var(--accent)); box-shadow: 0 0 1rem rgb(var(--accent) / .7); transform: scale(1.15); }
 .pave { display: grid; grid-template-columns: repeat(3, 1fr); gap: .7rem; }
-.touche-code { height: 3.8rem; border-radius: 1rem; font-size: 1.6rem; font-weight: 600; text-align: center; background: var(--verre); box-shadow: inset 0 0 0 1px var(--liseré); transition: transform .3s var(--ressort), background .2s, box-shadow .2s; }
+.touche-code { height: 3.8rem; border-radius: 1rem; font-size: 1.6rem; font-weight: 600; text-align: center; background: var(--verre); box-shadow: inset 0 0 0 1px var(--liseré); transition: transform .3s var(--ressort), background-color .2s; }
 .touche-code.focus { background: rgb(var(--accent) / .28); box-shadow: inset 0 0 0 2px rgb(var(--accent)); transform: scale(1.08); }
 
-body.verrouille .centre, body.verrouille .pied .aides { filter: blur(18px); opacity: .35; pointer-events: none; }
+/* Estompé plutôt que flouté : un flou de 18 px sur la moitié de l'écran, sous le fond animé. */
+body.verrouille .centre, body.verrouille .pied .aides { opacity: .15; pointer-events: none; }
 
 /* ── Télécommande ────────────────────────────────────────────────────────── */
 .appairage { display: grid; grid-template-columns: 19rem 1fr; gap: 2.4rem; align-items: center; }
@@ -899,7 +941,7 @@ body.verrouille .centre, body.verrouille .pied .aides { filter: blur(18px); opac
   color: var(--encre);
   box-shadow: inset 0 0 0 1px rgb(255 255 255 / .12), 0 .9rem 2rem -1rem var(--ombre);
   opacity: .8;
-  transition: transform .5s var(--ressort), opacity .35s, box-shadow .35s;
+  transition: transform .5s var(--ressort), opacity .35s;
 }
 .tuile-service::after {
   content: ""; position: absolute; inset: 0;
@@ -924,9 +966,11 @@ body.depart .tuile-service:not(.lance), body.depart .reprise { opacity: 0; }
 
 /* Accueil complet (cartes, reprises, streaming) : on resserre pour tenir dans l'écran. */
 body.avec-applis .centre { gap: 1.8rem; }
-body.avec-applis .carte { height: 17rem; padding-top: 1.6rem; }
+body.avec-applis .carte { height: 17rem; }
+body.avec-applis .carte-corps { padding-top: 1.6rem; }
 body.avec-applis.avec-reprises .centre { gap: 1.2rem; }
-body.avec-applis.avec-reprises .carte { height: 14.5rem; padding-top: 1.3rem; }
+body.avec-applis.avec-reprises .carte { height: 14.5rem; }
+body.avec-applis.avec-reprises .carte-corps { padding-top: 1.3rem; }
 body.avec-applis.avec-reprises .carte .detail { display: none; }
 body.avec-applis.avec-reprises .salut p { display: none; }
 body.avec-applis.avec-reprises .reprise { height: 6.6rem; }

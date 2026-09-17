@@ -155,3 +155,30 @@ test("manettes : pas de boucle sans manette ; une manette branchée pilote, déb
   await page.evaluate(() => { window.__manette = null; });
   await attendreBoucle("manettes", false);
 });
+
+test("liseré tournant : seulement sur la carte sélectionnée, arrêté en mode ambiant", async () => {
+  await ouvrir({ dernier: "gaming" });
+  const etats = () => page.$$eval(".carte", cartes => cartes.map(c => [c.dataset.mode, getComputedStyle(c, "::before").animationPlayState]));
+  assert.deepEqual(await etats(), [["tv", "paused"], ["gaming", "running"], ["bureau", "paused"]]);
+  await page.keyboard.press("ArrowRight");
+  assert.deepEqual(await etats(), [["tv", "paused"], ["gaming", "paused"], ["bureau", "running"]]);
+  await page.keyboard.press("a");
+  await page.waitForFunction(() => document.body.classList.contains("ambiant"));
+  assert.deepEqual((await etats()).map(e => e[1]), ["paused", "paused", "paused"]);
+});
+
+test("allègement : ni flou plein écran animé, ni flou d'arrière-plan sur les voiles et les puces", async () => {
+  await ouvrir();
+  const flous = await page.evaluate(() => {
+    const flou = e => { const s = getComputedStyle(e); return [s.filter, s.backdropFilter || s.webkitBackdropFilter].filter(v => v && v !== "none"); };
+    const r = { ecran: flou(document.querySelector(".ecran")) };
+    document.body.classList.add("calque-ouvert");
+    r.calque = flou(document.querySelector(".ecran"));
+    document.body.classList.replace("calque-ouvert", "ambiant");
+    r.ambiant = flou(document.querySelector(".ecran"));
+    r.voiles = [...document.querySelectorAll(".voile, .feuille, #profils, #clavier, .puce, .bouton")].flatMap(flou);
+    r.transitions = [...document.querySelectorAll(".ecran, .carte, .puce, .bouton, .option")].map(e => getComputedStyle(e).transitionProperty).filter(t => /\ball\b|filter|box-shadow/.test(t));
+    return r;
+  });
+  assert.deepEqual(flous, { ecran: [], calque: [], ambiant: [], voiles: [], transitions: [] });
+});
