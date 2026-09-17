@@ -764,6 +764,7 @@ function definirFocus(cible, silencieux = false) {
   courant = cible;
   cible.classList.add("focus");
   focusParCalque[pile.at(-1)] = cible;
+  retenirRangee(cible);
   if (change && !silencieux) son("deplacer");
 
   if (cible.dataset.accent) accentuer(cible.dataset.accent);
@@ -813,9 +814,49 @@ function defiler(cible) {
 // pied…) : sans ça, « haut » depuis un bouton du contenu sautait dans le sommaire voisin
 // au lieu du bouton juste au-dessus.
 const ZONES = ".contenu, .sommaire, .entete, .pied, .modes, .reprises, .applis, .grille-jeux, .editeur-identite, .editeur-securite, .choix, .pave";
+// L'accueil se lit en rangées : en-tête, cartes, reprises, streaming, pied. Gauche et Droite
+// restent dans la rangée et s'arrêtent à son bout ; Haut et Bas passent à la rangée voisine,
+// sur l'élément qu'on y avait sélectionné en dernier. La plus proche des cibles, en géométrie
+// pure, menait ailleurs (audit du 17/09/2026 : Gauche depuis TV → YouTube puis le profil ;
+// Haut depuis Jeux → la météo ; Bas depuis Netflix → le bouton Raccourcis) et 19 paires de
+// déplacements n'étaient pas réversibles.
+const RANGEES_ACCUEIL = [".entete", ".modes", ".reprises-liste", ".applis-liste", ".pied .actions"];
+const memoireRangee = new Map();
+function rangeesAccueil(liste) {
+  return RANGEES_ACCUEIL.map(sel => document.querySelector(`#accueil ${sel}`))
+    .map(r => r && liste.filter(e => r.contains(e)).sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left))
+    .filter(r => r?.length);
+}
+function voisinAccueil(depart, direction, liste) {
+  const rangees = rangeesAccueil(liste);
+  const i = rangees.findIndex(r => r.includes(depart));
+  if (i < 0) return undefined;
+  const rangee = rangees[i], j = rangee.indexOf(depart);
+  if (direction === "gauche") return rangee[j - 1] || null;
+  if (direction === "droite") return rangee[j + 1] || null;
+  const cible = rangees[direction === "haut" ? i - 1 : i + 1];
+  if (!cible) return null;
+  const retenu = memoireRangee.get(RANGEES_ACCUEIL.find(sel => cible[0].closest(`#accueil ${sel}`)));
+  if (cible.includes(retenu)) return retenu;
+  // L'en-tête, jamais visité : le profil, sa première cible, plutôt que la météo qui se
+  // trouve au-dessus de la carte du milieu.
+  if (cible[0].closest("#accueil .entete")) return cible[0];
+  const a = depart.getBoundingClientRect(), x = a.left + a.width / 2;
+  return cible.reduce((m, e) => { const r = e.getBoundingClientRect(); const d = Math.abs(r.left + r.width / 2 - x); return d < m.d ? { e, d } : m; }, { e: null, d: Infinity }).e;
+}
+function retenirRangee(cible) {
+  if (pile.at(-1) !== "accueil") return;
+  const sel = RANGEES_ACCUEIL.find(s => cible.closest(`#accueil ${s}`));
+  if (sel) memoireRangee.set(sel, cible);
+}
+
 function voisin(depart, direction) {
   const zone = depart.closest(ZONES);
   const liste = candidats();
+  if (pile.at(-1) === "accueil") {
+    const v = voisinAccueil(depart, direction, liste);
+    if (v !== undefined) return v;
+  }
   const dansZone = zone && voisinParmi(depart, direction, liste.filter(e => zone.contains(e)));
   if (dansZone) return dansZone;
   // Le contenu d'une feuille est un cul-de-sac en haut et en bas : le sommaire est à

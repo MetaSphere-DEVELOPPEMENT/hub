@@ -779,3 +779,31 @@ test("profil par défaut neutre ; des réglages existants gardent leurs profils 
   assert.equal(donnees.profilActif, "ancien");
   assert.deepEqual(donnees.profils.map(p => [p.id, p.nom]), [["autre", "Alix"], ["ancien", "Dominique"]]);
 });
+
+// Audit du 17/09/2026 : sur l'accueil, Gauche depuis TV menait à YouTube puis au profil, Haut
+// depuis Jeux à la météo, Bas depuis Netflix au bouton Raccourcis, et 19 paires de
+// déplacements ne revenaient pas au point de départ.
+test("accueil : rangées qui s'arrêtent au bout, et chaque déplacement se défait par la flèche opposée", async () => {
+  await ouvrir({ retour: true, reprises: [{ titre: "Dune", fichier: "/d.mkv", position: 60, duree: 600 }], reglages: { profils: [{ id: "p", nom: "Samuel", meteo: { active: true, ville: "Lyon", lat: 45.7, lon: 4.8 } }], profilActif: "p" } });
+  await page.evaluate(() => { window.hub.recevoir({ type: "meteo", donnees: { current: { temperature_2m: 17, weather_code: 3, is_day: 1 } }, releveLe: new Date().toISOString() }); recevoirMinuteur(Date.now() + 600000); });
+  const aller = async (depart, ...touches) => { await page.evaluate(s => definirFocus(document.querySelector(s), true), depart); await touche(...touches); return focus(); };
+  assert.equal(await aller('[data-mode="tv"]', "ArrowLeft"), "tv", "Gauche s'arrête au bout de la rangée des cartes");
+  assert.equal(await aller('[data-mode="bureau"]', "ArrowRight"), "bureau");
+  assert.equal(await aller('[data-mode="gaming"]', "ArrowUp"), "profils", "Haut depuis les cartes : le profil");
+  assert.equal(await aller('[data-cle="service-youtube"]', "ArrowLeft"), "service-youtube");
+
+  const oppose = { ArrowUp: "ArrowDown", ArrowDown: "ArrowUp", ArrowLeft: "ArrowRight", ArrowRight: "ArrowLeft" };
+  const cibles = await page.evaluate(() => candidats().map(e => e.dataset.mode || e.dataset.cle || e.dataset.action));
+  const irreversibles = [];
+  for (const depart of cibles) for (const k of Object.keys(oppose)) {
+    const sel = `[data-mode="${depart}"], [data-cle="${depart}"], #accueil [data-action="${depart}"]`;
+    await page.evaluate(s => definirFocus(document.querySelector(s), true), sel);
+    await page.keyboard.press(k);
+    const arrivee = await focus();
+    if (arrivee === depart) continue;
+    await page.keyboard.press(oppose[k]);
+    const retour = await focus();
+    if (retour !== depart) irreversibles.push(`${depart} ${k} → ${arrivee} → ${retour}`);
+  }
+  assert.deepEqual(irreversibles, []);
+});
