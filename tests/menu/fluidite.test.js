@@ -182,3 +182,21 @@ test("allègement : ni flou plein écran animé, ni flou d'arrière-plan sur les
   });
   assert.deepEqual(flous, { ecran: [], calque: [], ambiant: [], voiles: [], transitions: [] });
 });
+
+test("compteur d'images : absent par défaut ; activé par hub-menu, il affiche et envoie son relevé", async () => {
+  await ouvrir();
+  assert.equal(await page.locator("#compteur-fps").count(), 0);
+  await page.close();
+  await ouvrir({ fps: true }, "?sans-intro&fps=1");
+  await page.waitForFunction(() => window.__messages.some(m => m.type === "fps"), null, { timeout: 5000 });
+  const releve = (await page.evaluate(() => window.__messages.filter(m => m.type === "fps")))[0];
+  assert.equal(releve.ecran, "accueil");
+  assert.ok(releve.moyenne > 5 && releve.min >= 0 && releve.pire > 0 && releve.fenetre >= 1, JSON.stringify(releve));
+  assert.match(await page.textContent("#compteur-fps"), /i\/s .* accueil$/);
+  assert.deepEqual(page.erreurs, []);
+});
+
+test("compteur d'images : HUB_INITIAL.fps suffit, sans paramètre d'adresse", async () => {
+  await ouvrir({ fps: true });
+  assert.equal(await page.locator("#compteur-fps").count(), 1);
+});
