@@ -94,7 +94,7 @@ function montrerPhoto() {
     const [a, b] = cadre.querySelectorAll(".cadre-photo");
     const visible = a.classList.contains("visible") ? a : b;
     const suivante = visible === a ? b : a;
-    suivante.style.backgroundImage = `url("${encodeURI(decodeURI(element.uri))}")`;
+    suivante.style.setProperty("--photo", `url("${encodeURI(decodeURI(element.uri))}")`);
     // Relancer le lent travelling sur la nouvelle photo.
     suivante.classList.remove("travelling");
     void suivante.offsetWidth;

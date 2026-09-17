@@ -29,9 +29,16 @@
 
 /* ── Cadre photo du mode ambiant ─────────────────────────────────────────── */
 #cadre { position: absolute; inset: 0; overflow: hidden; background: #000; }
-.cadre-photo { position: absolute; inset: 0; background: center / contain no-repeat; opacity: 0; transition: opacity 2.4s var(--souple); }
-/* Le flou de la même photo remplit les bandes noires d'un portrait sur une TV 16/9. */
-.cadre-photo::before { content: ""; position: absolute; inset: -6%; background: inherit; background-size: cover; filter: blur(40px) brightness(.55); z-index: -1; }
+.cadre-photo { position: absolute; inset: 0; opacity: 0; transition: opacity 2.4s var(--souple); }
+/* Le flou de la même photo remplit les bandes noires d'un portrait sur une TV 16/9.
+   La photo n'est pas sur le parent : le travelling (transform) fait de .cadre-photo un
+   contexte d'empilement, et un ::before en z-index -1 s'y peint alors AU-DESSUS du fond
+   du parent — la photo nette disparaissait sous sa copie floutée et assombrie (mire
+   noir/blanc de 48 px rendue grise, audit du 17/09/2026). Les deux copies sont donc des
+   pseudo-éléments frères, dans un ordre explicite, quel que soit le contexte. */
+.cadre-photo::before, .cadre-photo::after { content: ""; position: absolute; background: var(--photo, none) center no-repeat; }
+.cadre-photo::before { inset: -6%; background-size: cover; filter: blur(40px) brightness(.55); z-index: 0; }
+.cadre-photo::after { inset: 0; background-size: contain; z-index: 1; }
 .cadre-photo.visible { opacity: 1; }
 .cadre-photo.travelling { animation: cadre-travelling 30s ease-in-out both; }
 @keyframes cadre-travelling { from { transform: scale(1); } to { transform: scale(1.06); } }
