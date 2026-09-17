@@ -917,6 +917,10 @@ function ouvrirCalque(id, focusPremier = true) {
   if (pile.at(-1) === id) return;
   if (pile.includes(id)) pile.splice(pile.indexOf(id), 1);
   pile.push(id);
+  // Le dernier ouvert passe devant : sans ça, l'ordre du HTML décidait, et l'éditeur de
+  // profil ouvert depuis Réglages se retrouvait sous la feuille (constaté sur la TV le
+  // 17/09/2026, quand la feuille élargie a fini par le recouvrir). Sous les annonces (20).
+  $(id).style.zIndex = 10 + pile.length;
   $(id).classList.add("ouvert");
   document.body.classList.toggle("calque-ouvert", pile.length > 1);
   majAppairage();
