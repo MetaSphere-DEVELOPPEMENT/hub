@@ -896,11 +896,21 @@ function voisinParmi(depart, direction, liste) {
   return meilleur;
 }
 
+// La flèche opposée défait le déplacement qu'on vient de faire : dans un calque dessiné
+// librement (éditeur de profil), la cible la plus proche au retour n'était pas celle d'où
+// l'on venait (25 allers-retours sur 16 cibles ne revenaient pas, audit du 17/09/2026).
+// Sauf depuis le sommaire, où Droite mène toujours au premier réglage.
+const OPPOSES = { haut: "bas", bas: "haut", gauche: "droite", droite: "gauche" };
+let dernierDeplacement = null;
 function deplacer(direction) {
   const liste = candidats();
   if (!courant || !liste.includes(courant)) return definirFocus(liste[0]);
-  const suivant = voisin(courant, direction);
-  if (suivant) definirFocus(suivant);
+  const d = dernierDeplacement;
+  const defaire = d && d.vers === courant && d.direction === OPPOSES[direction] && liste.includes(d.depuis) && !courant.closest(".sommaire");
+  const suivant = defaire ? d.depuis : voisin(courant, direction);
+  if (!suivant) return;
+  dernierDeplacement = { depuis: courant, vers: suivant, direction };
+  definirFocus(suivant);
 }
 
 function ouvrirCalque(id, focusPremier = true) {

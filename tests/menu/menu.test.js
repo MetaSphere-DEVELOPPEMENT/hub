@@ -826,3 +826,21 @@ test("réglages : Droite depuis le sommaire va au premier réglage ; Rechercher 
   await touche("ArrowRight");
   assert.equal(await focus(), await page.evaluate(() => document.querySelector("#contenu-reglages [data-nav]").dataset.cle));
 });
+
+test("éditeur de profil : la flèche opposée ramène toujours d'où l'on vient", async () => {
+  await ouvrir({ retour: true, reglages: { profils: [{ id: "p", nom: "Samuel" }], profilActif: "p" } });
+  await page.evaluate(() => ouvrirEditeur(reglages.profils[0]));
+  await page.waitForTimeout(200);
+  const oppose = { ArrowUp: "ArrowDown", ArrowDown: "ArrowUp", ArrowLeft: "ArrowRight", ArrowRight: "ArrowLeft" };
+  const n = await page.evaluate(() => candidats().length);
+  const irreversibles = [];
+  for (let i = 0; i < n; i++) for (const k of Object.keys(oppose)) {
+    const depart = await page.evaluate(i => { const e = candidats()[i]; definirFocus(e, true); return e.dataset.cle || e.dataset.action; }, i);
+    await page.keyboard.press(k);
+    const arrivee = await focus();
+    if (arrivee === depart) continue;
+    await page.keyboard.press(oppose[k]);
+    if (await focus() !== depart) irreversibles.push(`${depart} ${k} → ${arrivee} → ${await focus()}`);
+  }
+  assert.deepEqual(irreversibles, []);
+});
