@@ -267,6 +267,8 @@ function appliquerApparence() {
     fondPret = false;
   }
   racine.style.setProperty("--echelle", reglages.systeme.echelle);
+  // L et XL : l'écran ne grandit pas avec le texte ; hub.css resserre l'accueil et la météo.
+  racine.dataset.taille = Number(reglages.systeme.echelle) > 1 ? "grande" : "normale";
   racine.style.setProperty("--marge", reglages.systeme.marge);
   document.body.classList.toggle("sans-animation", profil().animations === "reduites");
   const couleur = COULEURS_PROFIL[profil().couleur] || COULEURS_PROFIL.turquoise;
@@ -747,8 +749,8 @@ function definirFocus(cible, silencieux = false) {
   if (change && precedent?.classList.contains("carte") && cible.classList.contains("carte") && profil().animations !== "reduites") {
     const sens = cartes.indexOf(cible) > cartes.indexOf(precedent) ? 1 : -1;
     cible.animate([
-      { transform: `translateY(-.9rem) scale(1.06) rotateY(${sens * -9}deg)` },
-      { transform: "translateY(-.9rem) scale(1.06) rotateY(0deg)" },
+      { transform: `translateY(-.68rem) scale(1.06) rotateY(${sens * -9}deg)` },
+      { transform: "translateY(-.68rem) scale(1.06) rotateY(0deg)" },
     ], { duration: 650, easing: "cubic-bezier(.34, 1.56, .64, 1)" });
     precedent.animate([
       { transform: `scale(.96) rotateY(${sens * 7}deg)` },
@@ -873,7 +875,7 @@ function lancer(carte) {
   if (carte.dataset.indisponible) {
     son("erreur");
     annoncer(t(carte.dataset.indisponible));
-    carte.animate([{ translate: "0" }, { translate: "-.6rem" }, { translate: ".6rem" }, { translate: "-.3rem" }, { translate: "0" }], { duration: 420, easing: "ease-out" });
+    carte.animate([{ translate: "0" }, { translate: "-.45rem" }, { translate: ".45rem" }, { translate: "-.23rem" }, { translate: "0" }], { duration: 420, easing: "ease-out" });
     return;
   }
   verrou = true;
@@ -985,7 +987,7 @@ function lancerService(tuile, s) {
   if (APERCU) { son("ok"); return annoncer(t("apercu.mode", { mode: s.nom })); }
   if (!serviceDisponible(s)) {
     son("erreur");
-    tuile?.animate([{ translate: "0" }, { translate: "-.5rem" }, { translate: ".5rem" }, { translate: "0" }], { duration: 380, easing: "ease-out" });
+    tuile?.animate([{ translate: "0" }, { translate: "-.38rem" }, { translate: ".38rem" }, { translate: "0" }], { duration: 380, easing: "ease-out" });
     return annoncer(t("service.absent.detail", { nom: s.nom }));
   }
   verrou = true;
@@ -1340,7 +1342,7 @@ function effacerChiffre() {
 }
 function refuserCode(message) {
   son("erreur");
-  $("code-points").animate([{ translate: "0" }, { translate: "-1rem" }, { translate: "1rem" }, { translate: "-.5rem" }, { translate: "0" }], { duration: 380 });
+  $("code-points").animate([{ translate: "0" }, { translate: "-.76rem" }, { translate: ".76rem" }, { translate: "-.38rem" }, { translate: "0" }], { duration: 380 });
   $("code-detail").textContent = message;
   demande.saisie = "";
   majPoints();
@@ -1555,7 +1557,7 @@ function rendreSection(garderFocus = true) {
         }, el("span", {}, t(`fond.${f}`))));
       }
       zone.append(vignettes,
-        el("div", { class: "aide", style: "margin-top:-.2rem" }, t("fond.photos.detail")),
+        el("div", { class: "aide", style: "margin-top:-.15rem" }, t("fond.photos.detail")),
         rangee(t("fond.couleur.mode"), null, options("teinte", [[true, t("oui")], [false, t("non")]], p.teinteMode, v => { p.teinteMode = v === true || v === "true"; })));
       break;
     }
@@ -1568,7 +1570,7 @@ function rendreSection(garderFocus = true) {
       for (const x of reglages.profils) {
         const couleur = COULEURS_PROFIL[x.couleur] || COULEURS_PROFIL.turquoise;
         zone.append(rangee(
-          el("span", { style: "display:flex;align-items:center;gap:.9rem" }, avatar(x), x.nom, x.pin && el("span", { class: "cadenas", html: ICONE_CADENAS }), x.id === reglages.profilActif ? " ✓" : ""),
+          el("span", { style: "display:flex;align-items:center;gap:.68rem" }, avatar(x), x.nom, x.pin && el("span", { class: "cadenas", html: ICONE_CADENAS }), x.id === reglages.profilActif ? " ✓" : ""),
           null,
           el("div", { class: "options" },
             x.id !== reglages.profilActif && el("button", { class: "option", "data-nav": true, "data-cle": `utiliser-${x.id}`, onclick: () => { choisirProfil(x.id); } }, "✓"),
@@ -1667,7 +1669,7 @@ function rendreSection(garderFocus = true) {
         info(t("apropos.disque"), i.disqueLibre),
         info(t("apropos.version"), i.version)),
         contenuMiseAJour(),
-        el("div", { class: "options", style: "justify-content:flex-start;margin-top:.4rem" },
+        el("div", { class: "options", style: "justify-content:flex-start;margin-top:.3rem" },
           el("button", { class: "option", "data-nav": true, "data-cle": "fermer-reglages", "data-action": "fermer" }, t("fermer"))));
       break;
     }
@@ -1968,7 +1970,7 @@ setInterval(() => {
   if (minutes && Date.now() - derniereAction > minutes * 60000) entrerAmbiant();
   // L'horloge du mode ambiant glisse doucement : aucune image fixe ne marque l'écran.
   if (document.body.classList.contains("ambiant")) {
-    $("ambiant-corps").style.transform = `translate(${(Math.random() - .5) * 8}rem, ${(Math.random() - .5) * 5}rem)`;
+    $("ambiant-corps").style.transform = `translate(${(Math.random() - .5) * 6}rem, ${(Math.random() - .5) * 3.8}rem)`;
   }
 }, 30000);
 
