@@ -42,6 +42,14 @@ un soir, sans clavier. Le risque restant — une page quelconque ouverte dans la
 qui a les cookies du profil — est celui d'un navigateur ordinaire ; il n'a plus, lui,
 de moyen de piloter le HUB.
 
+POURQUOI UNE PASTILLE « ← HUB » VISIBLE. Sur la TV (17 septembre 2026), personne ne
+trouvait la sortie de Netflix : F12, Échap maintenue et la manette sont invisibles. Le
+script pose une pastille dans une ombre fermée, en haut à gauche dans la zone sûre :
+5 s à chaque chargement, puis au mouvement de la souris, à Échap (avec l'aide « Maintenir
+Retour 2 s ») et quand une grande vidéo est en pause. Elle ne prend jamais Échap au site :
+elle l'observe, et ne prend le focus qu'après un Échap court que le site n'a pas utilisé.
+Éprouvée dans Chromium par tests/menu/pastille-retour.test.js.
+
 Ce fichier se charge sans rien lancer : tests/test_hub_web.py et hub-menu l'importent.
 """
 
@@ -222,12 +230,13 @@ def arguments_navigateur(navigateur, fiche, dossier_navigateur, langue="fr", ess
     return args
 
 
-def script_injecte(fiche):
+def script_injecte(fiche, langue="fr"):
     """Le JavaScript posé dans chaque page avant ses propres scripts.
 
     Il n'a qu'un canal vers ce programme, la fonction hubHub ajoutée par le protocole
     DevTools ; il ne sait rien faire d'autre que demander le retour ou une touche."""
-    options = {"touches": bool(fiche.get("touches")), "sansAv1": bool(fiche.get("sans_av1"))}
+    options = {"touches": bool(fiche.get("touches")), "sansAv1": bool(fiche.get("sans_av1")),
+               "langue": langue if langue in ("fr", "en") else "fr"}
     return "(" + _JS + ")(" + json.dumps(options) + ");"
 
 
@@ -255,21 +264,209 @@ _JS = r"""function (options) {
     }
   }
 
+  // ── Pastille « ← HUB » ──────────────────────────────────────────────────
+  // Toutes les sorties ci-dessous sont invisibles : vu sur la TV le 17/09/2026, personne
+  // ne devinait comment quitter Netflix. La pastille montre qu'une sortie existe, et
+  // l'aide dit laquelle marche à la télécommande.
+  // Ombre fermée : le CSS du site ne l'atteint pas, et ses scripts ne la trouvent pas
+  // pour la cacher ou la cliquer à notre place.
+  // Aucun HTML en texte ni <style> : YouTube impose les Trusted Types, et une CSP sans
+  // 'unsafe-inline' refuserait la feuille ; une feuille construite et le CSSOM passent.
+  const TEXTES = {
+    fr: { nom: "Revenir au HUB", aide: "Maintenir Retour 2 s pour revenir au HUB" },
+    en: { nom: "Back to the HUB", aide: "Hold Back for 2 s to return to the HUB" },
+  };
+  const texte = TEXTES[options.langue] || TEXTES.fr;
+  const APPARITION_MS = 5000;
+  // Valeurs de installer/menu/hub.css (--encre, --texte, --tv) : la même famille que le menu.
+  // Taille en vh : 2,5 vh font 27 px à 1080p et restent lisibles à 3 m en 4K.
+  const CSS = `
+    .boite { display: flex; flex-direction: column; align-items: flex-start; gap: .5em;
+      font: 600 max(14px, 2.5vh)/1.2 "Ubuntu Sans", "Inter", system-ui, sans-serif;
+      color: #f3f5fb; opacity: 1; visibility: visible;
+      transition: opacity 180ms cubic-bezier(.2, .8, .2, 1), visibility 0s; }
+    .boite.cache { opacity: 0; visibility: hidden; transition: opacity 180ms cubic-bezier(.2, .8, .2, 1), visibility 0s 180ms; }
+    .pastille { pointer-events: auto; display: inline-flex; align-items: center; gap: .45em;
+      margin: 0; padding: .45em 1em .45em .8em; border: 0; border-radius: 999px;
+      background: rgba(6, 7, 12, .74); color: inherit; font: inherit; letter-spacing: .04em;
+      box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, .13), 0 .3em 1.4em rgba(0, 0, 0, .6);
+      cursor: pointer; outline: none; -webkit-tap-highlight-color: transparent; }
+    .fleche { color: rgb(62 224 208); font-weight: 700; }
+    .pastille:focus, .pastille:hover { background: rgba(6, 7, 12, .9);
+      box-shadow: inset 0 0 0 .12em rgb(62 224 208), 0 0 1.6em -.2em rgb(62 224 208 / .6); }
+    .aide { font-size: .9em; font-weight: 500; padding: .4em .8em; border-radius: .6em;
+      background: rgba(6, 7, 12, .74); color: #f3f5fb; pointer-events: none; }
+    .aide[hidden] { display: none; }
+    @media (prefers-reduced-motion: reduce) { .boite, .boite.cache { transition: none; } }`;
+
+  const hote = document.createElement("hub-retour");
+  const ombre = hote.attachShadow({ mode: "closed" });
+  const boite = document.createElement("div");
+  boite.className = "boite cache";
+  const pastille = document.createElement("button");
+  pastille.type = "button";
+  pastille.className = "pastille";
+  // Hors de l'ordre de tabulation : Tab reste au site ; seul Échap court y amène.
+  pastille.tabIndex = -1;
+  pastille.setAttribute("aria-label", texte.nom);
+  const fleche = document.createElement("span");
+  fleche.className = "fleche";
+  fleche.setAttribute("aria-hidden", "true");
+  fleche.textContent = "←";
+  pastille.append(fleche, "HUB");
+  const aide = document.createElement("div");
+  aide.className = "aide";
+  aide.hidden = true;
+  aide.textContent = texte.aide;
+  boite.append(pastille, aide);
+  ombre.append(boite);
+  try {
+    const feuille = new CSSStyleSheet();
+    feuille.replaceSync(CSS);
+    ombre.adoptedStyleSheets = [feuille];
+  } catch (e) {
+    const style = document.createElement("style");
+    style.textContent = CSS;
+    ombre.prepend(style);
+  }
+  // Popover : la couche supérieure passe au-dessus d'un élément en plein écran, ce
+  // qu'aucun z-index ne fait. Le z-index reste pour un Chrome sans popover.
+  const popover = typeof hote.showPopover === "function";
+  if (popover) hote.setAttribute("popover", "manual");
+  // Styles de l'hôte en !important par le CSSOM : l'emportent sur le CSS du site sans
+  // être soumis à sa CSP. Zone sûre TV : 5 % des bords.
+  const styleHote = { position: "fixed", top: "5vh", left: "5vw", right: "auto", bottom: "auto", inset: "5vh auto auto 5vw",
+    margin: "0", padding: "0", border: "0", background: "transparent", width: "auto", height: "auto",
+    "max-width": "90vw", overflow: "visible", "z-index": "2147483647", "pointer-events": "none",
+    opacity: "1", transform: "none", filter: "none", "color-scheme": "dark" };
+  if (!popover) styleHote.display = "block";
+  for (const [propriete, valeur] of Object.entries(styleHote)) hote.style.setProperty(propriete, valeur, "important");
+
+  let minuterie = 0, enPause = false, precedent = null;
+  const visible = () => !boite.classList.contains("cache");
+  const aFocus = () => ombre.activeElement === pastille;
+  // Un élément ajouté plus tard dans la couche supérieure passe devant : on s'y remet
+  // chaque fois qu'on réapparaît, au cas où le site serait passé en plein écran entre-temps.
+  const remonter = () => {
+    if (!popover || !hote.isConnected) return;
+    try {
+      if (hote.matches(":popover-open")) {
+        if (!document.fullscreenElement || aFocus()) return;
+        hote.hidePopover();
+      }
+      hote.showPopover();
+    } catch (e) { /* page qui vient de disparaître */ }
+  };
+  // Sous <html> et non <body> : les sites à page unique remplacent souvent tout le body.
+  // En plein écran, dans l'élément plein écran : Chromium y dessine bien la couche
+  // supérieure, mais rend le reste du document inerte (vu : pastille visible et clic
+  // perdu). Une <video> mise elle-même en plein écran ne peut rien contenir : il reste
+  // alors Échap maintenue, F12 et la manette.
+  const parent = () => {
+    const plein = document.fullscreenElement;
+    return plein && !/^(VIDEO|IFRAME|IMG|CANVAS|OBJECT|EMBED)$/.test(plein.tagName) ? plein : document.documentElement;
+  };
+  const accrocher = () => {
+    const cible = parent();
+    if (cible && hote.parentNode !== cible && !(hote.isConnected && aFocus())) {
+      cible.appendChild(hote);
+      // Un popover déplacé est refermé.
+      if (visible()) remonter();
+    }
+    return hote.isConnected;
+  };
+  const rendreFocus = () => {
+    const cible = precedent;
+    precedent = null;
+    if (cible && cible !== hote && cible.isConnected && typeof cible.focus === "function") cible.focus({ preventScroll: true });
+    if (aFocus()) pastille.blur();
+  };
+  const cacher = () => {
+    if (aFocus()) rendreFocus();
+    clearTimeout(minuterie);
+    minuterie = 0;
+    boite.classList.add("cache");
+  };
+  // duree 0 : reste affichée (vidéo en pause, pastille qui a le focus).
+  const montrer = (duree, avecAide) => {
+    if (!accrocher()) return;
+    if (!visible()) { aide.hidden = !avecAide; remonter(); }
+    else if (avecAide) aide.hidden = false;
+    boite.classList.remove("cache");
+    clearTimeout(minuterie);
+    minuterie = duree ? setTimeout(() => { minuterie = 0; if (!aFocus() && !enPause) cacher(); }, duree) : 0;
+  };
+  const prendreFocus = () => {
+    montrer(0, true);
+    precedent = document.activeElement;
+    pastille.focus({ preventScroll: true });
+  };
+  pastille.addEventListener("click", e => { e.preventDefault(); e.stopPropagation(); retour(); });
+  pastille.addEventListener("blur", () => {
+    if (visible() && !enPause && !minuterie) minuterie = setTimeout(() => { minuterie = 0; if (!aFocus() && !enPause) cacher(); }, APPARITION_MS);
+  });
+
+  // Une souris immobile reçoit des mouvements factices quand la page défile ou se
+  // redessine sous elle (movementX et Y nuls) : sans ce filtre, la pastille surgirait en
+  // pleine lecture. Pointeur verrouillé : un jeu en nuage, la souris est au jeu.
+  const souris = { capture: true, passive: true };
+  addEventListener("mousemove", e => { if ((e.movementX || e.movementY) && !document.pointerLockElement) montrer(APPARITION_MS); }, souris);
+  addEventListener("pointerdown", () => { if (!document.pointerLockElement) montrer(APPARITION_MS); }, souris);
+  addEventListener("touchstart", () => montrer(APPARITION_MS), souris);
+  // Les événements de média ne remontent pas, mais la capture sur window les voit. Seule
+  // une grande vidéo compte : les aperçus au survol de Netflix se mettent en pause sans cesse.
+  const grandeVideo = v => {
+    const r = v.getBoundingClientRect();
+    return r.width >= innerWidth * .5 && r.height >= innerHeight * .5;
+  };
+  addEventListener("pause", e => {
+    if (e.target instanceof HTMLVideoElement && !e.target.ended && grandeVideo(e.target)) { enPause = true; montrer(0); }
+  }, true);
+  addEventListener("play", e => {
+    if (enPause && e.target instanceof HTMLVideoElement) { enPause = false; if (!aFocus()) cacher(); }
+  }, true);
+  document.addEventListener("fullscreenchange", () => { if (!aFocus() && !enPause) cacher(); accrocher(); }, true);
+  const auChargement = () => { if (location.href !== "about:blank") montrer(APPARITION_MS); };
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", auChargement, { once: true });
+  else auChargement();
+
   // Clavier : F12 comme dans Kodi. Écouté en capture sur window, avant la page.
-  let echapDepuis = 0;
+  // Échap n'est jamais empêchée ni arrêtée : les sites s'en servent pour quitter leur
+  // plein écran ou revenir en arrière. On l'observe seulement.
+  let echapDepuis = 0, echapPriseParLeSite = false;
   addEventListener("keydown", e => {
     if (e.key === "F12") { e.preventDefault(); e.stopImmediatePropagation(); retour(); }
-    if (e.key === "Escape" && !e.repeat) echapDepuis = Date.now();
+    // OK sur la pastille : arrêté ici, sinon un site qui empêche Entrée sur document
+    // annulerait le clic du bouton (et jouerait le titre sous le focus en même temps).
+    if (aFocus() && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); e.stopImmediatePropagation(); retour(); return; }
+    // Une flèche ou Tab : on voulait le site, pas la pastille.
+    if (aFocus() && e.key !== "Escape") cacher();
+    if (e.key === "Escape" && !e.repeat) { echapDepuis = Date.now(); montrer(APPARITION_MS, true); }
     // Échap maintenue deux secondes : pour une télécommande sans F12.
     if (e.key === "Escape" && e.repeat && echapDepuis && Date.now() - echapDepuis > 2000) { echapDepuis = 0; retour(); }
   }, true);
-  addEventListener("keyup", e => { if (e.key === "Escape") echapDepuis = 0; }, true);
+  // En remontée, après les écouteurs du site sur ses éléments et sur document : on sait
+  // si Échap lui a servi.
+  addEventListener("keydown", e => { if (e.key === "Escape" && !e.repeat) echapPriseParLeSite = e.defaultPrevented; });
+  addEventListener("keyup", e => {
+    if (e.key !== "Escape") return;
+    const court = echapDepuis && Date.now() - echapDepuis < 1000;
+    echapDepuis = 0;
+    if (!court) return;
+    // Échap court : le focus va à la pastille, un second le rend au site. Pas quand le
+    // site a consommé Échap (fermer une fiche, quitter le lecteur) : un OK juste après
+    // viserait le site, et ramènerait au HUB par surprise.
+    if (aFocus()) cacher();
+    else if (!echapPriseParLeSite) prendreFocus();
+  }, true);
 
   // Manette : bouton central (Guide, Xbox, PS) ou Select + Start, maintenus une seconde.
   // Une pression brève reste au jeu : GeForce NOW ouvre son propre menu sur Guide.
   let comboDepuis = 0;
   const repetition = {};
   setInterval(() => {
+    // Un site qui réécrit tout le document emporte la pastille : on la repose.
+    if (hote.parentNode !== parent()) accrocher();
     const manettes = navigator.getGamepads ? [...navigator.getGamepads()].filter(Boolean) : [];
     let combo = false;
     const voulues = {};
@@ -427,17 +624,18 @@ ESSAI_VERIFIER = """new Promise(fini => {
       av1Refuse: !MediaSource.isTypeSupported('video/mp4; codecs="av01.0.08M.08"'),
       vp9Accepte: MediaSource.isTypeSupported('video/webm; codecs="vp9"'),
       toucheReelle: vue,
+      pastille: !!document.querySelector("hub-retour"),
     }));
   };
   lire();
 })"""
 
 
-def piloter(processus, tuyau, fiche, url, essai=False, journal=None, trace=False):
+def piloter(processus, tuyau, fiche, url, essai=False, journal=None, trace=False, langue="fr"):
     """Boucle jusqu'à la fermeture de Chrome. Rend vrai si le retour au HUB a été demandé
     (et, en essai, si les vérifications de la page ont réussi)."""
     journal = journal or (lambda *_: None)
-    script = script_injecte(fiche)
+    script = script_injecte(fiche, langue)
     etat = {"retour": False, "fermeture": False, "essai_ok": not essai}
     principale = None
     # Pour savoir d'où vient un appel de hubHub : l'identifiant de cadre principal de
@@ -615,9 +813,9 @@ def principal(argv):
     processus, tuyau = demarrer(args)
     ecrire_pid()
     retour = piloter(processus, tuyau, fiche, url, essai=essai, journal=journal,
-                     trace=bool(os.environ.get("HUB_WEB_TRACE")))
+                     trace=bool(os.environ.get("HUB_WEB_TRACE")), langue=langue)
     if essai:
-        journal("essai réussi : AV1 refusé, touche relayée, F12 a fermé le navigateur" if retour else "essai raté")
+        journal("essai réussi : AV1 refusé, touche relayée, pastille posée, F12 a fermé le navigateur" if retour else "essai raté")
         return 0 if retour else 1
     return 0
 

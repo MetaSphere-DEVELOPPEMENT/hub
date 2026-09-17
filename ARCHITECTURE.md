@@ -308,7 +308,7 @@ jeu** : des services en nuage, ouverts dans un navigateur en plein écran.
 | Réglages → Streaming et jeux | afficher / masquer chaque service **par profil** ; un profil restreint ne peut rien rallumer ; un mode interdit emporte ses services (pas de Netflix sans le mode TV) |
 | Protocole | le menu écrit `web` puis le **nom** du service (`netflix`), jamais une adresse. Voix et télécommande : `web:<service>` |
 | `/usr/local/bin/hub-web` | liste blanche nom → adresse ; Google Chrome en `--kiosk`, `--user-data-dir` **par profil HUB** (`~/.local/share/hub/navigateur/<profil>`) ; rend la main à `gnome-kiosk-script` quand le navigateur se ferme |
-| Retour au HUB | **F12**, **Échap maintenue 2 s**, manette : **bouton central** ou **Select + Start** maintenus 1 s. `hub-web --fermer` pour la voix et la télécommande |
+| Retour au HUB | **F12**, **Échap maintenue 2 s**, manette : **bouton central** ou **Select + Start** maintenus 1 s. `hub-web --fermer` pour la voix et la télécommande. Pastille **« ← HUB »** visible (clic, toucher, OK) : 5 s au chargement, puis à la souris, à Échap (avec l'aide « Maintenir Retour 2 s ») et quand la vidéo est en pause |
 
 **Pourquoi Chrome (.deb de Google).** GeForce NOW et Xbox Cloud Gaming ne prennent en
 charge que les navigateurs Chromium. Ubuntu 26.04 ne livre Chromium et Firefox qu'en
@@ -356,6 +356,15 @@ Le réseau décide plus que le navigateur : **Ethernet obligatoire** (contrainte
       pilotable aux flèches, résolution réellement servie par chaque service
 - [ ] manette réelle : indices du bouton central (16) et de Select/Start (8/9) dans Chrome
 - [ ] Steam `-gamepadui` et Moonlight dans la session kiosque (XWayland pour Steam)
+- [x] pastille « ← HUB » (17 septembre 2026, Chromium de Playwright 1.63 sur Mac, page
+      factice, `tests/menu/pastille-retour.test.js`) : visible au chargement, masquée à
+      5 s, réapparaît à la souris et à Échap, Échap court non empêché, focus pris puis
+      rendu, clic et OK → « retour », cliquable au-dessus d'un élément en plein écran ;
+      `hub-web --essai` la trouve posée par le vrai tuyau DevTools
+- [ ] pastille sur la TV : Chrome réel en kiosque, Netflix, Disney+, YouTube TV, GeForce NOW ;
+      touche Retour de la télécommande CEC (arrive-t-elle en Échap ? courte, maintenue ?) ;
+      un site qui utilise Échap sans l'empêcher donnerait le focus à la pastille, et OK juste
+      après ramènerait au HUB : à observer
 - [ ] connexion aux comptes (Xbox ouvre une fenêtre de connexion : elle n'a pas le script
       de retour, fermer la page principale suffit)
 

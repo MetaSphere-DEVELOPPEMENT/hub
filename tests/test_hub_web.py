@@ -168,6 +168,36 @@ class ScriptInjecte(unittest.TestCase):
         self.assertIn('"touches": false', hub_web.script_injecte(hub_web.SERVICES["geforcenow"]))
         self.assertIn("F12", hub_web.script_injecte({}))
 
+    def test_pastille_retour_visible(self):
+        # Le retour existait mais personne ne le voyait sur la TV (17/09/2026). Le
+        # comportement est éprouvé dans Chromium par tests/menu/pastille-retour.test.js ;
+        # ici, ce qui doit rester vrai du texte du script.
+        js = hub_web.script_injecte(hub_web.SERVICES["netflix"])
+        self.assertIn('createElement("hub-retour")', js)
+        self.assertIn('attachShadow({ mode: "closed" })', js)
+        self.assertIn("APPARITION_MS = 5000", js)
+        self.assertIn("setTimeout(", js)
+        self.assertIn("prefers-reduced-motion", js)
+        self.assertIn('pastille.addEventListener("click", e => { e.preventDefault(); e.stopPropagation(); retour(); });', js)
+        self.assertIn('const retour = () => appeler({ type: "retour" });', js)
+        self.assertFalse("innerHTML" in js, "Trusted Types de YouTube : pas de HTML en texte")
+        self.assertIn("2147483647", js)
+
+    def test_echap_court_observe_jamais_intercepte(self):
+        # Les sites quittent leur plein écran sur Échap : seules F12 et OK sur la pastille
+        # focalisée sont arrêtées.
+        js = hub_web.script_injecte({})
+        for ligne in js.splitlines():
+            if "preventDefault()" in ligne or "stopImmediatePropagation()" in ligne:
+                self.assertNotIn("Escape", ligne, ligne)
+                self.assertTrue('"F12"' in ligne or "aFocus()" in ligne or "pastille.addEventListener" in ligne, ligne)
+        self.assertIn('e.key === "Escape" && e.repeat && echapDepuis && Date.now() - echapDepuis > 2000', js)
+
+    def test_langue_de_l_aide(self):
+        self.assertIn('"langue": "en"', hub_web.script_injecte({}, "en"))
+        self.assertIn('"langue": "fr"', hub_web.script_injecte({}, "../x"))
+        self.assertIn("Maintenir Retour 2 s pour revenir au HUB", hub_web.script_injecte({}))
+
     def test_la_page_ne_peut_demander_que_retour_ou_une_fleche(self):
         self.assertEqual(hub_web.lire_message_page('{"type":"retour"}'), {"type": "retour"})
         self.assertEqual(hub_web.lire_message_page('{"type":"touche","cle":"ArrowUp","x":1}'), {"type": "touche", "cle": "ArrowUp"})
