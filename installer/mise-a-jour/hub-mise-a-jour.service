@@ -8,7 +8,12 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-EnvironmentFile=/etc/hub/mise-a-jour.env
+# Ce que la session lit par pam_env (proxy, notamment) : « Rechercher » tourne dans la
+# session et « Installer » ici ; sans cette ligne, l'un pouvait joindre la source et pas l'autre.
+EnvironmentFile=-/etc/environment
+# « - » : un fichier absent n'empêche plus le service de démarrer sans rien dire ;
+# hub-mise-a-jour publie alors un échec « configuration » que le menu affiche.
+EnvironmentFile=-/etc/hub/mise-a-jour.env
 ExecStart=/usr/local/bin/hub-mise-a-jour appliquer
 TimeoutStartSec=90min
 Nice=5

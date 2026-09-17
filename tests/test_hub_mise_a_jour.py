@@ -7,6 +7,7 @@ que la commande passe par lui, puis on lance ce qu'elle contient.
     python3 -m unittest tests/test_hub_mise_a_jour.py
 """
 
+import errno
 import importlib.machinery
 import importlib.util
 import json
@@ -15,6 +16,7 @@ import pwd
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -104,6 +106,73 @@ class Lectures(unittest.TestCase):
             self.assertNotIn("/etc/passwd", touches)
             self.assertTrue(all(c.kwargs.get("follow_symlinks") is False for c in chown.call_args_list))
 
+    def test_sortie_non_utf8_ne_fait_pas_tomber_la_mise_a_jour(self):
+        # Un installateur qui écrit un octet invalide (sortie d'apt, nom de fichier) levait
+        # UnicodeDecodeError : hors des erreurs attrapées, le service tombait sans publier
+        # d'état et le menu restait sur « Installation… ».
+        r = maj.executer([sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'caf\\xe9')"])
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("caf", r.stdout)
+
+    def test_classement_des_messages_de_git(self):
+        # Messages relevés avec git 2.54 (curl) le 17/09/2026, et ceux d'OpenSSH.
+        cas = {
+            "fatal: unable to access 'https://github.com/x/hub.git/': Could not resolve host: github.com": "reseau",
+            "fatal: unable to access 'https://github.com/x/hub.git/': Failed to connect to github.com port 443 after 2 ms: Couldn't connect to server": "reseau",
+            "error: RPC failed; curl 92 HTTP/2 stream 0 was not closed cleanly\nfatal: early EOF": "reseau",
+            "fatal: unable to access 'https://github.com/x/hub.git/': SSL certificate problem: certificate is not yet valid": "reseau",
+            "ssh: connect to host mac.local port 22: No route to host": "reseau",
+            "remote: Repository not found.\nfatal: repository 'https://github.com/x/absent.git/' not found": "source",
+            "fatal: could not read Username for 'https://github.com': terminal prompts disabled": "source",
+            "warning: Could not find remote branch main to clone.\nfatal: Remote branch main not found in upstream origin": "source",
+            "fatal: '/srv/absent' does not appear to be a git repository": "source",
+            "fatal: detected dubious ownership in repository at '/srv/hub.git'": "source",
+            "fatal: unable to access 'https://github.com/x/hub.git/': The requested URL returned error: 403": "source",
+            "error: object 1234: badTimezone: invalid author/committer line\nfatal: fsck error in packed object": "clone",
+        }
+        for sortie, raison in cas.items():
+            with self.subTest(sortie=sortie):
+                self.assertEqual(maj.classer_git(sortie, "clone"), raison)
+
+    def test_classement_des_exceptions(self):
+        self.assertEqual(maj.classer_erreur(maj.Echec("reseau", "pas de DNS")), ("reseau", "pas de DNS"))
+        raison, detail = maj.classer_erreur(subprocess.TimeoutExpired(["git", "clone", "x"], 600))
+        self.assertEqual(raison, "delai")
+        self.assertIn("600", detail)
+        for numero in (errno.ENOSPC, errno.EACCES, errno.EROFS, errno.ENOTEMPTY):
+            with self.subTest(numero=numero):
+                raison, detail = maj.classer_erreur(OSError(numero, os.strerror(numero), "/var/lib/hub/versions/abc"))
+                self.assertEqual(raison, "disque")
+                self.assertIn("/var/lib/hub/versions/abc", detail)
+        self.assertEqual(maj.classer_erreur(FileNotFoundError(errno.ENOENT, "No such file", "git"))[0], "autre")
+        self.assertEqual(maj.classer_erreur(ValueError("inattendu"))[0], "autre")
+        self.assertLessEqual(len(maj.classer_erreur(RuntimeError("x" * 5000))[1]), maj.DETAIL_MAX)
+
+    def test_unite_lit_l_environnement_de_la_session(self):
+        # « Rechercher » tourne dans la session (pam_env y a lu /etc/environment : proxy…),
+        # « Installer » dans un service qui ne le lit pas : la même source pouvait répondre à
+        # l'un et pas à l'autre. Et un mise-a-jour.env absent empêchait le service de
+        # démarrer sans qu'aucun état ne soit publié.
+        unite = (chemin.parent / "hub-mise-a-jour.service").read_text()
+        self.assertIn("EnvironmentFile=-/etc/environment\n", unite)
+        self.assertIn("EnvironmentFile=-/etc/hub/mise-a-jour.env\n", unite)
+        self.assertLess(unite.index("/etc/environment"), unite.index("/etc/hub/mise-a-jour.env"))
+
+    def test_configuration_absente_publiee_au_menu(self):
+        with tempfile.TemporaryDirectory() as d:
+            etats = []
+            with mock.patch("sys.stdout"):
+                self.assertEqual(maj.main(["appliquer"], config=Path(d) / "absent.json", ecrire=etats.append), 3)
+            self.assertEqual((etats[-1]["etape"], etats[-1]["raison"]), ("echec", "configuration"))
+            config = Path(d) / "c.json"
+            config.write_text('{"source": "https://exemple.invalid/hub.git"}')
+            etats.clear()
+            with mock.patch.dict(os.environ, {}, clear=False), mock.patch("sys.stderr"):
+                os.environ.pop("HUB_UTILISATEUR", None)
+                self.assertEqual(maj.main(["appliquer"], config=config, ecrire=etats.append), 2)
+            self.assertEqual((etats[-1]["etape"], etats[-1]["raison"]), ("echec", "configuration"))
+            self.assertIn("HUB_UTILISATEUR", etats[-1]["detail"])
+
 
 @unittest.skipUnless(SIGNATURES_SSH, "git ≥ 2.34 et ssh-keygen nécessaires aux signatures SSH")
 class DepotLocal(unittest.TestCase):
@@ -143,6 +212,9 @@ class DepotLocal(unittest.TestCase):
         self.commandes_git = []
         self.apres_ls_remote = None
         self.echouer_installation = set()
+        self.pauses = []
+        # Réponses simulées de git avant de laisser passer le vrai : [(motif, CompletedProcess | exception)].
+        self.pannes = []
 
     def tearDown(self):
         self._tmp.cleanup()
@@ -169,6 +241,12 @@ class DepotLocal(unittest.TestCase):
             self.lancements_tests.append((commande, options))
             return maj.executer(commande[4:], **options)
         self.commandes_git.append(commande)
+        for i, (motif, reponse) in enumerate(self.pannes):
+            if motif in commande:
+                del self.pannes[i]
+                if isinstance(reponse, BaseException):
+                    raise reponse
+                return reponse
         r = maj.executer(commande, **options)
         if "ls-remote" in commande and self.apres_ls_remote:
             self.apres_ls_remote()
@@ -180,7 +258,8 @@ class DepotLocal(unittest.TestCase):
     def appliquer(self, installee):
         config = {"source": str(self.source), "branche": "main"}
         return maj.appliquer(config, "samuel", dossier_versions=self.versions, etat=self.etats.append,
-                             lancer=self.lancer, installee=installee, signataires=self.signataires, tests=self.lancer_les_tests)
+                             lancer=self.lancer, installee=installee, signataires=self.signataires, tests=self.lancer_les_tests,
+                             attendre=self.pauses.append)
 
     def test_verifier_compare_au_commit_installe(self):
         c = self.commit()
@@ -296,6 +375,90 @@ class DepotLocal(unittest.TestCase):
         self.assertEqual(self.verifies[-2:], [nouvelle, None])
         self.assertEqual(self.etats[-1]["etape"], "echec")
         self.assertTrue(self.etats[-1]["retour"])
+
+    def test_dossier_de_version_sans_git_remplace(self):
+        # Reste d'un essai interrompu (coupure pendant un effacement) : un dossier au nom du
+        # commit, sans .git. os.replace refusait d'écraser un dossier non vide, et l'OSError
+        # remontait en « source injoignable ».
+        c = self.commit()
+        (self.versions / c / "installer").mkdir(parents=True)
+        (self.versions / c / "installer" / "reste").write_text("x")
+        self.assertEqual(self.appliquer(installee="0000000"), 0, self.etats[-1])
+        self.assertEqual(self.installations, [(c, "samuel")])
+        self.assertTrue((self.versions / c / ".git").is_dir())
+        self.assertFalse((self.versions / c / "installer" / "reste").exists())
+
+    def test_clone_provisoire_residuel_efface(self):
+        c = self.commit()
+        residuel = self.versions / f".{c}.tmp"
+        (residuel / "tests").mkdir(parents=True)
+        (residuel / "tests" / "vieux.py").write_text("x")
+        self.assertEqual(self.appliquer(installee="0000000"), 0, self.etats[-1])
+        self.assertFalse(residuel.exists())
+
+    def test_reseau_coupe_un_instant_reessaye(self):
+        c = self.commit()
+        panne = subprocess.CompletedProcess([], 128, "", "fatal: unable to access 'https://github.com/x/hub.git/': Could not resolve host: github.com")
+        self.pannes = [("ls-remote", panne), ("clone", panne)]
+        self.assertEqual(self.appliquer(installee="0000000"), 0, self.etats[-1])
+        self.assertEqual(self.installations, [(c, "samuel")])
+        self.assertEqual(len(self.pauses), 2)
+
+    def test_reseau_absent_classe_et_detaille(self):
+        self.commit()
+        panne = subprocess.CompletedProcess([], 128, "", "fatal: unable to access 'https://github.com/x/hub.git/': Could not resolve host: github.com")
+        self.pannes = [("ls-remote", panne)] * (len(maj.ESSAIS_RESEAU) + 1)
+        self.assertEqual(self.appliquer(installee="0000000"), 1)
+        self.assertEqual((self.etats[-1]["etape"], self.etats[-1]["raison"]), ("echec", "reseau"))
+        self.assertIn("Could not resolve host", self.etats[-1]["detail"])
+        self.assertEqual(len(self.pauses), len(maj.ESSAIS_RESEAU))
+        self.assertFalse(self.versions.exists(), "rien téléchargé")
+
+    def test_source_introuvable_publiee_sans_exception(self):
+        config = {"source": str(self.source / "absent"), "branche": "main"}
+        code = maj.appliquer(config, "samuel", dossier_versions=self.versions, etat=self.etats.append, lancer=self.lancer,
+                             installee="0000000", signataires=self.signataires, tests=self.lancer_les_tests, attendre=self.pauses.append)
+        self.assertEqual(code, 1)
+        self.assertEqual((self.etats[-1]["etape"], self.etats[-1]["raison"]), ("echec", "source"))
+        self.assertIn("absent", self.etats[-1]["detail"])
+        self.assertEqual(self.pauses, [], "une source introuvable ne se réessaie pas")
+
+    def test_delai_du_clone_depasse(self):
+        c = self.commit()
+        self.pannes = [("clone", subprocess.TimeoutExpired(["git", "clone"], 600))]
+        self.assertEqual(self.appliquer(installee="0000000"), 1)
+        self.assertEqual((self.etats[-1]["raison"], self.etats[-1]["version"]), ("delai", c[:12]))
+        self.assertEqual(self.installations, [])
+
+    def test_clone_refuse_par_fsck_classe_clone(self):
+        self.commit()
+        self.pannes = [("clone", subprocess.CompletedProcess([], 128, "", "error: object 1234: badTimezone\nfatal: fsck error in packed object"))]
+        self.assertEqual(self.appliquer(installee="0000000"), 1)
+        self.assertEqual(self.etats[-1]["raison"], "clone")
+        self.assertIn("fsck error", self.etats[-1]["detail"])
+        self.assertEqual(self.pauses, [])
+
+    def test_dossier_des_versions_inutilisable_classe_disque(self):
+        self.commit()
+        self.versions.write_text("un fichier à la place du dossier")
+        self.assertEqual(self.appliquer(installee="0000000"), 1)
+        self.assertEqual(self.etats[-1]["raison"], "disque")
+        self.assertIn(str(self.versions), self.etats[-1]["detail"])
+
+    def test_installateur_trop_long_revient_a_la_version_precedente(self):
+        ancienne = self.commit()
+        self.appliquer(installee="0000000")
+        self.commit()
+        lancer = self.lancer
+
+        def trop_long(commande, **options):
+            if commande[0] == "bash" and Path(options["cwd"]).name != ancienne:
+                raise subprocess.TimeoutExpired(commande, 3600)
+            return lancer(commande, **options)
+        self.lancer = trop_long
+        self.assertEqual(self.appliquer(installee=ancienne[:7]), 1)
+        self.assertEqual((self.etats[-1]["raison"], self.etats[-1]["retour"]), ("installation", True))
+        self.assertIn("60 minutes", self.etats[-1]["detail"])
 
     def test_source_injoignable(self):
         config = {"source": str(self.source / "absent"), "branche": "main"}
