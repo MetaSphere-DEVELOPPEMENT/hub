@@ -7,6 +7,14 @@ lisibles depuis le canapé : le menu affiche cette première section sous « Ins
 **La première section doit porter le numéro du fichier `VERSION`.** Un test le vérifie
 (`tests/test_version.py`). Marche à suivre pour publier : `installer/mise-a-jour/README.md`.
 
+## 1.0.7 — 18 septembre 2026
+
+L'image du mode, à droite de l'accueil, n'est presque plus rognée : la lueur du fond ne
+mord plus que sur un liseré, et on voit le sujet en entier.
+
+Ce qu'il fallait garder lisible par-dessus — l'heure, la date, le profil — l'est mieux
+qu'avant, grâce à une ombre discrète sous l'en-tête plutôt qu'un grand dégradé.
+
 ## 1.0.6 — 18 septembre 2026
 
 Le HUB cherche les mises à jour toutes les 45 minutes au lieu de toutes les six heures :

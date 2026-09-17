@@ -173,27 +173,35 @@ body:not([data-motif="nappes"]) #fond { filter: none; }
 
 /* L'image du mode choisi, à la place du filigrane (motif cinéma). Elle est le dernier des
    calques de fond (index.html) : le motif, sa teinte et le voile de la vignette passent
-   DERRIÈRE elle. Retour de la TV du 18/09/2026 — « la couleur du fond qui passe sur la
+   DERRIÈRE elle. Premier retour de la TV (1.0.2) — « la couleur du fond qui passe sur la
    totalité de l'image fait que l'image ne se voit pas bien » : le voile du bas et la
    grande tache la recouvraient d'un film coloré, et l'écran, la lampe et le clavier ne se
    distinguaient plus. Posée dessus et opaque, la photo garde ses couleurs et son contraste.
-   Elle ne doit pour autant montrer aucun bord : deux dégradés statiques l'effacent avant
-   ses arêtes, l'un sur la boîte (fondu vers la gauche, du côté du héros), l'autre sur
-   l'image (fondu vers le haut et vers le bas). Ces deux fondus font aussi le travail que
-   le voile faisait pour les textes : l'image est éteinte sous l'en-tête et sous les
-   rangées, et n'existe pleinement qu'entre les deux. Deux masques d'un seul dégradé chacun
-   sur deux éléments emboîtés plutôt qu'un masque composé : `mask-composite` n'est pas
-   éprouvé sur la WebKitGTK de la TV. Masques et cadrage sont fixes : peints une fois dans
-   le calque, ils ne coûtent rien par image du fond (le motif continue dessous et autour).
-   Les trois images du jeu choisi sont posées en même temps, seule celle du mode choisi est
-   opaque : changer de mode croise deux opacités, que le compositeur fait sans repeindre. */
+   Second retour, sur la 1.0.3 — « est-ce que la lueur du haut et de gauche ne prend pas
+   trop d'espace sur l'image ? Les éléments sont un peu cachés » : les deux dégradés qui
+   l'éteignaient sur ses bords rognaient le sujet, et ce qu'on voyait à leur place, c'était
+   la lueur du fond. Ils sont devenus des liserés de fondu et non plus des voiles : assez
+   larges pour qu'aucune arête ne se voie, assez courts pour que le sujet soit entier —
+   33 % de la boîte en vraie photo avant, 59 % aujourd'hui (mesuré, tests/menu) ; le fondu
+   de gauche mange 337 px au lieu de 565, celui du haut 26 px au lieu de 214 (en 1920×1080).
+   Deux masques d'un seul dégradé chacun sur deux éléments emboîtés plutôt qu'un masque
+   composé : `mask-composite` n'est pas éprouvé sur la WebKitGTK de la TV. Masques et
+   cadrage sont fixes : peints une fois dans le calque, ils ne coûtent rien par image du
+   fond (le motif continue dessous et autour). Les trois images du jeu choisi sont posées en
+   même temps, seule celle du mode choisi est opaque : changer de mode croise deux opacités,
+   que le compositeur fait sans repeindre. */
 #visuel-mode {
   position: fixed;
   top: 6vh; height: 88vh; right: -3vh;
   width: 104vh;
   pointer-events: none;
-  -webkit-mask-image: linear-gradient(90deg, transparent, rgb(0 0 0 / .25) 26%, #000 54%);
-  mask-image: linear-gradient(90deg, transparent, rgb(0 0 0 / .25) 26%, #000 54%);
+  /* Le côté du héros : la photo entre à voix basse dès 8 % de la boîte et y est entière à
+     30 % — 337 px en 1920×1080, contre 565 avant. Plus court encore, deux choses cassaient :
+     son bord gauche se voyait comme un trait (le jeu 2, sombre et plat de ce côté, sur la
+     lueur turquoise du fond), et les titres de rangées, qui font toute la largeur de
+     l'écran, tombaient à 4,2:1 en thème clair. */
+  -webkit-mask-image: linear-gradient(90deg, transparent, rgb(0 0 0 / .35) 8%, #000 30%);
+  mask-image: linear-gradient(90deg, transparent, rgb(0 0 0 / .35) 8%, #000 30%);
 }
 /* Les jeux d'images vont du 3/2 au 16/9, sujet à droite et côté gauche vide : cadrées à
    droite, c'est ce côté-là que le cadrage mange, jamais le sujet. La boîte est plus haute
@@ -205,20 +213,35 @@ body:not([data-motif="nappes"]) #fond { filter: none; }
   object-position: 100% 50%;
   opacity: 0;
   transition: opacity .16s linear;
-  /* Éteinte jusqu'à 9 % (la date, l'heure et le profil), pleine de 24 à 80 %, éteinte de
-     nouveau à 95 % (les rangées et le pied). Ce sont des paliers du masque, pas une
-     couleur posée dessus : là où la photo se voit, elle se voit entière. */
-  -webkit-mask-image: linear-gradient(180deg, transparent, transparent 9%, #000 24%, #000 80%, transparent 95%);
-  mask-image: linear-gradient(180deg, transparent, transparent 9%, #000 24%, #000 80%, transparent 95%);
+  /* Un liseré de fondu, pas un voile : entière dès 3 % de la boîte (25 px en 1080p) et
+     jusqu'à 88 %, puis éteinte à 98 %, avant le pied de l'écran. C'est l'ombre de
+     l'en-tête, plus bas, qui tient les textes du haut — pas ce masque. */
+  -webkit-mask-image: linear-gradient(180deg, transparent, #000 3%, #000 88%, transparent 98%);
+  mask-image: linear-gradient(180deg, transparent, #000 3%, #000 88%, transparent 98%);
 }
 #visuel-mode img.visible { opacity: 1; }
+/* L'ombre de l'en-tête. La date, l'heure, le nom du profil et le pictogramme Internet
+   passent au-dessus de l'image : sur une photo claire à cet endroit (le jeu 3 en mode TV),
+   la date tombait à 3,2:1. Plutôt que de faire reculer la photo d'un dixième de sa hauteur
+   — c'est la lueur du fond qu'on voyait alors à sa place, le reproche même du 18/09/2026 —
+   on l'assombrit sur la seule bande où il y a des textes, à la couleur de base du fond et
+   non à la teinte du motif : on voit la photo, en retrait, pas une lueur colorée. Elle est
+   dans la boîte, donc le masque de gauche l'efface du côté du héros, et elle disparaît avec
+   elle quand le profil a choisi « Aucun » ou « Filigrane ». Peinte une fois, comme le reste
+   du calque. */
+#visuel-mode::after {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 10.5%;
+  background: linear-gradient(180deg, rgb(var(--fond-base) / .72), rgb(var(--fond-base) / .6) 25%, transparent);
+  pointer-events: none;
+}
 /* Thème clair : les images sont sombres. Posées telles quelles, elles feraient une tache
    noire sur le fond pâle. On les retient donc — assez pour qu'on lise la scène, pas assez
-   pour qu'elle pèse — et on allonge le fondu de gauche : aucun rectangle, aucune arête. */
-:root[data-theme="clair"] #visuel-mode {
-  -webkit-mask-image: linear-gradient(90deg, transparent, rgb(0 0 0 / .2) 32%, #000 64%);
-  mask-image: linear-gradient(90deg, transparent, rgb(0 0 0 / .2) 32%, #000 64%);
-}
+   pour qu'elle pèse. Masques et cadrage, eux, sont les mêmes que dans le sombre : la photo
+   n'y est pas plus rognée, et l'ombre de l'en-tête s'y éclaircit d'elle-même (elle est à
+   la couleur de base du fond, pâle dans ce thème). */
 :root[data-theme="clair"] #visuel-mode img.visible { opacity: .55; }
 /* Le jeu 2 est nettement plus lumineux que les deux autres (bobine dorée, manette violette
    éclatante). En sombre il reste entier comme les autres — c'est une photo, elle a droit à
@@ -816,20 +839,20 @@ body:has(#arret-confirmer.ouvert) #arret .dialogue { opacity: 0; }
 .apercu-filigrane { position: absolute; left: 56.1%; top: 2%; width: 42.75%; height: 76%; color: #fff; opacity: .13; transform: rotate(-1deg); }
 :root[data-theme="clair"] .apercu-filigrane { color: #0e1322; opacity: .07; }
 /* La vignette du motif cinéma montre ce qu'on verra : l'image du mode choisi, aux mêmes
-   proportions et avec les mêmes deux dégradés qu'à l'écran, sur un 16/9. */
+   proportions, avec les mêmes deux dégradés et la même opacité qu'à l'écran, sur un 16/9.
+   Seule l'ombre de l'en-tête n'y est pas : rien n'est écrit sur une vignette de 150 px. */
 .apercu-visuel {
   position: absolute; top: 6%; right: -1.7%; width: 58.5%; height: 88%;
-  -webkit-mask-image: linear-gradient(90deg, transparent, rgb(0 0 0 / .3) 28%, #000 64%);
-  mask-image: linear-gradient(90deg, transparent, rgb(0 0 0 / .3) 28%, #000 64%);
+  -webkit-mask-image: linear-gradient(90deg, transparent, rgb(0 0 0 / .35) 8%, #000 30%);
+  mask-image: linear-gradient(90deg, transparent, rgb(0 0 0 / .35) 8%, #000 30%);
 }
 .apercu-visuel img {
   display: block; width: 100%; height: 100%;
   object-fit: cover; object-position: 100% 50%;
-  opacity: .92;
-  -webkit-mask-image: linear-gradient(180deg, transparent, #000 16%, #000 84%, transparent);
-  mask-image: linear-gradient(180deg, transparent, #000 16%, #000 84%, transparent);
+  -webkit-mask-image: linear-gradient(180deg, transparent, #000 3%, #000 88%, transparent 98%);
+  mask-image: linear-gradient(180deg, transparent, #000 3%, #000 88%, transparent 98%);
 }
-:root[data-theme="clair"] .apercu-visuel img { opacity: .24; }
+:root[data-theme="clair"] .apercu-visuel img { opacity: .55; }
 /* Le nom sur un fond sombre : lisible sur n'importe quel aperçu, clair ou chargé. */
 .vignette-fond .libelle {
   position: absolute; left: .45rem; bottom: .4rem;
