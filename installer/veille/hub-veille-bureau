@@ -1,0 +1,343 @@
+#!/usr/bin/env python3
+"""Le mode ambiant du HUB sur le bureau Ubuntu — /usr/local/bin/hub-veille-bureau
+
+LE DÉFAUT. En mode Bureau, rester sans toucher à rien donnait l'écran noir de GNOME puis
+l'écran de verrouillage : le mode ambiant du HUB (heure, météo, cadre photo) n'existe
+que dans la page du menu, et le menu est fermé pendant le bureau.
+
+CE QU'IL FAIT. Lancé à l'ouverture du bureau (autostart, OnlyShowIn=ubuntu), il demande
+à Mutter de le prévenir après N minutes sans clavier ni souris, N étant le réglage du
+menu (Réglages → Mode ambiant, profil actif, sinon réglage commun). Alors, sauf vidéo en
+cours ou écran déjà verrouillé, il lance « hub-menu --ambiant » : la page du menu en
+plein écran, directement en mode ambiant, qui se ferme au premier geste sans rien lancer.
+
+    hub-veille-bureau          (autostart de la session Ubuntu)
+    hub-veille-bureau --etat   ce qu'il ferait : délai, réglages GNOME, sans rien écrire
+
+LES API, lues dans les sources de GNOME 50 le 17/09/2026 (gitlab.gnome.org, étiquettes 50.0) :
+  - Mutter, data/dbus-interfaces/org.gnome.Mutter.IdleMonitor.xml, sur
+    /org/gnome/Mutter/IdleMonitor/Core : AddIdleWatch(t millisecondes) → u,
+    AddUserActiveWatch() → u, RemoveWatch(u), signal WatchFired(u). Une surveillance
+    d'inactivité se redéclenche après chaque reprise d'activité ; celle d'activité ne
+    sert qu'une fois. meta-idle-manager.c les retire quand le client quitte le bus.
+  - meta-idle-monitor.c : une surveillance ajoutée par D-Bus est « inhibable » ; tant
+    qu'une application inhibe la mise en veille (drapeau 8 de InhibitedActions de
+    gnome-session : vidéo plein écran, présentation), elle ne se déclenche pas, et le
+    compte repart de zéro à la levée de l'inhibition. On redemande quand même
+    IsInhibited(8) au moment de lancer : l'inhibition peut arriver entre les deux.
+  - gnome-session, org.gnome.SessionManager.xml : IsInhibited(u) → b.
+  - gnome-shell, org.gnome.ScreenSaver.xml, sur /org/gnome/ScreenSaver : GetActive() → b,
+    signal ActiveChanged(b).
+
+AVEC LA VEILLE DE GNOME. GNOME passe la session « inactive » après
+org.gnome.desktop.session idle-delay (300 s par défaut, gsettings-desktop-schemas 50),
+éteint l'écran et verrouille (org.gnome.desktop.screensaver lock-enabled, true ; après
+lock-delay, 0). À 5 minutes, l'écran noir passerait AVANT un mode ambiant réglé à 10.
+Si idle-delay laisse moins de AMBIANT_MIN_S de mode ambiant, on le relève à délai +
+AMBIANT_VISE_S : l'ambiant d'abord, puis l'écran noir et le verrouillage, qu'on ne
+désactive pas. On ne fait que relever, jamais baisser ; « jamais » (0) reste « jamais ».
+gnome-session lie idle-delay à sa présence en direct (gsm-manager.c) : pas besoin de
+rouvrir la session. La mise en veille automatique (plugins.power sleep-inactive-ac-*)
+n'est pas touchée : Ubuntu 26.04 la coupe sur secteur (ubuntu-settings, resolute :
+sleep-inactive-ac-timeout = 0) ; si quelqu'un l'a réglée plus tôt que l'écran noir, on
+le dit dans le journal, sans la changer.
+
+POURQUOI ICI ET PAS DANS hub-theme. hub-theme est l'habillage : il se désactive depuis
+le menu et sait « restaurer » l'apparence d'origine. Le délai d'écran noir n'est pas de
+l'apparence, et il dépend du réglage du mode ambiant, que ce programme lit déjà.
+
+Ce fichier n'importe gi qu'au lancement : la logique se teste sans GNOME
+(tests/test_hub_veille_bureau.py).
+"""
+
+import fcntl
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+HUB_MENU = "/usr/local/bin/hub-menu"
+# DEFAUTS.systeme.veille de installer/menu/hub.js.
+VEILLE_DEFAUT_MIN = 10
+AMBIANT_MIN_S = 5 * 60
+AMBIANT_VISE_S = 15 * 60
+# GSM_INHIBITOR_FLAG_IDLE (gnome-session, gsm-inhibitor-flag.h).
+INHIBE_INACTIVITE = 8
+# La fenêtre qui apparaît peut compter pour Mutter comme une activité (entrée du pointeur) :
+# on n'arme la surveillance d'activité qu'une fois l'ambiant installé.
+ARMER_ACTIVITE_S = 2
+# Au retour de l'utilisateur, l'ambiant se ferme seul. S'il est encore là une seconde
+# après (il n'avait pas le clavier, ou il est bloqué), on le ferme.
+FERMER_SI_RESTE_S = 1
+
+MUTTER = ("org.gnome.Mutter.IdleMonitor", "/org/gnome/Mutter/IdleMonitor/Core", "org.gnome.Mutter.IdleMonitor")
+SESSION = ("org.gnome.SessionManager", "/org/gnome/SessionManager", "org.gnome.SessionManager")
+ECRAN = ("org.gnome.ScreenSaver", "/org/gnome/ScreenSaver", "org.gnome.ScreenSaver")
+
+
+def chemins():
+    maison = Path.home()
+    execution = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}") / "hub"
+    return {
+        "reglages": Path(os.environ.get("XDG_CONFIG_HOME") or maison / ".config") / "hub" / "reglages.json",
+        "verrou": execution / "veille-bureau.verrou",
+        # Lu par hub-temps-ecran : le temps passé en mode ambiant n'est pas du temps d'écran.
+        "ambiant": execution / "ambiant-bureau",
+    }
+
+
+# ── Décisions ─────────────────────────────────────────────────────────────
+def minutes_veille(reglages):
+    """Comme veilleMinutes() de la page : profil actif, sinon réglage commun, sinon 10."""
+    if not isinstance(reglages, dict):
+        return VEILLE_DEFAUT_MIN
+    profils = [p for p in reglages.get("profils") or [] if isinstance(p, dict)]
+    actif = next((p for p in profils if p.get("id") == reglages.get("profilActif")), profils[0] if profils else {})
+    systeme = reglages.get("systeme") if isinstance(reglages.get("systeme"), dict) else {}
+    for valeur in (actif.get("veille"), systeme.get("veille"), VEILLE_DEFAUT_MIN):
+        if isinstance(valeur, (int, float)) and not isinstance(valeur, bool) and 0 <= valeur <= 24 * 60:
+            return int(valeur)
+    return VEILLE_DEFAUT_MIN
+
+
+def idle_delay_voulu(actuel_s, delai_s):
+    """La nouvelle valeur d'idle-delay, ou None s'il laisse déjà sa place à l'ambiant."""
+    if not delai_s or actuel_s == 0 or actuel_s >= delai_s + AMBIANT_MIN_S:
+        return None
+    return delai_s + AMBIANT_VISE_S
+
+
+def alerte_suspension(genre, delai_suspension_s, idle_delay_s):
+    if genre in ("nothing", "", None) or not delai_suspension_s:
+        return None
+    if idle_delay_s and delai_suspension_s <= idle_delay_s:
+        return (f"la mise en veille automatique ({delai_suspension_s} s) passe avant l'écran noir "
+                f"({idle_delay_s} s) : réglage laissé tel quel")
+    return None
+
+
+def raison_de_ne_pas_lancer(ambiant_vivant, ecran_verrouille, inhibe):
+    if ambiant_vivant:
+        return "mode ambiant déjà affiché"
+    if ecran_verrouille:
+        return "écran noir ou verrouillé"
+    if inhibe:
+        return "mise en veille inhibée (vidéo, présentation)"
+    return None
+
+
+def valeur_gsettings(texte):
+    """« uint32 300 », « 300 », « 'suspend' » → 300 ou "suspend" ; None si illisible."""
+    mots = (texte or "").split()
+    if not mots:
+        return None
+    dernier = mots[-1].strip("'\"")
+    return int(dernier) if dernier.isdigit() else dernier
+
+
+def coordonner_gnome(delai_s, executer, ecrire=True):
+    """Relève idle-delay si besoin. Rend ce qui a été lu et fait, pour le journal."""
+    def lire(schema, cle):
+        code, sortie = executer(["gsettings", "get", schema, cle])
+        return valeur_gsettings(sortie) if code == 0 else None
+
+    idle = lire("org.gnome.desktop.session", "idle-delay")
+    rapport = {"idle-delay": idle, "lock-enabled": lire("org.gnome.desktop.screensaver", "lock-enabled")}
+    voulu = idle_delay_voulu(idle, delai_s) if isinstance(idle, int) else None
+    if voulu:
+        rapport["idle-delay-voulu"] = voulu
+        if ecrire:
+            code, _ = executer(["gsettings", "set", "org.gnome.desktop.session", "idle-delay", str(voulu)])
+            rapport["idle-delay-ecrit"] = code == 0
+    alerte = alerte_suspension(lire("org.gnome.settings-daemon.plugins.power", "sleep-inactive-ac-type"),
+                               lire("org.gnome.settings-daemon.plugins.power", "sleep-inactive-ac-timeout"),
+                               voulu or idle)
+    if alerte:
+        rapport["alerte"] = alerte
+    return rapport
+
+
+def executer_commande(argv):
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError) as erreur:
+        return 1, str(erreur)
+    return r.returncode, r.stdout
+
+
+def lire_reglages(chemin):
+    try:
+        return json.loads(Path(chemin).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+# ── La surveillance ───────────────────────────────────────────────────────
+class Veille:
+    """bus.appeler(cible, méthode, (signature, valeurs) | None) → tuple ;
+    bus.abonner(cible, signal, rappel(valeurs)). lancer(a_la_fin) → processus.
+    programmer(secondes, fonction) : GLib en vrai, une liste dans les tests."""
+
+    def __init__(self, bus, lancer, programmer, delai_s, marqueur, journal=None):
+        self.bus, self.lancer, self.programmer = bus, lancer, programmer
+        self.delai_s, self.marqueur = delai_s, Path(marqueur)
+        self.journal = journal or (lambda texte: print(f"hub-veille-bureau : {texte}", file=sys.stderr))
+        self.enfant, self.vivant = None, False
+        self.id_inactif = self.id_actif = None
+
+    def demarrer(self):
+        if not self.delai_s:
+            self.journal("mode ambiant réglé sur « jamais » : GNOME garde sa veille")
+            return False
+        self.bus.abonner(MUTTER, "WatchFired", lambda v: self.surveillance(v[0]))
+        self.bus.abonner(ECRAN, "ActiveChanged", lambda v: self.ecran_change(v[0]))
+        self.id_inactif = self.bus.appeler(MUTTER, "AddIdleWatch", ("(t)", (self.delai_s * 1000,)))[0]
+        self.journal(f"mode ambiant après {self.delai_s // 60} min sans activité")
+        return True
+
+    def ambiant_vivant(self):
+        # Tenu par la fin signalée (child_watch de GLib), pas par Popen.poll() : deux
+        # waitpid sur le même enfant, et l'un des deux perd le code de sortie.
+        return self.vivant
+
+    def demander(self, cible, methode, parametres=None, defaut=False):
+        try:
+            return self.bus.appeler(cible, methode, parametres)[0]
+        except Exception as erreur:  # noqa: BLE001 — un service absent ne doit pas arrêter la surveillance
+            self.journal(f"{cible[2]}.{methode} sans réponse ({erreur})")
+            return defaut
+
+    def surveillance(self, identifiant):
+        if identifiant == self.id_inactif:
+            self.tenter()
+        elif identifiant == self.id_actif:
+            self.id_actif = None
+            self.programmer(FERMER_SI_RESTE_S, self.fermer_si_reste)
+
+    def tenter(self):
+        raison = raison_de_ne_pas_lancer(
+            self.ambiant_vivant(),
+            self.demander(ECRAN, "GetActive"),
+            self.demander(SESSION, "IsInhibited", ("(u)", (INHIBE_INACTIVITE,))),
+        )
+        if raison:
+            self.journal(f"pas de mode ambiant : {raison}")
+            return False
+        try:
+            self.enfant = self.lancer(self.enfant_termine)
+            self.vivant = True
+        except OSError as erreur:
+            self.journal(f"hub-menu --ambiant impossible à lancer ({erreur})")
+            return False
+        try:
+            self.marqueur.parent.mkdir(parents=True, exist_ok=True)
+            self.marqueur.write_text(f"{self.enfant.pid}\n")
+        except OSError:
+            pass
+        self.programmer(ARMER_ACTIVITE_S, self.armer_activite)
+        return True
+
+    def armer_activite(self):
+        if self.ambiant_vivant() and self.id_actif is None:
+            self.id_actif = self.demander(MUTTER, "AddUserActiveWatch", defaut=None)
+        return False
+
+    def fermer_si_reste(self):
+        if self.ambiant_vivant():
+            self.journal("le mode ambiant ne s'est pas fermé au retour : fermé")
+            self.enfant.terminate()
+        return False
+
+    def ecran_change(self, actif):
+        # L'écran noir de GNOME passe après l'ambiant : au déverrouillage, on veut
+        # retrouver le bureau, pas l'horloge.
+        if actif and self.ambiant_vivant():
+            self.enfant.terminate()
+
+    def enfant_termine(self, *_):
+        self.vivant = False
+        self.marqueur.unlink(missing_ok=True)
+        if self.id_actif is not None:
+            self.demander(MUTTER, "RemoveWatch", ("(u)", (self.id_actif,)), defaut=None)
+            self.id_actif = None
+
+
+# ── Lancement ─────────────────────────────────────────────────────────────
+def verrouiller(chemin):
+    """Une seule surveillance par session : l'autostart relancé à la main n'en ajoute pas."""
+    Path(chemin).parent.mkdir(parents=True, exist_ok=True)
+    fichier = open(chemin, "w")
+    try:
+        fcntl.flock(fichier, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        fichier.close()
+        return None
+    return fichier
+
+
+def main(arguments):
+    if arguments not in ([], ["--etat"]):
+        print("usage : hub-veille-bureau [--etat]", file=sys.stderr)
+        return 2
+    c = chemins()
+    delai_s = minutes_veille(lire_reglages(c["reglages"])) * 60
+    if arguments == ["--etat"]:
+        print(json.dumps({"delaiAmbiant": delai_s, "gnome": coordonner_gnome(delai_s, executer_commande, ecrire=False)},
+                         ensure_ascii=False))
+        return 0
+
+    verrou = verrouiller(c["verrou"])
+    if not verrou:
+        print("hub-veille-bureau : déjà lancé dans cette session", file=sys.stderr)
+        return 0
+    if delai_s:
+        rapport = coordonner_gnome(delai_s, executer_commande)
+        if "idle-delay-voulu" in rapport:
+            print(f"hub-veille-bureau : écran noir de GNOME repoussé de {rapport['idle-delay']} s à "
+                  f"{rapport['idle-delay-voulu']} s, après le mode ambiant", file=sys.stderr)
+        if "alerte" in rapport:
+            print(f"hub-veille-bureau : {rapport['alerte']}", file=sys.stderr)
+
+    import gi
+    gi.require_version("Gio", "2.0")
+    from gi.repository import Gio, GLib
+
+    class Bus:
+        def __init__(self):
+            self.connexion = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+
+        def appeler(self, cible, methode, parametres=None):
+            nom, chemin, interface = cible
+            variante = GLib.Variant(*parametres) if parametres else None
+            return self.connexion.call_sync(nom, chemin, interface, methode, variante, None,
+                                            Gio.DBusCallFlags.NONE, 5000, None).unpack()
+
+        def abonner(self, cible, signal, rappel):
+            nom, chemin, interface = cible
+            self.connexion.signal_subscribe(nom, interface, signal, chemin, None, Gio.DBusSignalFlags.NONE,
+                                            lambda *args: rappel(args[5].unpack()))
+
+    def lancer(a_la_fin):
+        processus = subprocess.Popen([HUB_MENU, "--ambiant"])
+        GLib.child_watch_add(GLib.PRIORITY_DEFAULT, processus.pid, lambda *_: a_la_fin())
+        return processus
+
+    def programmer(secondes, fonction):
+        GLib.timeout_add(int(secondes * 1000), fonction)
+
+    Path(c["ambiant"]).unlink(missing_ok=True)
+    try:
+        veille = Veille(Bus(), lancer, programmer, delai_s, c["ambiant"])
+        if not veille.demarrer():
+            return 0
+    except GLib.Error as erreur:
+        # Pas de Mutter (session sans GNOME Shell) : on ne fait rien plutôt que d'insister.
+        print(f"hub-veille-bureau : surveillance d'inactivité indisponible ({erreur.message})", file=sys.stderr)
+        return 1
+    GLib.MainLoop().run()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

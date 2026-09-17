@@ -1091,9 +1091,55 @@ def ligne_rendu(infos):
     ordre = ("webkit", "acceleration", "gsk", "ecran", "frequence", "echelle", "environnement")
     return "hub-menu : rendu " + " ; ".join(f"{k}={infos[k]}" for k in ordre if infos.get(k) not in (None, ""))
 
+# ── Mode ambiant seul, sur le bureau Ubuntu ───────────────────────────────
+# Sur le bureau, le menu est fermé : hub-veille-bureau (installer/veille) lance
+# « hub-menu --ambiant » après l'inactivité réglée. Cette fenêtre ne doit rien pouvoir
+# faire d'autre qu'afficher : ni choisir un mode (la session Bureau n'a pas de boucle
+# gnome-kiosk-script pour le lancer, et « bureau » fermerait la session en cours), ni
+# écrire les réglages, ni ouvrir l'appairage. D'où une liste de ce qu'elle accepte,
+# plutôt qu'une liste de ce qu'elle refuse : un message ajouté plus tard au menu reste
+# fermé ici tant qu'on ne l'a pas voulu.
+MESSAGES_AMBIANT = frozenset({"meteo", "cadre", "ambiant-fin"})
+# La fenêtre qui apparaît sous le pointeur reçoit du compositeur une entrée et parfois
+# un petit mouvement : ce n'est pas quelqu'un qui revient. On laisse passer ces
+# premiers instants et les frôlements ; une touche, un clic, la molette réveillent tout de suite.
+REVEIL_GRACE_S = 1.5
+REVEIL_MOUVEMENT_PX = 24
+
+
+def analyser_arguments(arguments):
+    """Sans argument : le menu. « --ambiant » seul : le mode ambiant. Autre chose : None."""
+    arguments = list(arguments)
+    if not arguments:
+        return {"ambiant": False}
+    if arguments == ["--ambiant"]:
+        return {"ambiant": True}
+    return None
+
+
+def message_permis(genre, ambiant):
+    if ambiant:
+        return genre in MESSAGES_AMBIANT
+    return genre != "ambiant-fin"
+
+
+def reveil_ambiant(genre, depuis_s, deplacement_px=0):
+    """genre : « touche », « clic », « molette », « toucher », « mouvement » ou autre."""
+    if genre in ("touche", "clic", "molette", "toucher"):
+        return True
+    if genre == "mouvement":
+        return depuis_s >= REVEIL_GRACE_S and deplacement_px >= REVEIL_MOUVEMENT_PX
+    return False
+
 
 # ── Interface ─────────────────────────────────────────────────────────────
-def lancer():
+def lancer(arguments=None):
+    options = analyser_arguments(sys.argv[1:] if arguments is None else arguments)
+    if options is None:
+        print("usage : hub-menu [--ambiant]", file=sys.stderr)
+        return 2
+    ambiant = options["ambiant"]
+
     import gi
 
     gi.require_version("Gdk", "4.0")
@@ -1110,7 +1156,10 @@ def lancer():
 
     class Menu(Gtk.Application):
         def __init__(self):
-            super().__init__(application_id="fr.boudine.HubMenu")
+            # Un identifiant à part pour l'ambiant : GTK n'en laisse tourner qu'une
+            # instance par session, une seconde se contente d'activer la première.
+            super().__init__(application_id="fr.boudine.HubMenu.Ambiant" if ambiant else "fr.boudine.HubMenu")
+            self.ambiant = ambiant
             self.choix = None
             self.fichier = None
             self.etat_maj = None
@@ -1119,9 +1168,19 @@ def lancer():
             self.ecoute = None
 
         def do_activate(self):
+            if getattr(self, "fenetre", None):
+                self.fenetre.present()
+                return
+            page = page_du_menu()
+            if self.ambiant and not (WebKit and page):
+                # Le repli GTK n'a que des boutons de modes : rien à montrer ici.
+                print("hub-menu : pas de page WebKit, pas de mode ambiant", file=sys.stderr)
+                self.quit()
+                return
             fenetre = Gtk.ApplicationWindow(application=self, title="HUB")
             self.fenetre = fenetre
-            page = page_du_menu()
+            if self.ambiant:
+                self.capter_reveil(fenetre)
             fenetre.set_child(self.vue_web(page) if WebKit and page else self.vue_simple())
             fenetre.fullscreen()
             fenetre.present()
@@ -1156,6 +1215,34 @@ def lancer():
                 Path(c["socket"]).unlink(missing_ok=True)
             Gtk.Application.do_shutdown(self)
 
+        def capter_reveil(self, fenetre):
+            """Clavier, souris et toucher arrêtés avant WebKit (phase de capture) : la
+            touche qui réveille ferme la fenêtre et n'arrive à personne."""
+            fenetre.set_cursor_from_name("none")
+            ouverture, depart = time.monotonic(), []
+            genres = {
+                Gdk.EventType.KEY_PRESS: "touche", Gdk.EventType.BUTTON_PRESS: "clic",
+                Gdk.EventType.SCROLL: "molette", Gdk.EventType.TOUCH_BEGIN: "toucher",
+                Gdk.EventType.MOTION_NOTIFY: "mouvement",
+            }
+
+            def evenement(_controleur, ev):
+                genre = genres.get(ev.get_event_type())
+                deplacement = 0
+                if genre == "mouvement":
+                    trouve, x, y = ev.get_position()
+                    if trouve:
+                        depart[:] = depart or [x, y]
+                        deplacement = ((x - depart[0]) ** 2 + (y - depart[1]) ** 2) ** .5
+                if reveil_ambiant(genre, time.monotonic() - ouverture, deplacement):
+                    self.quit()
+                return True
+
+            capteur = Gtk.EventControllerLegacy()
+            capteur.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+            capteur.connect("event", evenement)
+            fenetre.add_controller(capteur)
+
         # La page ──────────────────────────────────────────────────────────
         def vue_web(self, page):
             contenus = WebKit.UserContentManager()
@@ -1184,12 +1271,18 @@ def lancer():
             cache = lire_json(c["meteo"])
             if cache and "donnees" in cache:
                 initial["meteo"] = {"donnees": cache["donnees"], "releveLe": cache["releve"] * 1000, "horsLigne": False}
+            if self.ambiant:
+                # « retour » : ni intro, ni choix du profil, ni code à l'ouverture.
+                initial.update(retour=True, reveilProgramme=False, ambiantSeul=True)
             contenus.add_script(WebKit.UserScript.new(
                 f"window.HUB_INITIAL = {json.dumps(initial)};",
                 WebKit.UserContentInjectedFrames.TOP_FRAME,
                 WebKit.UserScriptInjectionTime.START, None, None))
             try:
-                ecrire_atomique(c["deja-ouvert"], "1")
+                # Pas pour l'ambiant : le prochain vrai menu croirait revenir d'un mode
+                # et sauterait le choix du profil et son code.
+                if not self.ambiant:
+                    ecrire_atomique(c["deja-ouvert"], "1")
             except OSError:
                 pass
 
@@ -1205,7 +1298,8 @@ def lancer():
             vue.load_uri(page.as_uri())
             vue.grab_focus()
             self.vue = vue
-            self.ecouter_voix()
+            if not self.ambiant:
+                self.ecouter_voix()
             self.telecommande = initial["telecommande"]
             self.appairage_affiche, self.appairage_touche = False, None
             # Un menu tombé pendant l'appairage a pu laisser le fichier : l'écran n'est pas affiché.
@@ -1278,10 +1372,12 @@ def lancer():
 
         def message_recu(self, _contenus, valeur):
             message = lire_message_page(valeur.to_string())
-            if not message:
+            if not message or not message_permis(message["type"], self.ambiant):
                 return
             genre = message["type"]
-            if genre == "choix" and message.get("mode") == "web":
+            if genre == "ambiant-fin":
+                self.quit()
+            elif genre == "choix" and message.get("mode") == "web":
                 # La seconde ligne porte le service ; inconnu, on ne ferme pas le menu.
                 if service_choisi(message):
                     self.choix, self.fichier = "web", service_choisi(message)
@@ -1419,6 +1515,8 @@ def lancer():
 
     menu = Menu()
     menu.run(None)
+    if ambiant:
+        return 0
     if menu.choix:
         # Première ligne : le mode. Seconde, facultative : le fichier à reprendre
         # (lu par gnome-kiosk-script, qui le passe à hub-kodi-lire), ou le service

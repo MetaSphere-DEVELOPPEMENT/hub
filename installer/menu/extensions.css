@@ -55,3 +55,7 @@ body.cadre-actif .ambiant-meteo .picto-meteo { width: 2.4rem; height: 2.4rem; }
   color: #fff; background: rgb(0 0 0 / .7);
   pointer-events: none;
 }
+/* ── Mode ambiant seul, sur le bureau (veille-bureau.js) ─────────────────── */
+/* L'accueil ne doit pas apparaître, même le temps du fondu d'entrée : la fenêtre se
+   ferme au réveil, personne n'a à voir les cartes des modes. */
+html.ambiant-seul .ecran { visibility: hidden !important; transition: none !important; }
