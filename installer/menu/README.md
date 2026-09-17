@@ -161,7 +161,7 @@ fois la même vue sur deux palettes opposées — l'aurore turquoise et la brais
 | jeu 3, Bureau (la vue de la photo) | **2,50 → 7,44** | .553 → .276 devient .589 → .589 | 7,7 → **0** |
 | jeu 3, TV | 11,69 → 12,91 | .266 → .554 devient .537 → .537 | 7,8 → **0** |
 | jeu 1, Bureau | 1,61 → 2,20 | .585 → .369 devient .654 → .654 | 7,7 → **0** |
-| jeu 2, Jeux | 3,48 → 4,51 | .569 → .458 devient .612 → .612 | 20,4 → **0** |
+| jeu 2, Bureau | 3,48 → 4,90 | .569 → .458 devient .708 → .708 | 20,4 → **0** |
 
 Avant, changer la couleur du fond changeait la photo : sa saturation doublait d'une palette
 à l'autre. Aujourd'hui les deux captures sont identiques au pixel près — la photo a ses
