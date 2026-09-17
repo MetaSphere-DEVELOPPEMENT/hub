@@ -5,11 +5,13 @@
 
 import importlib.util
 import json
+import socket
 import tempfile
 import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 RACINE = Path(__file__).resolve().parent.parent
 spec = importlib.util.spec_from_file_location("hub_menu", RACINE / "installer" / "hub-menu.py")
@@ -279,6 +281,184 @@ class MiseAJour(unittest.TestCase):
             self.assertIsNone(hub_menu.etat_mise_a_jour(f))
             f.write_text('{"etape": "tests", "version": "abc"}')
             self.assertEqual(hub_menu.etat_mise_a_jour(f)["etape"], "tests")
+
+
+class Internet(unittest.TestCase):
+    """L'indicateur de l'en-tête : NetworkManager simulé, jamais de réseau réel."""
+
+    def nmcli(self, sortie, code=0):
+        appels = []
+
+        def executer(cmd, **k):
+            appels.append(cmd)
+            return SimpleNamespace(stdout=sortie, returncode=code)
+        executer.appels = appels
+        return executer
+
+    def test_connectivite_lue_chez_networkmanager(self):
+        for sortie, attendu in (("full\n", "full"), ("limited\n", "limited"), ("portal\n", "portal"),
+                                ("none\n", "none"), ("unknown\n", "unknown"), ("n'importe quoi\n", None)):
+            with self.subTest(sortie=sortie):
+                executer = self.nmcli(sortie)
+                self.assertEqual(hub_menu.connectivite_nm(executer), attendu)
+        # Relire l'état connu, jamais « connectivity check » : pas d'appel réseau à chaque relevé.
+        self.assertEqual(executer.appels, [["nmcli", "-t", "networking", "connectivity"]])
+        self.assertIsNone(hub_menu.connectivite_nm(self.nmcli("", code=8)))
+
+        def absent(*a, **k):
+            raise FileNotFoundError("nmcli")
+        self.assertIsNone(hub_menu.connectivite_nm(absent))
+
+    def test_trois_etats_d_apres_networkmanager_sans_sonde(self):
+        sonde = mock.Mock(side_effect=AssertionError("NetworkManager sait : pas de sonde"))
+        self.assertEqual(hub_menu.etat_internet("full", "192.168.1.20", sonde), {"etat": "internet"})
+        self.assertEqual(hub_menu.etat_internet("limited", "192.168.1.20", sonde), {"etat": "local"})
+        self.assertEqual(hub_menu.etat_internet("portal", "192.168.1.20", sonde), {"etat": "local", "nuance": "portail"})
+        self.assertEqual(hub_menu.etat_internet("none", None, sonde), {"etat": "aucun"})
+
+    def test_sans_avis_de_networkmanager_la_sonde_tranche(self):
+        self.assertEqual(hub_menu.etat_internet("unknown", "192.168.1.20", lambda: True), {"etat": "internet"})
+        self.assertEqual(hub_menu.etat_internet(None, "192.168.1.20", lambda: False), {"etat": "local"})
+        sonde = mock.Mock()
+        self.assertEqual(hub_menu.etat_internet(None, None, sonde), {"etat": "aucun"})
+        sonde.assert_not_called()
+
+    def test_sonde_resolution_puis_connexion_courte_vers_la_source(self):
+        vus = []
+
+        class Connexion:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        def connecter(adresse, timeout):
+            vus.append((adresse, timeout))
+            return Connexion()
+        self.assertTrue(hub_menu.sonder_internet(connecter=connecter))
+        self.assertEqual(vus, [(("github.com", 443), hub_menu.SONDE_DELAI_S)])
+
+        def dns_absent(*a, **k):
+            raise socket.gaierror(-3, "Temporary failure in name resolution")
+        self.assertFalse(hub_menu.sonder_internet(connecter=dns_absent))
+
+        def trop_long(*a, **k):
+            raise socket.timeout("timed out")
+        self.assertFalse(hub_menu.sonder_internet(connecter=trop_long))
+
+
+class VerificationAuto(unittest.TestCase):
+    H = 3600
+
+    def due(self, **k):
+        base = dict(maintenant=100 * self.H, suivi=None, internet="internet", active=True, deja_ce_demarrage=False, occupe=False)
+        return hub_menu.verification_auto_due(**{**base, **k})
+
+    def test_au_demarrage_des_qu_internet_est_la(self):
+        self.assertTrue(self.due())
+        self.assertTrue(self.due(suivi={"le": 100 * self.H - 60}), "une fois par démarrage, même vérifié juste avant")
+
+    def test_jamais_sans_internet(self):
+        for internet in ("local", "aucun", None):
+            with self.subTest(internet=internet):
+                self.assertFalse(self.due(internet=internet))
+
+    def test_jamais_pendant_un_mode_ou_une_installation_ni_desactivee(self):
+        self.assertFalse(self.due(occupe=True))
+        self.assertFalse(self.due(active=False))
+
+    def test_puis_toutes_les_six_heures(self):
+        maintenant = 100 * self.H
+        self.assertFalse(self.due(deja_ce_demarrage=True, suivi={"le": maintenant - 5 * self.H}))
+        self.assertTrue(self.due(deja_ce_demarrage=True, suivi={"le": maintenant - 6 * self.H}))
+        self.assertTrue(self.due(deja_ce_demarrage=True, suivi=None))
+
+    def test_un_echec_se_reessaie_plus_tot(self):
+        maintenant = 100 * self.H
+        self.assertFalse(self.due(deja_ce_demarrage=True, suivi={"le": maintenant - 20 * 60, "echec": True}))
+        self.assertTrue(self.due(deja_ce_demarrage=True, suivi={"le": maintenant - 30 * 60, "echec": True}))
+
+    def test_reglage_actif_par_defaut(self):
+        self.assertTrue(hub_menu.maj_auto_active(None))
+        self.assertTrue(hub_menu.maj_auto_active({"systeme": {}}))
+        self.assertFalse(hub_menu.maj_auto_active({"systeme": {"miseAJourAuto": False}}))
+
+    def test_installation_en_cours(self):
+        maintenant = 1000 * self.H
+        self.assertFalse(hub_menu.installation_en_cours(None, maintenant))
+        self.assertTrue(hub_menu.installation_en_cours({"etape": "tests", "le": (maintenant - 60) * 1000}, maintenant))
+        self.assertFalse(hub_menu.installation_en_cours({"etape": "echec", "le": (maintenant - 60) * 1000}, maintenant))
+        # Service tué en pleine installation : l'état resté n'empêche pas les vérifications pour toujours.
+        self.assertFalse(hub_menu.installation_en_cours({"etape": "installation", "le": (maintenant - 3 * self.H) * 1000}, maintenant))
+
+    def test_annonce_une_seule_fois_par_version(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "maj-auto.json"
+            dispo = {"disponible": True, "verifiable": True, "distant": "abc123", "installee": "000000"}
+            suivi, annoncer = hub_menu.noter_verification_auto(f, dispo, 10)
+            self.assertTrue(annoncer)
+            self.assertEqual(hub_menu.lire_json(f), {"le": 10, "verification": dispo, "echec": False, "annoncee": "abc123"})
+            self.assertFalse(hub_menu.noter_verification_auto(f, dispo, 20)[1])
+            self.assertTrue(hub_menu.noter_verification_auto(f, {**dispo, "distant": "def456"}, 30)[1])
+            self.assertFalse(hub_menu.noter_verification_auto(f, {**dispo, "distant": "fed789", "verifiable": False}, 40)[1])
+            self.assertFalse(hub_menu.noter_verification_auto(f, {"disponible": False, "distant": "000000"}, 50)[1])
+
+    def test_un_echec_garde_la_derniere_bonne_reponse(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "maj-auto.json"
+            dispo = {"disponible": True, "distant": "abc123", "installee": "000000"}
+            hub_menu.noter_verification_auto(f, dispo, 10)
+            suivi, annoncer = hub_menu.noter_verification_auto(f, {"erreur": "reseau", "detail": "DNS"}, 20)
+            self.assertFalse(annoncer)
+            self.assertEqual((suivi["le"], suivi["echec"], suivi["verification"]), (20, True, dispo))
+
+    def test_version_disponible_retrouvee_au_retour_d_un_mode(self):
+        dispo = {"disponible": True, "distant": "abc123456789", "installee": "000000"}
+        self.assertEqual(hub_menu.maj_auto_initiale({"verification": dispo}, "0000000"), dispo)
+        self.assertIsNone(hub_menu.maj_auto_initiale({"verification": dispo}, "abc1234"), "installée depuis")
+        self.assertIsNone(hub_menu.maj_auto_initiale({"verification": dispo}, "1111111"), "autre version en place")
+        self.assertIsNone(hub_menu.maj_auto_initiale({"verification": {"disponible": False}}, "0000000"))
+        self.assertIsNone(hub_menu.maj_auto_initiale(None, "0000000"))
+
+    def test_commit_installe(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "VERSION"
+            self.assertIsNone(hub_menu.commit_installe(f))
+            f.write_text("v1-3-ga03afa7-dirty\n")
+            self.assertEqual(hub_menu.commit_installe(f), "a03afa7")
+
+
+class SuiviInstallation(unittest.TestCase):
+    def test_un_etat_d_avant_le_lancement_est_ignore(self):
+        # Constaté le 17/09/2026 : « Installer » affichait l'échec d'un essai précédent, resté
+        # dans /run jusqu'au redémarrage, dès que le service tardait plus de 2 s à écrire.
+        lance_le = 1_000_000
+        ancien = {"etape": "echec", "raison": "source", "le": lance_le - 60_000}
+        self.assertIsNone(hub_menu.etat_depuis(ancien, lance_le))
+        self.assertIsNone(hub_menu.etat_depuis({"etape": "echec"}, lance_le))
+        frais = {"etape": "verification", "le": lance_le + 300}
+        self.assertEqual(hub_menu.etat_depuis(frais, lance_le), frais)
+        self.assertIsNone(hub_menu.etat_depuis(None, lance_le))
+
+    def test_bilan_du_service(self):
+        sortie = "ActiveState=failed\nResult=exit-code\nExecMainStatus=1\nStateChangeTimestampMonotonic=5000000000\n"
+        executer = lambda cmd, **k: SimpleNamespace(stdout=sortie, returncode=0)
+        self.assertEqual(hub_menu.bilan_service(executer), {"ActiveState": "failed", "Result": "exit-code", "ExecMainStatus": "1", "StateChangeTimestampMonotonic": "5000000000"})
+
+        def absent(*a, **k):
+            raise FileNotFoundError("systemctl")
+        self.assertIsNone(hub_menu.bilan_service(absent))
+
+    def test_service_arrete_sans_etat_devient_un_echec_detaille(self):
+        lance = 4990.0
+        arrete = {"ActiveState": "failed", "Result": "resources", "ExecMainStatus": "0", "StateChangeTimestampMonotonic": "4995000000"}
+        echec = hub_menu.echec_sans_etat(arrete, lance, ecoule=8)
+        self.assertEqual((echec["etape"], echec["raison"]), ("echec", "service"))
+        self.assertIn("resources", echec["detail"])
+        self.assertIsNone(hub_menu.echec_sans_etat(arrete, lance, ecoule=2), "on laisse au service le temps d'écrire")
+        # Arrêt d'un lancement précédent, et job en attente (network-online.target) : on attend.
+        vieux = {**arrete, "StateChangeTimestampMonotonic": "1000000000"}
+        self.assertIsNone(hub_menu.echec_sans_etat(vieux, lance, ecoule=30))
+        self.assertIsNone(hub_menu.echec_sans_etat({**arrete, "ActiveState": "activating"}, lance, ecoule=30))
+        self.assertIsNone(hub_menu.echec_sans_etat(None, lance, ecoule=30))
 
 
 class ReprisesKodi(unittest.TestCase):

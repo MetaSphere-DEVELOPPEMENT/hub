@@ -73,6 +73,8 @@ test("typographie : base de 1/44 du petit côté, aucun texte sous 22 px en 1080
 for (const [largeur, hauteur] of [[1280, 720], [1920, 1080], [3840, 2160]]) {
   test(`tenue : l'accueil complet tient en ${largeur}×${hauteur} de S à XL`, async () => {
     await ouvrir({ ...reglages(), reprises: REPRISES }, { largeur, hauteur });
+    // L'indicateur Internet sélectionné, libellé le plus long déplié : le pire cas de l'en-tête.
+    await page.evaluate(() => { window.hub.recevoir({ type: "internet", etat: "local" }); definirFocus(document.querySelector("#puce-internet"), true); });
     for (const echelle of [.9, 1, 1.1, 1.2]) {
       const bilan = await page.evaluate(e => {
         reglages.systeme.echelle = e; appliquerTout();
@@ -309,4 +311,31 @@ test("détails : badges et empreinte d'une pièce, pastilles d'étapes rondes, r
   assert.equal(ecoute, 1, "« J'écoute… » une seule fois à l'écran");
   await page.evaluate(() => window.hub.recevoir({ type: "recopie-appairage", etat: { code: "4821", jusqua: Date.now() / 1000 + 60 } }));
   assert.match(await page.evaluate(() => getComputedStyle(document.querySelector("#recopie-appairage")).boxShadow), /100vmax|\d{4,}px/, "voile sous le code de recopie");
+});
+
+// L'indicateur Internet : libellé à 4,5:1, pictogramme (graphique) à 3:1, dans chaque thème et
+// sur chaque motif ; et, dans À propos, l'état du réseau et le détail d'un échec de mise à jour.
+test("contrastes : indicateur Internet et détail d'échec de mise à jour, thèmes et motifs", async () => {
+  const faibles = [];
+  for (const theme of ["sombre", "clair"]) {
+    for (const motif of ["cinema", "rubans", "profondeur", "faisceaux", "nappes"]) {
+      await page?.close();
+      await ouvrir(reglages({}, { theme, animations: "reduites", motif }));
+      for (const etat of ["internet", "local", "aucun"]) {
+        await page.evaluate(e => { window.hub.recevoir({ type: "internet", etat: e }); definirFocus(document.querySelector("#puce-internet"), true); }, etat);
+        await page.waitForTimeout(200);
+        const m = await contrastes(["#internet-libelle", "#puce-internet .picto-internet"]);
+        faibles.push(...m.filter(x => x.ratio < (x.sel.includes("picto") ? 3 : 4.5)).map(x => ({ theme, motif, etat, ...x })));
+      }
+    }
+    await page.evaluate(() => {
+      ACTIONS.reglages("apropos");
+      window.hub.recevoir({ type: "internet", etat: "local", nuance: "portail" });
+      window.hub.recevoir({ type: "maj", etat: { etape: "echec", raison: "reseau", detail: "fatal: unable to access 'https://github.com/x/hub.git/': Could not resolve host: github.com" } });
+    });
+    await page.waitForTimeout(400);
+    const m = await contrastes([".detail-maj", ".reseau-info .valeur", ".reseau-info .picto-internet"]);
+    faibles.push(...m.filter(x => x.ratio < (x.sel.includes("picto") ? 3 : 4.5)).map(x => ({ theme, apropos: true, ...x })));
+  }
+  assert.deepEqual(faibles, []);
 });

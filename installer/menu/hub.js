@@ -11,6 +11,7 @@
 //   → { type: "infos" }                  machine, adresse IP, disque…
 //   → { type: "appairage", affiche }     l'écran d'appairage de la télécommande est (ou n'est plus) à l'écran
 //   → { type: "recopie-code", nouveau }  le code de recopie d'écran (nouveau : en tirer un autre)
+//   → { type: "internet" }               redemander l'état de la connexion (réponse : { type: "internet", etat, nuance })
 // Python répond en appelant window.hub.recevoir({ type, ... }), et y relaie aussi les
 // état de l'enceinte réseau ({ type: "lecture", etat: {source, etat, titre, artiste, pochette, ecran…} | null })
 // et les commandes vocales de hub-voix ({ type: "commande", nom } / { type: "voix", ... }).
@@ -85,6 +86,9 @@ const DEFAUTS = {
     // météo d'ailleurs. Choisir sa ville active la météo. Les réglages déjà enregistrés
     // gardent la leur (fusion avec ces défauts).
     meteo: { active: false, ville: null, lat: null, lon: null },
+    // hub-menu cherche seul les mises à jour (au démarrage, puis toutes les 6 h) ; il n'en
+    // installe jamais aucune sans qu'on appuie sur Installer.
+    miseAJourAuto: true,
   },
 };
 
@@ -1460,12 +1464,20 @@ function montrerHeros(onglet = ongletHeros, anime = false) {
 // ── Accueil : lancer un mode ──────────────────────────────────────────────
 
 let minuterieAnnonce;
-function annoncer(texte) {
+// detail : une ligne technique en petit sous le message (échec d'une mise à jour), laissée
+// plus longtemps à l'écran pour qu'on ait le temps de la lire ou de la photographier.
+function annoncer(texte, detail) {
   const a = $("annonce");
-  a.textContent = texte;
+  a.replaceChildren(el("span", {}, texte), ...(detail ? [el("span", { class: "annonce-detail" }, tronquer(detail, 160))] : []));
+  a.classList.toggle("avec-detail", !!detail);
   a.classList.add("visible");
   clearTimeout(minuterieAnnonce);
-  minuterieAnnonce = setTimeout(() => a.classList.remove("visible"), 3200);
+  minuterieAnnonce = setTimeout(() => a.classList.remove("visible"), detail ? 9000 : 3200);
+}
+// La fin d'un message technique est ce qui compte (« … Could not resolve host: github.com »).
+function tronquer(texte, longueur) {
+  const plat = String(texte).replace(/\s+/g, " ").trim();
+  return plat.length > longueur ? `…${plat.slice(-(longueur - 1))}` : plat;
 }
 
 function lancer(carte) {
@@ -1631,6 +1643,7 @@ const ACTIONS = {
   eteindre,
   fermer: fermerCalque,
   minuteur: () => ACTIONS.reglages("veille"),
+  reseau: () => ACTIONS.reglages("apropos"),
   "editer-nom": () => ouvrirClavier(t("profils.nom"), brouillon.nom, nom => { if (nom.trim()) brouillon.nom = nom.trim().slice(0, 16); rendreEditeur(); }),
   "enregistrer-profil": enregistrerProfil,
   "supprimer-profil": supprimerProfil,
@@ -2104,8 +2117,10 @@ function rendreReglages() {
   }
   for (const [id, icone] of sections) {
     sommaire.append(el("button", { class: "entree", "data-nav": true, "data-section": id, "data-cle": `section-${id}` },
-      el("span", { html: `<svg viewBox="0 0 24 24">${icone}</svg>` }), t(`section.${id}`)));
+      el("span", { html: `<svg viewBox="0 0 24 24">${icone}</svg>` }), t(`section.${id}`),
+      id === "apropos" && el("span", { class: "pastille-maj", id: "pastille-maj-apropos", hidden: true })));
   }
+  afficherPastilleMaj();
   focusParCalque.reglages = sommaire.querySelector(`[data-section="${sectionCourante}"]`);
   rendreSection(false);
   if (!infosMachine) envoyer({ type: "infos" });
@@ -2296,12 +2311,17 @@ function rendreSection(garderFocus = true) {
       zone.append(el("div", { class: "infos" },
         info(t("apropos.machine"), i.machine),
         info(t("apropos.systeme"), i.systeme),
-        info(t("apropos.reseau"), i.adresse ? t("reseau.connecte") : t("reseau.deconnecte")),
+        // L'état de l'en-tête quand hub-menu l'a relevé ; sinon, comme avant, l'adresse seule.
+        internet ? el("div", { class: `info reseau-info etat-${internet.etat}` }, el("div", { class: "etiquette" }, t("apropos.reseau")),
+          el("div", { class: "valeur" }, el("span", { class: "picto-internet", html: pictoInternet(internet.etat) }), libelleInternet()))
+          : info(t("apropos.reseau"), i.adresse ? t("reseau.connecte") : t("reseau.deconnecte")),
         info(t("apropos.adresse"), i.adresse),
         info(t("apropos.allume"), i.allumeDepuis),
         info(t("apropos.disque"), i.disqueLibre),
         info(t("apropos.version"), i.version)),
         contenuMiseAJour(),
+        rangee(t("maj.auto"), t("maj.auto.detail"),
+          options("maj-auto", [[true, t("oui")], [false, t("non")]], s.miseAJourAuto !== false, v => { s.miseAJourAuto = v === true || v === "true"; }), false, true),
         el("div", { class: "options", style: "justify-content:flex-start;margin-top:.3rem" },
           el("button", { class: "option", "data-nav": true, "data-cle": "fermer-reglages", "data-action": "fermer" }, t("fermer"))));
       break;
@@ -2317,27 +2337,86 @@ function rendreSection(garderFocus = true) {
   }
 }
 
+// ── Internet ──────────────────────────────────────────────────────────────
+// hub-menu relève l'état chez NetworkManager et le pousse : { type: "internet", etat:
+// "internet" | "local" | "aucun", nuance: "portail" }. La page ne fait aucun appel réseau
+// pour le savoir. Trois pictogrammes de formes différentes (globe, globe marqué d'un
+// point d'exclamation, globe barré) : la couleur ne porte jamais seule l'information.
+// Le libellé se lit en sélectionnant la puce, et dans l'aide.
+const ETATS_INTERNET = ["internet", "local", "aucun"];
+let internet = null;
+const GLOBE = '<circle cx="12" cy="12" r="8.2"/><path d="M3.8 12h16.4M12 3.8c2.3 2.2 3.5 5 3.5 8.2s-1.2 6-3.5 8.2c-2.3-2.2-3.5-5-3.5-8.2s1.2-6 3.5-8.2z"/>';
+function pictoInternet(etat) {
+  if (etat === "local") return `<svg viewBox="0 0 24 24">${GLOBE}<circle class="marque-etat" cx="17.6" cy="17.6" r="6.4"/><path class="signe-etat" d="M17.6 14.4v3.6M17.6 21v.05"/></svg>`;
+  if (etat === "aucun") return `<svg viewBox="0 0 24 24">${GLOBE}<path class="fente-etat" d="M4 4l16 16"/><path class="barre-etat" d="M4 4l16 16"/></svg>`;
+  return `<svg viewBox="0 0 24 24">${GLOBE}</svg>`;
+}
+function libelleInternet(e = internet) {
+  return e ? t(e.etat === "local" && e.nuance === "portail" ? "internet.portail" : `internet.${e.etat}`) : "";
+}
+function afficherInternet() {
+  const puce = $("puce-internet");
+  puce.hidden = !internet;
+  if (!internet) return;
+  if (puce.dataset.etat !== internet.etat) $("internet-picto").innerHTML = pictoInternet(internet.etat);
+  puce.dataset.etat = internet.etat;
+  $("internet-libelle").textContent = libelleInternet();
+  puce.setAttribute("aria-label", libelleInternet());
+}
+function recevoirInternet(message) {
+  internet = ETATS_INTERNET.includes(message.etat) ? { etat: message.etat, nuance: message.nuance === "portail" ? "portail" : null } : null;
+  afficherInternet();
+  if (pile.at(-1) === "reglages" && sectionCourante === "apropos") rendreSection();
+}
+
 // ── Mise à jour ───────────────────────────────────────────────────────────
-const maj = { verification: null, etat: null, enCours: false, suivie: false };
+// hub-menu vérifie seul (au démarrage une fois Internet là, puis toutes les 6 h, jamais
+// pendant un mode ni une installation) et envoie { type: "maj", verification, auto: true,
+// annoncer } ; annoncer ne vaut true qu'une fois par version. INITIAL.majAuto : la version
+// trouvée avant, pour que la pastille survive au retour d'un mode.
+const maj = { verification: INITIAL.majAuto || null, etat: null, enCours: false, suivie: false, annoncees: new Set() };
 const ETAPES_MAJ = ["verification", "telechargement", "tests", "installation", "terminee"];
+
+function majActive(e = maj.etat) { return !!e && !["terminee", "echec", "a-jour"].includes(e.etape); }
+function majDisponible() {
+  const v = maj.verification;
+  return !!(v?.disponible && !v.erreur && v.verifiable !== false && !majActive() && maj.etat?.etape !== "terminee");
+}
+function afficherPastilleMaj() {
+  const dispo = majDisponible();
+  for (const id of ["pastille-maj-pied", "pastille-maj-apropos"]) if ($(id)) $(id).hidden = !dispo;
+  const pied = document.querySelector('.pied [data-action="reglages"]');
+  pied?.setAttribute("aria-label", dispo ? `${t("reglages")} · ${t("maj.pastille")}` : t("reglages"));
+}
+function texteEchecMaj(e) {
+  // Une raison que ce menu ne connaît pas (hub-mise-a-jour plus récent) : le message
+  // générique plutôt que la clé de traduction brute.
+  const raison = `maj.echec.${e.raison || "installation"}`;
+  return t(e.retour ? "maj.echec.retour" : raison in TEXTES.fr ? raison : "maj.echec.installation");
+}
+// Le détail technique, en petit et sélectionnable : ce qu'il faut pour réparer, ou pour le
+// dire à qui répare. Tronqué par le début : la fin du message de git est la plus parlante.
+function detailMaj(detail) {
+  return typeof detail === "string" && detail.trim() ? el("span", { class: "detail-maj" }, tronquer(detail, 300)) : null;
+}
 
 function contenuMiseAJour() {
   const { verification: v, etat: e } = maj;
-  let texte = t("maj.detail"), boutons = [];
-  const actif = e && !["terminee", "echec", "a-jour"].includes(e.etape);
+  let texte = t("maj.detail"), boutons = [], detail = null;
+  const actif = majActive(e);
   if (actif) {
     texte = t(`maj.etape.${e.etape}`, { v: e.version || "" });
   } else if (e?.etape === "terminee") {
     texte = t("maj.terminee", { v: e.version || "" });
   } else if (e?.etape === "echec") {
-    // Une raison que ce menu ne connaît pas (hub-mise-a-jour plus récent) : le message
-    // générique plutôt que la clé de traduction brute.
-    const raison = `maj.echec.${e.raison || "installation"}`;
-    texte = t(e.retour ? "maj.echec.retour" : raison in TEXTES.fr ? raison : "maj.echec.installation");
+    texte = texteEchecMaj(e);
+    detail = detailMaj(e.detail);
   } else if (maj.enCours) {
     texte = t("maj.recherche");
   } else if (v?.erreur) {
-    texte = t(v.erreur === "configuration" ? "maj.sans.source" : "maj.injoignable");
+    const cle = v.erreur === "configuration" ? "maj.sans.source" : `maj.erreur.${v.erreur}`;
+    texte = t(cle in TEXTES.fr ? cle : "maj.injoignable");
+    detail = detailMaj(v.detail);
   } else if (v) {
     // verifiable absent (ancien hub-mise-a-jour) : installable, comme avant.
     texte = !v.disponible ? t("maj.a.jour") : v.verifiable === false ? t("maj.non.verifiable", { v: v.distant }) : t("maj.disponible", { v: v.distant });
@@ -2353,14 +2432,28 @@ function contenuMiseAJour() {
     }
   }
   const progression = actif ? el("div", { class: "barre-maj" }, el("i", { style: `width:${(ETAPES_MAJ.indexOf(e.etape) + 1) / ETAPES_MAJ.length * 100}%` })) : null;
-  return rangee(t("maj.titre"), el("span", {}, texte, progression), el("div", { class: "options" }, boutons));
+  return rangee(t("maj.titre"), el("span", {}, texte, progression, detail), el("div", { class: "options" }, boutons));
 }
 
 function recevoirMiseAJour(message) {
-  if ("verification" in message) { maj.verification = message.verification; maj.enCours = false; }
+  if ("verification" in message) {
+    // Une vérification automatique ne remplace pas une recherche lancée à la main en cours.
+    if (!(message.auto && maj.enCours)) { maj.verification = message.verification; maj.enCours = false; }
+  }
   if ("etat" in message) maj.etat = message.etat;
-  const actif = maj.etat && !["terminee", "echec", "a-jour"].includes(maj.etat.etape);
+  const actif = majActive();
   if (actif) maj.suivie = true;
+  afficherPastilleMaj();
+  const v = maj.verification;
+  if (message.auto && message.annoncer && majDisponible() && !maj.annoncees.has(v.distant)) {
+    maj.annoncees.add(v.distant);
+    annoncer(t("maj.auto.annonce", { v: v.distant }));
+  }
+  if (maj.etat?.etape === "echec" && maj.suivie) {
+    maj.suivie = false;
+    son("erreur");
+    annoncer(texteEchecMaj(maj.etat), maj.etat.detail);
+  }
   // Ne relancer que si l'on a vu cette mise à jour se dérouler : un état « terminee »
   // resté d'une mise à jour passée ne doit pas faire redémarrer le menu en boucle.
   if (maj.etat?.etape === "terminee" && maj.suivie) {
@@ -2486,7 +2579,10 @@ function contenuRaccourcis() {
       ligne(["F12"], "rc.kodi"),
       ligne(["F12", t("touche.guide")], "rc.service")),
     el("div", { class: "sous-titre" }, t("raccourcis.voix")),
-    el("div", { class: "raccourcis" }, ["vc.tv", "vc.service", "vc.jeux", "vc.bureau", "vc.retour", "vc.reglages", "vc.theme"].map(k => el("div", { class: "phrase" }, t(k)))));
+    el("div", { class: "raccourcis" }, ["vc.tv", "vc.service", "vc.jeux", "vc.bureau", "vc.retour", "vc.reglages", "vc.theme"].map(k => el("div", { class: "phrase" }, t(k)))),
+    el("div", { class: "sous-titre" }, t("internet.legende")),
+    el("div", { class: "raccourcis legende-internet" }, ETATS_INTERNET.map(etat =>
+      el("div", { class: `phrase etat-${etat}` }, el("span", { class: "picto-internet", html: pictoInternet(etat) }), t(`internet.${etat}`)))));
 }
 
 function rendreAide() {
@@ -2879,6 +2975,7 @@ window.hub = {
       case "telecommande": return recevoirTelecommande(message.etat);
       case "lecture": return recevoirLecture(message.etat);
       case "maj": return recevoirMiseAJour(message);
+      case "internet": return recevoirInternet(message);
       case "pin": return recevoirCode(message);
       case "recopie-code": return recevoirCodeRecopie(message);
       case "recopie-appairage": return recevoirAppairageRecopie(message.etat);
@@ -2910,6 +3007,8 @@ function appliquerTout() {
   horloge();
   afficherMeteo();
   majMinuteur();
+  afficherInternet();
+  afficherPastilleMaj();
   $("voix-pastille").hidden = !reglages.systeme.voix || etatVoix.micro === null;
   // Textes, services visibles, onglets cachés : le héros se refait sur le même mode.
   montrerHeros();
@@ -2931,6 +3030,8 @@ if (!INITIAL.retour && !parametres.get("ecran") && !parametres.has("sans-intro")
   setTimeout(() => { intro.hidden = true; }, 2700);
 }
 setInterval(chargerMeteo, 20 * 60000);
+// L'état de la connexion est poussé à chaque changement ; celui d'avant l'ouverture de la page, on le redemande.
+if (PONT && !INITIAL.ambiantSeul) envoyer({ type: "internet" });
 // Une manette déjà branchée au retour de Kodi ne renvoie pas « gamepadconnected ».
 relancerManettes();
 window.hubBoucles = () => ({ fond: boucleFond, manettes: boucleManettes });
