@@ -726,8 +726,12 @@ def infos():
     # lancé depuis les sources doit dire le numéro du dépôt, pas « dev ».
     depot = Path(__file__).resolve().parent.parent
     version = lire_version(VERSION_INSTALLEE)
-    if not version["numero"] and not version["commit"]:
-        version = lire_version(depot / "VERSION")
+    if not version["numero"] or not version["commit"]:
+        # Un HUB installé avant les numéros n'a que l'empreinte dans son fichier : on
+        # complète avec le dépôt plutôt que d'afficher « version inconnue » à côté d'une
+        # empreinte (constaté sur le HUB le 17/09/2026, tests de la mise à jour en échec).
+        du_depot = lire_version(depot / "VERSION")
+        version = {cle: version[cle] or du_depot[cle] for cle in version}
     quoi = nouveautes(NOUVEAUTES_INSTALLEES) or nouveautes(depot / "NOUVEAUTES.md")
     return {
         "machine": socket.gethostname(),
