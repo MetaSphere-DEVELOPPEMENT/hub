@@ -1038,7 +1038,10 @@ NOUVEAUTES_INSTALLEES = Path("/usr/local/share/hub/NOUVEAUTES.md")
 # « 1.0.0 » : MAJEUR.MINEUR.CORRECTIF, écrit à la main dans le VERSION du dépôt.
 NUMERO_VERSION = re.compile(r"\d+\.\d+\.\d+")
 DATE_VERSION = re.compile(r"\d{4}-\d{2}-\d{2}")
-MAJ_AUTO_INTERVALLE_S = 6 * 3600
+# 45 min : une vérification ne coûte qu'un « git ls-remote » (quelques kilo-octets), et
+# six heures faisaient rater toute une soirée de correctifs — le propriétaire devait
+# appuyer sur Rechercher à la main (constaté le 18/09/2026).
+MAJ_AUTO_INTERVALLE_S = 45 * 60
 # Une vérification qui échoue (GitHub injoignable un instant) se refait plus tôt, sans
 # marteler la source chaque minute.
 MAJ_AUTO_REESSAI_S = 30 * 60
@@ -1173,7 +1176,7 @@ def installation_en_cours(etat, maintenant):
 
 
 def verification_auto_due(maintenant, suivi, internet, active, deja_ce_demarrage, occupe):
-    """Une fois par démarrage dès qu'Internet est là, puis toutes les 6 h. Jamais sans
+    """Une fois par démarrage dès qu'Internet est là, puis toutes les 45 min. Jamais sans
     Internet, jamais réglage coupé, jamais pendant un mode ou une installation (occupe).
 
     Pas à chaque ouverture du menu : il se relance à chaque retour de Kodi."""

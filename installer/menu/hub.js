@@ -90,7 +90,7 @@ const DEFAUTS = {
     // météo d'ailleurs. Choisir sa ville active la météo. Les réglages déjà enregistrés
     // gardent la leur (fusion avec ces défauts).
     meteo: { active: false, ville: null, lat: null, lon: null },
-    // hub-menu cherche seul les mises à jour (au démarrage, puis toutes les 6 h) ; il n'en
+    // hub-menu cherche seul les mises à jour (au démarrage, puis toutes les 45 min) ; il n'en
     // installe jamais aucune sans qu'on appuie sur Installer.
     miseAJourAuto: true,
   },
@@ -2539,7 +2539,7 @@ function recevoirInternet(message) {
 }
 
 // ── Mise à jour ───────────────────────────────────────────────────────────
-// hub-menu vérifie seul (au démarrage une fois Internet là, puis toutes les 6 h, jamais
+// hub-menu vérifie seul (au démarrage une fois Internet là, puis toutes les 45 min, jamais
 // pendant un mode ni une installation) et envoie { type: "maj", verification, auto: true,
 // annoncer } ; annoncer ne vaut true qu'une fois par version. INITIAL.majAuto : la version
 // trouvée avant, pour que la pastille survive au retour d'un mode.

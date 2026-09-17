@@ -430,11 +430,15 @@ class VerificationAuto(unittest.TestCase):
         self.assertFalse(self.due(occupe=True))
         self.assertFalse(self.due(active=False))
 
-    def test_puis_toutes_les_six_heures(self):
+    def test_puis_toutes_les_45_minutes(self):
+        """Six heures faisaient rater toute une soirée de correctifs : il fallait appuyer
+        sur Rechercher à la main (constaté le 18/09/2026)."""
         maintenant = 100 * self.H
-        self.assertFalse(self.due(deja_ce_demarrage=True, suivi={"le": maintenant - 5 * self.H}))
-        self.assertTrue(self.due(deja_ce_demarrage=True, suivi={"le": maintenant - 6 * self.H}))
+        self.assertFalse(self.due(deja_ce_demarrage=True, suivi={"le": maintenant - 44 * 60}))
+        self.assertTrue(self.due(deja_ce_demarrage=True, suivi={"le": maintenant - 45 * 60}))
         self.assertTrue(self.due(deja_ce_demarrage=True, suivi=None))
+        self.assertLessEqual(hub_menu.MAJ_AUTO_INTERVALLE_S, 60 * 60,
+                             "une version poussée le soir doit être vue dans l'heure")
 
     def test_un_echec_se_reessaie_plus_tot(self):
         maintenant = 100 * self.H
