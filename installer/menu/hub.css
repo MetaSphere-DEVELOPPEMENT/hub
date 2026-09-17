@@ -16,6 +16,15 @@
      ne dépassait pas 3:1. On la mêle à --ton-accent dans la proportion --part-accent. */
   --ton-accent: #fff;
   --part-accent: 25%;
+  --accent-texte: color-mix(in srgb, rgb(var(--accent)) var(--part-accent), var(--ton-accent));
+  /* Couleurs d'état, en texte comme en jauge : jamais en dur, elles changent avec le thème. */
+  --pluie: rgb(90 170 255);
+  --attention: #ffb547;
+  --alerte: #ff6b6b;
+  --depasse: #ff8a4c;
+  /* Initiales des avatars : encre foncée sur la couleur du profil. En blanc, sur turquoise
+     ou ambre, elles tombaient à 2,05–2,2:1 (1,5:1 en thème clair). */
+  --encre-avatar: #06070c;
   --verre: rgba(255, 255, 255, .055);
   --verre-fort: rgba(255, 255, 255, .11);
   --verre-feuille: rgba(14, 16, 26, .62);
@@ -56,11 +65,18 @@
 :root[data-theme="clair"] {
   --encre: #e9edf5;
   --texte: #0e1322;
-  --texte-doux: rgba(14, 19, 34, .64);
-  --texte-pale: rgba(14, 19, 34, .42);
+  /* Relevés le 17/09/2026 en clair : texte pâle 2,67:1, code d'appairage 2,43:1, accent de la
+     TV 2,3:1, bleu de la pluie 2,27:1. */
+  --texte-doux: rgba(14, 19, 34, .74);
+  --texte-pale: rgba(14, 19, 34, .64);
   --voile-carte: transparent;
+  /* Teinte ×.78 de hub.js assombrie encore : TV ≈ #00756c. */
   --ton-accent: #000;
-  --part-accent: 78%;
+  --part-accent: 66%;
+  --pluie: #1f5fbf;
+  --attention: #955800;
+  --alerte: #b8322f;
+  --depasse: #a8480f;
   --verre: rgba(255, 255, 255, .42);
   --verre-fort: rgba(255, 255, 255, .72);
   --verre-feuille: rgba(248, 250, 255, .74);
@@ -217,10 +233,10 @@ body.calque-ouvert .ecran { transform: scale(.975); opacity: .35; }
   border-radius: 50%;
   font-weight: 700;
   font-size: var(--t-2);
-  color: #fff;
-  background: linear-gradient(140deg, rgb(var(--c)), rgb(var(--c) / .55));
+  color: var(--encre-avatar);
+  /* Opaque : l'ancien dégradé vers une teinte à 55 % laissait passer le fond sous l'initiale. */
+  background: linear-gradient(140deg, color-mix(in srgb, rgb(var(--c)) 80%, #fff), rgb(var(--c)));
   box-shadow: inset 0 0 0 1px rgb(255 255 255 / .35), 0 .3rem .76rem -.23rem rgb(var(--c) / .7);
-  text-shadow: 0 1px 2px rgb(0 0 0 / .25);
 }
 
 .voix-pastille {
@@ -796,7 +812,7 @@ body.gestion .tuile-profil .avatar { position: relative; }
 .heure-meteo .h { font-size: var(--t-1); color: var(--texte-doux); }
 .heure-meteo .picto-meteo { width: 1.82rem; height: 1.82rem; margin: .23rem auto; }
 .heure-meteo .t { font-size: var(--t-3); font-weight: 600; }
-.heure-meteo .p { font-size: var(--t-1); color: rgb(90 170 255); height: 1.1rem; }
+.heure-meteo .p { font-size: var(--t-1); color: var(--pluie); height: 1.1rem; }
 .jours { display: flex; flex-direction: column; gap: .25rem; }
 .jour { display: grid; grid-template-columns: 6.07rem 1.97rem 1fr 2.28rem 9.1rem 2.28rem; align-items: center; gap: .76rem; padding: .23rem .76rem; border-radius: .68rem; background: var(--verre); font-variant-numeric: tabular-nums; }
 .jour .picto-meteo { width: 1.67rem; height: 1.67rem; }
@@ -877,7 +893,7 @@ body.ambiant .ecran { opacity: 0; transform: scale(1.05); visibility: hidden; tr
 }
 .recopie-titre { font-size: var(--t-4); font-weight: 700; }
 .recopie-saisir { margin-top: .3rem; font-size: var(--t-3); color: var(--texte-doux); }
-.recopie-chiffres { margin-top: .76rem; font-size: var(--t-7); font-weight: 800; letter-spacing: .25em; font-variant-numeric: tabular-nums; color: rgb(var(--accent)); }
+.recopie-chiffres { margin-top: .76rem; font-size: var(--t-7); font-weight: 800; letter-spacing: .25em; font-variant-numeric: tabular-nums; color: var(--accent-texte); }
 .code-recopie { font-variant-numeric: tabular-nums; }
 
 /* ── Animations ──────────────────────────────────────────────────────────── */
@@ -939,14 +955,14 @@ body.verrouille .centre, body.verrouille .pied .aides { opacity: .15; pointer-ev
 .etapes { display: flex; flex-direction: column; gap: .68rem; }
 .etape { display: flex; align-items: center; gap: .68rem; font-size: var(--t-3); }
 .etape b { display: grid; place-items: center; width: 1.52rem; height: 1.52rem; border-radius: 50%; font-size: var(--t-2); background: rgb(var(--accent) / .22); box-shadow: inset 0 0 0 1px rgb(var(--accent) / .6); }
-.code-appairage { margin: .46rem 0 .08rem; font-size: var(--t-6); font-weight: 700; letter-spacing: .12em; font-variant-numeric: tabular-nums; color: rgb(var(--accent)); }
+.code-appairage { margin: .46rem 0 .08rem; font-size: var(--t-6); font-weight: 700; letter-spacing: .12em; font-variant-numeric: tabular-nums; color: var(--accent-texte); }
 .appairage .url { font-family: "Ubuntu Sans Mono", monospace; }
 .code-appairage.attente { font-size: var(--t-4); letter-spacing: 0; opacity: .7; }
 .empreinte-appairage { margin-top: .08rem; }
 .empreinte-courte { margin-top: .15rem; font-family: "Ubuntu Sans Mono", monospace; font-size: var(--t-4); font-weight: 600; letter-spacing: .12em; }
 .empreinte-paires { font-family: "Ubuntu Sans Mono", monospace; font-size: var(--t-1); line-height: 1.45; letter-spacing: .04em; white-space: pre; opacity: .6; }
 
-.dialogue .aide-photo.conseil { text-align: left; color: rgb(var(--bureau)); margin-top: .53rem; }
+.dialogue .aide-photo.conseil { text-align: left; color: color-mix(in srgb, rgb(var(--bureau)) var(--part-accent), var(--ton-accent)); margin-top: .53rem; }
 
 .barre-maj { display: block; margin-top: .53rem; height: .3rem; border-radius: 99rem; background: var(--verre-fort); overflow: hidden; }
 .barre-maj i { display: block; height: 100%; border-radius: inherit; background: rgb(var(--accent)); box-shadow: 0 0 .76rem rgb(var(--accent)); transition: width .8s var(--souple); }
@@ -1026,7 +1042,7 @@ body.avec-applis.avec-reprises .reprise { height: 5.01rem; }
 .grille-jeux { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.06rem; margin-top: .46rem; }
 .tuile-service.grande { --c: var(--jeux); height: 8.34rem; border-radius: 1.06rem; place-items: center; align-content: center; gap: .53rem; }
 .tuile-service.grande .marque { font-size: var(--t-5); }
-.tuile-service.grande .sous { font-size: var(--t-2); color: rgb(255 255 255 / .7); font-weight: 500; }
+.tuile-service.grande .sous { padding: .05rem .5rem; border-radius: 99rem; font-size: var(--t-2); color: #fff; font-weight: 500; background: rgb(0 0 0 / .24); }
 .tuile-service.grande .etat-service { top: .68rem; right: .68rem; left: auto; bottom: auto; translate: none; padding: .19rem .46rem; border-radius: 99rem; background: rgb(0 0 0 / .35); }
 .tuile-service.grande.focus { transform: translateY(-.23rem) scale(1.05); }
 .retour-jeux { margin-top: .76rem; font-size: var(--t-2); color: var(--texte-doux); line-height: 1.5; }

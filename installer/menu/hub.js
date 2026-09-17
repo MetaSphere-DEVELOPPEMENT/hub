@@ -643,7 +643,7 @@ function rendreMeteo() {
     el("div", {},
       el("div", { class: "etat" }, libelleMeteo(c.weather_code)),
       el("div", { class: "lieu" }, `${meteoProfil().ville} · ${releve}`),
-      alerteMeteo() && el("div", { class: "lieu", style: "color:rgb(90 170 255)" }, alerteMeteo())),
+      alerteMeteo() && el("div", { class: "lieu", style: "color:var(--pluie)" }, alerteMeteo())),
     boutons));
 
   const info = (etiquette, valeur) => el("div", { class: "info" }, el("div", { class: "etiquette" }, etiquette), el("div", { class: "valeur" }, valeur));

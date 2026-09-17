@@ -129,3 +129,25 @@ test("contrastes : accueil sombre, textes secondaires à 4,5:1 au moins", async 
   const faibles = mesures.filter(m => m.ratio < 4.5);
   assert.deepEqual(faibles, [], JSON.stringify(mesures));
 });
+
+test("contrastes : thème clair et initiales des avatars à 4,5:1 au moins", async () => {
+  const telecommande = { url: "http://192.168.1.40:8790/", code: "482913", appairageOuvert: true, expire: Date.now() + 240000, telephones: 0 };
+  for (const theme of ["clair", "sombre"]) {
+    await page?.close();
+    await ouvrir({ ...reglages({}, { theme, animations: "reduites", couleur: "ambre" }), telecommande });
+    await page.evaluate(() => definirFocus(document.querySelector('[data-mode="bureau"]'), true));
+    await page.waitForTimeout(200);
+    const accueil = await contrastes(["#avatar-profil", ".carte.focus .ouvrir > span", ".carte:not(.focus) .detail", ".aides > span > span"]);
+    await page.evaluate(() => ACTIONS.reglages("telecommande"));
+    await page.waitForTimeout(400);
+    const reglage = await contrastes([".code-appairage", "#contenu-reglages .aide", ".portee .avatar"]);
+    const faibles = [...accueil, ...reglage].filter(m => m.ratio < 4.5);
+    assert.deepEqual(faibles, [], `${theme} : ${JSON.stringify([...accueil, ...reglage])}`);
+  }
+});
+
+test("contrastes : les couleurs d'état (jauge, pluie) sont des jetons du thème, pas des couleurs en dur", () => {
+  const ext = readFileSync(path.join(MENU, "extensions.css"), "utf8");
+  assert.doesNotMatch(ext.match(/\.jauge-temps[^\n]*\n/g).join(""), /#[0-9a-f]{3,6}/i);
+  assert.doesNotMatch(readFileSync(path.join(MENU, "hub.js"), "utf8"), /color:\s*rgb\(90 170 255\)/);
+});

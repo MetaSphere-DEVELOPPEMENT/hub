@@ -5,10 +5,10 @@
 .jauge-temps { display: inline-flex; align-items: center; gap: .38rem; margin-left: .23rem; font-size: var(--t-1); font-variant-numeric: tabular-nums; color: var(--texte-doux); }
 .jauge-temps .barre { width: 2.73rem; height: .27rem; border-radius: 99rem; background: var(--verre-fort); overflow: hidden; }
 .jauge-temps .barre i { display: block; height: 100%; border-radius: inherit; background: rgb(var(--accent)); transition: width .8s var(--souple); }
-.jauge-temps.bas .barre i { background: #ffb547; }
-.jauge-temps.bas .reste { color: #ffb547; }
-.jauge-temps.epuise .barre i { background: #ff6b6b; }
-.jauge-temps.epuise .reste { color: #ff6b6b; }
+.jauge-temps.bas .barre i { background: var(--attention); }
+.jauge-temps.bas .reste { color: var(--attention); }
+.jauge-temps.epuise .barre i { background: var(--alerte); }
+.jauge-temps.epuise .reste { color: var(--alerte); }
 
 /* ── Réglages → Temps d'écran : sept jours ───────────────────────────────── */
 .rangee.large.temps-profil { grid-template-columns: minmax(9.1rem, 1fr) auto auto; align-items: center; }
@@ -16,7 +16,7 @@
 .jour-temps { display: grid; justify-items: center; gap: .23rem; }
 .jour-temps .colonne { position: relative; width: .83rem; height: 2.43rem; border-radius: .27rem; background: var(--verre); overflow: hidden; }
 .jour-temps .colonne i { position: absolute; left: 0; right: 0; bottom: 0; border-radius: .27rem; background: rgb(var(--accent) / .85); }
-.jour-temps .colonne i.depasse { background: #ff8a4c; }
+.jour-temps .colonne i.depasse { background: var(--depasse); }
 .jour-temps .colonne .limite { position: absolute; left: -.08rem; right: -.08rem; height: 2px; background: var(--texte-doux); z-index: 1; }
 .etiquette-jour { font-size: var(--t-1); color: var(--texte-pale); text-transform: uppercase; }
 
