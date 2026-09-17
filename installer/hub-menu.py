@@ -13,7 +13,9 @@ La page est locale : seule la météo a besoin du réseau. Si WebKit manque, le 
 retombe sur des boutons GTK simples plutôt que de laisser la TV sur un écran noir.
 
 CE QU'IL FAIT. Il affiche la page, lui passe les réglages au démarrage, et répond à
-ses demandes (enregistrer les réglages, météo, minuteur, infos machine). Il relaie
+ses demandes (enregistrer les réglages, météo, minuteur, infos machine). Il lui dit
+aussi si le HUB a Internet (NetworkManager), et cherche seul les mises à jour, sans
+jamais les installer. Il relaie
 aussi les commandes de hub-voix, reçues sur un socket. Quand un mode est choisi, il
 l'écrit sur la sortie standard et se termine : c'est le script de session qui lance
 le mode puis, à sa fin, relance ce menu.
@@ -28,6 +30,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -75,10 +78,14 @@ def chemins():
         "dernier": dossier("XDG_STATE_HOME", maison / ".local/state") / "hub" / "dernier-choix",
         "meteo": dossier("XDG_CACHE_HOME", maison / ".cache") / "hub" / "meteo.json",
         "pin-echecs": dossier("XDG_STATE_HOME", maison / ".local/state") / "hub" / "pin-echecs.json",
+        # Dernière vérification automatique des mises à jour, et la version déjà annoncée.
+        "maj-auto": dossier("XDG_STATE_HOME", maison / ".local/state") / "hub" / "mise-a-jour-auto.json",
         "execution": execution,
         "socket": execution / "menu.sock",
         "deja-ouvert": execution / "menu-deja-ouvert",
         "minuteur": execution / "minuteur-fin",
+        # Présent : la vérification du démarrage a eu lieu (sous /run : oublié à l'extinction).
+        "maj-auto-demarrage": execution / "maj-auto-demarrage",
         "telecommande": execution / "telecommande.json",
         "telecommande-appairage": execution / "telecommande-appairage",
         "lecture": execution / "lecture.json",
@@ -925,8 +932,62 @@ def appliquer_habillage(donnees, executer=subprocess.Popen, marqueur=None):
     return True
 
 
+# ── Internet ──────────────────────────────────────────────────────────────
+# Trois états pour l'en-tête : « internet », « local » (réseau sans Internet : portail
+# captif, pas de DNS ni de route) et « aucun ». NetworkManager fait foi : Ubuntu Desktop
+# vérifie déjà la connectivité (connectivity-check.ubuntu.com) ; on lit l'état qu'il
+# tient, sans relancer de vérification. S'il ne sait pas (vérification désactivée,
+# nmcli absent), une sonde courte vers la source des mises à jour tranche : aucun
+# service tiers de plus.
+CONNECTIVITE_NM = {"full": "internet", "limited": "local", "portal": "local", "none": "aucun"}
+SONDE_HOTE, SONDE_PORT, SONDE_DELAI_S = "github.com", 443, 4
+INTERNET_PERIODE_S = 60
+
+
+def connectivite_nm(executer=subprocess.run):
+    """full, limited, portal, none, unknown ; None si NetworkManager ne répond pas."""
+    try:
+        r = executer(["nmcli", "-t", "networking", "connectivity"], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    valeur = (r.stdout or "").strip().lower() if r.returncode == 0 else ""
+    return valeur if valeur in (*CONNECTIVITE_NM, "unknown") else None
+
+
+def sonder_internet(hote=SONDE_HOTE, port=SONDE_PORT, delai=SONDE_DELAI_S, connecter=socket.create_connection):
+    """Résolution DNS puis connexion TCP, refermée sans rien envoyer."""
+    try:
+        with connecter((hote, port), timeout=delai):
+            return True
+    except OSError:
+        return False
+
+
+def etat_internet(connectivite, adresse, sonder=sonder_internet):
+    if connectivite in CONNECTIVITE_NM:
+        etat = {"etat": CONNECTIVITE_NM[connectivite]}
+        if connectivite == "portal":
+            etat["nuance"] = "portail"
+        return etat
+    if not adresse:
+        return {"etat": "aucun"}
+    return {"etat": "internet" if sonder() else "local"}
+
+
+def releve_internet():
+    return etat_internet(connectivite_nm(), adresse_ip())
+
+
 # ── Mise à jour ───────────────────────────────────────────────────────────
 ETAT_MISE_A_JOUR = Path("/run/hub-mise-a-jour/etat.json")
+VERSION_INSTALLEE = Path("/usr/local/share/hub/VERSION")
+MAJ_AUTO_INTERVALLE_S = 6 * 3600
+# Une vérification qui échoue (GitHub injoignable un instant) se refait plus tôt, sans
+# marteler la source chaque minute.
+MAJ_AUTO_REESSAI_S = 30 * 60
+# Au-delà, une étape « installation » restée dans /run est celle d'un service tué.
+INSTALLATION_MAX_S = 2 * 3600
+ETAPES_FINALES = ("terminee", "echec", "a-jour")
 
 
 def verifier_mise_a_jour(executer=subprocess.run):
@@ -949,6 +1010,118 @@ def lancer_mise_a_jour(executer=subprocess.run):
 def etat_mise_a_jour(chemin=ETAT_MISE_A_JOUR):
     donnees = lire_json(chemin)
     return donnees if isinstance(donnees, dict) and isinstance(donnees.get("etape"), str) else None
+
+
+def etat_depuis(etat, lance_le_ms):
+    """L'état seulement s'il a été écrit par ce lancement-ci. L'échec d'un essai précédent
+    reste dans /run jusqu'au redémarrage : le menu le lisait au premier relevé (2 s) si
+    le service n'avait pas encore écrit le sien, et annonçait un échec qui n'avait pas eu lieu."""
+    if not etat or not isinstance(etat.get("le"), (int, float)):
+        return None
+    return etat if etat["le"] >= lance_le_ms - 1000 else None
+
+
+def bilan_service(executer=subprocess.run):
+    proprietes = ("ActiveState", "Result", "ExecMainStatus", "StateChangeTimestampMonotonic")
+    try:
+        r = executer(["systemctl", "show", "hub-mise-a-jour.service", *(f"--property={p}" for p in proprietes)],
+                     capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    bilan = dict(ligne.split("=", 1) for ligne in (r.stdout or "").splitlines() if "=" in ligne)
+    return bilan or None
+
+
+def echec_sans_etat(bilan, lance_monotone, ecoule):
+    """Le service s'est arrêté depuis le lancement sans publier d'état (unité cassée,
+    programme absent) : un échec à montrer plutôt qu'une attente sans fin. Un job encore en
+    file (network-online.target) ne change pas d'état : on attend. Horloges comparables :
+    time.monotonic et les *TimestampMonotonic de systemd lisent toutes deux CLOCK_MONOTONIC."""
+    if not bilan or ecoule < 5 or bilan.get("ActiveState") not in ("failed", "inactive"):
+        return None
+    try:
+        change = int(bilan.get("StateChangeTimestampMonotonic", "0")) / 1e6
+    except ValueError:
+        return None
+    if change < lance_monotone - 1:
+        return None
+    return {"etape": "echec", "raison": "service",
+            "detail": f"hub-mise-a-jour.service : {bilan.get('ActiveState')}, résultat {bilan.get('Result', '?')}, "
+                      f"code {bilan.get('ExecMainStatus', '?')} (journalctl -u hub-mise-a-jour -b)"}
+
+
+def commit_installe(chemin=VERSION_INSTALLEE):
+    """Même lecture que hub-mise-a-jour : `git describe --always --dirty` → le commit."""
+    try:
+        brut = Path(chemin).read_text().split()[0]
+    except (OSError, IndexError):
+        return None
+    return brut.removesuffix("-dirty").rsplit("-g", 1)[-1] or None
+
+
+def meme_commit(a, b):
+    return bool(a and b) and (a.startswith(b) or b.startswith(a))
+
+
+def maj_auto_active(reglages):
+    systeme = (reglages or {}).get("systeme") or {}
+    return systeme.get("miseAJourAuto") is not False
+
+
+def installation_en_cours(etat, maintenant):
+    if not etat or etat.get("etape") in ETAPES_FINALES:
+        return False
+    le = etat.get("le")
+    return isinstance(le, (int, float)) and maintenant - le / 1000 < INSTALLATION_MAX_S
+
+
+def verification_auto_due(maintenant, suivi, internet, active, deja_ce_demarrage, occupe):
+    """Une fois par démarrage dès qu'Internet est là, puis toutes les 6 h. Jamais sans
+    Internet, jamais réglage coupé, jamais pendant un mode ou une installation (occupe).
+
+    Pas à chaque ouverture du menu : il se relance à chaque retour de Kodi."""
+    if not active or occupe or internet != "internet":
+        return False
+    if not deja_ce_demarrage:
+        return True
+    le = (suivi or {}).get("le")
+    if not isinstance(le, (int, float)):
+        return True
+    return maintenant - le >= (MAJ_AUTO_REESSAI_S if suivi.get("echec") else MAJ_AUTO_INTERVALLE_S)
+
+
+def noter_verification_auto(chemin, verification, maintenant):
+    """Enregistre la vérification ; (suivi, annoncer). Une version n'est annoncée qu'une
+    fois, pas à chaque vérification. Un échec garde la dernière bonne réponse : GitHub
+    injoignable un soir n'efface pas la pastille d'une version déjà trouvée."""
+    precedent = lire_json(chemin)
+    precedent = precedent if isinstance(precedent, dict) else {}
+    echec = not isinstance(verification, dict) or "erreur" in verification
+    suivi = {"le": maintenant, "verification": precedent.get("verification") if echec else verification,
+             "echec": echec, "annoncee": precedent.get("annoncee")}
+    distant = None if echec else verification.get("distant")
+    annoncer = bool(distant and verification.get("disponible") and verification.get("verifiable") is not False
+                    and distant != suivi["annoncee"])
+    if annoncer:
+        suivi["annoncee"] = distant
+    try:
+        ecrire_atomique(chemin, json.dumps(suivi))
+    except OSError as erreur:
+        print(f"hub-menu : vérification automatique non enregistrée ({erreur})", file=sys.stderr)
+    return suivi, annoncer
+
+
+def maj_auto_initiale(suivi, installee):
+    """La version trouvée par une vérification passée, pour la pastille au retour d'un mode ;
+    rien si elle est installée depuis, ou si une autre version est en place."""
+    v = (suivi or {}).get("verification")
+    if not isinstance(v, dict) or not v.get("disponible") or not isinstance(v.get("distant"), str):
+        return None
+    if meme_commit(v["distant"], installee):
+        return None
+    if installee and v.get("installee") and not meme_commit(v["installee"], installee):
+        return None
+    return v
 
 
 # ── Temps d'écran et allumage ─────────────────────────────────────────────
@@ -1164,6 +1337,14 @@ def lancer(arguments=None):
             self.fichier = None
             self.etat_maj = None
             self.suivi_maj = False
+            # {"le": ms, "monotone": s} du dernier « Installer » : seul un état écrit après compte.
+            self.maj_lancee = None
+            self.internet = None
+            self.releve_en_cours = False
+            self.releve_nm_prevu = False
+            self.proxy_nm = None
+            # Processus de la vérification automatique, arrêté si un mode démarre.
+            self.verif_auto = None
             self.vue = None
             self.ecoute = None
 
@@ -1208,7 +1389,9 @@ def lancer(arguments=None):
             return False
 
         def do_shutdown(self):
-            # Le menu se ferme (un mode démarre) : plus d'écran d'appairage à la TV.
+            # Le menu se ferme (un mode démarre) : plus d'écran d'appairage à la TV, et pas
+            # de vérification de mise à jour qui continuerait pendant le film.
+            self.arreter_verif_auto()
             fermer_appairage(c)
             if self.ecoute:
                 self.ecoute.close()
@@ -1267,6 +1450,7 @@ def lancer(arguments=None):
                 "allumage": etat_allumage(),
                 "reveilProgramme": reveil_programme(deja_ouvert=deja_ouvert),
                 "fps": mesure_fluidite_demandee(c),
+                "majAuto": maj_auto_initiale(lire_json(c["maj-auto"]), commit_installe()),
             }
             cache = lire_json(c["meteo"])
             if cache and "donnees" in cache:
@@ -1312,7 +1496,116 @@ def lancer(arguments=None):
             # Chaque seconde : un bandeau « en cours de lecture » en retard de deux
             # secondes sur le téléphone se remarque.
             GLib.timeout_add_seconds(1, self.surveiller_lecture)
+            if not self.ambiant:
+                self.suivre_internet()
             return vue
+
+        # Internet et vérification automatique ─────────────────────────────
+        def suivre_internet(self):
+            self.relever_internet()
+            GLib.timeout_add_seconds(INTERNET_PERIODE_S, self.relever_internet)
+            try:
+                from gi.repository import Gio
+                Gio.DBusProxy.new_for_bus(
+                    Gio.BusType.SYSTEM, Gio.DBusProxyFlags.DO_NOT_AUTO_START, None, "org.freedesktop.NetworkManager",
+                    "/org/freedesktop/NetworkManager", "org.freedesktop.NetworkManager", None, self.proxy_nm_pret)
+            except Exception as erreur:  # sans D-Bus, le relevé de chaque minute suffit
+                print(f"hub-menu : NetworkManager non suivi ({erreur})", file=sys.stderr)
+
+        def proxy_nm_pret(self, _source, resultat):
+            from gi.repository import Gio
+            try:
+                self.proxy_nm = Gio.DBusProxy.new_for_bus_finish(resultat)
+            except GLib.Error as erreur:
+                print(f"hub-menu : NetworkManager non suivi ({erreur.message})", file=sys.stderr)
+                return
+            self.proxy_nm.connect("g-properties-changed", self.nm_a_change)
+
+        def nm_a_change(self, _proxy, changees, _invalidees):
+            if not {"Connectivity", "State", "PrimaryConnection"} & set(changees.unpack()):
+                return
+            # En se connectant, NetworkManager publie plusieurs changements d'affilée : un seul relevé.
+            if not self.releve_nm_prevu:
+                self.releve_nm_prevu = True
+                GLib.timeout_add_seconds(1, self.releve_apres_nm)
+
+        def releve_apres_nm(self):
+            self.releve_nm_prevu = False
+            self.relever_internet()
+            return False
+
+        def relever_internet(self):
+            # nmcli, et la sonde s'il le faut, hors du fil graphique ; un relevé à la fois.
+            if not self.releve_en_cours:
+                self.releve_en_cours = True
+
+                def travail():
+                    try:
+                        etat = releve_internet()
+                    except Exception as erreur:  # un relevé raté ne doit pas figer l'indicateur
+                        print(f"hub-menu : relevé Internet impossible ({erreur})", file=sys.stderr)
+                        etat = None
+                    GLib.idle_add(self.internet_releve, etat)
+                threading.Thread(target=travail, daemon=True).start()
+            return True
+
+        def internet_releve(self, etat):
+            self.releve_en_cours = False
+            if etat and etat != self.internet:
+                self.internet = etat
+                self.vers_page({"type": "internet", **etat})
+            self.planifier_verification()
+            return False
+
+        def planifier_verification(self):
+            if self.ambiant or self.choix or self.verif_auto:
+                return
+            maintenant = time.time()
+            occupe = installation_en_cours(etat_mise_a_jour(), maintenant) or self.suivi_maj
+            if not verification_auto_due(maintenant, lire_json(c["maj-auto"]), (self.internet or {}).get("etat"),
+                                         maj_auto_active(charger_reglages(c)), Path(c["maj-auto-demarrage"]).exists(), occupe):
+                return
+            try:
+                ecrire_atomique(c["maj-auto-demarrage"], "1")
+            except OSError:
+                pass
+            self.verif_auto = True
+
+            def travail():
+                verification = verifier_mise_a_jour(self.executer_interruptible)
+                GLib.idle_add(self.verification_auto_finie, verification)
+            threading.Thread(target=travail, daemon=True).start()
+
+        def executer_interruptible(self, commande, timeout=None, **_options):
+            """subprocess.run, dans un groupe de processus à soi : hub-mise-a-jour et son git
+            s'arrêtent ensemble si un mode démarre."""
+            p = subprocess.Popen(commande, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                 errors="replace", start_new_session=True)
+            self.verif_auto = p
+            try:
+                sortie, erreurs = p.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                self.arreter_verif_auto()
+                raise
+            return subprocess.CompletedProcess(commande, p.returncode, sortie, erreurs)
+
+        def arreter_verif_auto(self):
+            p = self.verif_auto
+            if isinstance(p, subprocess.Popen) and p.poll() is None:
+                try:
+                    os.killpg(p.pid, signal.SIGTERM)
+                except OSError:
+                    pass
+
+        def verification_auto_finie(self, verification):
+            self.verif_auto = None
+            if self.choix:
+                return False
+            suivi, annoncer = noter_verification_auto(c["maj-auto"], verification, time.time())
+            # Un échec reste silencieux : la page garde la dernière version trouvée.
+            if not suivi["echec"]:
+                self.vers_page({"type": "maj", "verification": verification, "auto": True, "annoncer": annoncer})
+            return False
 
         def suivre_si_en_cours(self):
             # Une mise à jour lancée ailleurs (télécommande, SSH) se suit aussi depuis le menu.
@@ -1324,12 +1617,20 @@ def lancer(arguments=None):
 
         def suivre_mise_a_jour(self):
             etat = etat_mise_a_jour()
+            if self.maj_lancee:
+                etat = etat_depuis(etat, self.maj_lancee["le"])
+                if etat is None:
+                    ecoule = time.monotonic() - self.maj_lancee["monotone"]
+                    etat = echec_sans_etat(bilan_service(), self.maj_lancee["monotone"], ecoule) if ecoule >= 5 else None
+                    if etat is None:
+                        return True
             if etat != self.etat_maj:
                 self.etat_maj = etat
                 self.vers_page({"type": "maj", "etat": etat})
-            fini = bool(etat and etat["etape"] in ("terminee", "echec", "a-jour"))
+            fini = bool(etat and etat["etape"] in ETAPES_FINALES)
             if fini:
                 self.suivi_maj = False
+                self.maj_lancee = None
             return not fini
 
         def surveiller_telecommande(self):
@@ -1428,17 +1729,27 @@ def lancer(arguments=None):
                 minutes = max(0, min(message["minutes"], 240))
                 self.en_fond(lambda: {"type": "minuteur", "fin": programmer_minuteur(c, minutes)})
             elif genre == "maj-verifier":
-                self.en_fond(lambda: {"type": "maj", "verification": verifier_mise_a_jour(), "etat": etat_mise_a_jour()})
+                def verifier():
+                    verification = verifier_mise_a_jour()
+                    # Vue à l'écran : la vérification automatique ne l'annoncera pas une seconde fois.
+                    noter_verification_auto(c["maj-auto"], verification, time.time())
+                    return {"type": "maj", "verification": verification, "etat": etat_mise_a_jour()}
+                self.en_fond(verifier)
             elif genre == "maj-etat":
                 self.vers_page({"type": "maj", "etat": etat_mise_a_jour()})
                 self.suivre_si_en_cours()
+            elif genre == "internet":
+                if self.internet:
+                    self.vers_page({"type": "internet", **self.internet})
             elif genre == "maj-appliquer":
+                self.maj_lancee = {"le": time.time() * 1000, "monotone": time.monotonic()}
                 if lancer_mise_a_jour():
                     self.etat_maj = None
                     if not self.suivi_maj:
                         self.suivi_maj = True
                         GLib.timeout_add_seconds(2, self.suivre_mise_a_jour)
                 else:
+                    self.maj_lancee = None
                     self.vers_page({"type": "maj", "etat": {"etape": "echec", "raison": "lancement"}})
             elif genre == "relancer":
                 # Sortir sans choix : le script de session relance le menu, dans sa nouvelle version.

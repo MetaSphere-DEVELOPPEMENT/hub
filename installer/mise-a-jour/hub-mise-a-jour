@@ -21,6 +21,10 @@ COMMENT, SANS RIEN CASSER.
   profils, codes et photos (~/.config/hub). S'il échoue, l'installateur de la
   version précédente est relancé : le HUB revient à ce qui marchait.
 - L'état est publié dans /run/hub-mise-a-jour/etat.json pour que le menu l'affiche.
+  Un échec y porte sa raison (reseau, source, clone, disque, delai, signataires,
+  signature, tests, installation, configuration, autre) et le détail technique, que le
+  menu montre : « source injoignable » servait autrefois pour tout, du DNS absent au
+  dossier de version impossible à écrire, et on ne savait pas quoi réparer.
 
 La source (une URL git : le dépôt GitHub public, ou le Mac sur le réseau) est lue dans
 /etc/hub/mise-a-jour.json : {"source": "...", "branche": "main"}.
@@ -29,6 +33,7 @@ La source (une URL git : le dépôt GitHub public, ou le Mac sur le réseau) est
     hub-mise-a-jour appliquer    installer la plus récente (root, via hub-mise-a-jour.service)
 """
 
+import errno
 import json
 import os
 import pwd
@@ -65,6 +70,56 @@ COMMIT = re.compile(r"^[0-9a-f]{40}([0-9a-f]{24})?$")
 # Sortie de ssh-keygen -Y verify quand la clé figure dans le fichier : « for <nom> ».
 # Une signature valide d'une clé inconnue dit « with … No principal matched. ».
 SIGNATURE_RECONNUE = re.compile(r'^Good "git" signature for (\S.*?) with \S+ key ', re.M)
+# Pauses (s) avant de réessayer une commande git qui n'a pas trouvé le réseau. Le service
+# attend network-online.target, mais cette cible est atteinte dès qu'une interface est
+# montée : DNS pas encore prêt, wifi qui se reconnecte après la veille.
+ESSAIS_RESEAU = (5, 15)
+DETAIL_MAX = 600
+
+# Ce que git (curl pour https, OpenSSH pour ssh) écrit selon ce qui manque. Relevé avec
+# git 2.54 le 17/09/2026. La source d'abord : « unable to access … returned error: 403 »
+# est une réponse du serveur, pas une panne de réseau.
+SOURCE_REFUSEE = re.compile(
+    r"repository .*not found|remote branch .* not found|couldn't find remote ref|does not appear to be a git repository|"
+    r"could not read (username|password)|authentication failed|permission denied|host key verification failed|"
+    r"dubious ownership|returned error: 4\d\d", re.I)
+RESEAU_ABSENT = re.compile(
+    r"could not resolve (host|proxy)|temporary failure in name resolution|name or service not known|"
+    r"failed to connect|could(n't| not) connect|connection (timed out|refused|reset)|network is unreachable|"
+    r"no route to host|operation timed out|timed out after|early eof|remote end hung up unexpectedly|rpc failed|"
+    r"ssl|tls|gnutls|certificate|returned error: 5\d\d", re.I)
+DISQUE = {errno.ENOSPC, errno.EDQUOT, errno.EACCES, errno.EPERM, errno.EROFS, errno.ENOTEMPTY, errno.EEXIST,
+          errno.ENOTDIR, errno.EISDIR, errno.EIO, errno.EBUSY}
+
+
+class Echec(RuntimeError):
+    """Un échec dont on connaît la nature : `raison` pour le menu, `detail` pour qui répare."""
+
+    def __init__(self, raison, detail):
+        super().__init__(detail)
+        self.raison, self.detail = raison, detail
+
+
+def classer_git(sortie, defaut):
+    if SOURCE_REFUSEE.search(sortie):
+        return "source"
+    if RESEAU_ABSENT.search(sortie):
+        return "reseau"
+    return defaut
+
+
+def classer_erreur(erreur):
+    """(raison, détail) de n'importe quelle exception : le menu ne doit jamais rester sans état."""
+    if isinstance(erreur, Echec):
+        raison, detail = erreur.raison, erreur.detail
+    elif isinstance(erreur, subprocess.TimeoutExpired):
+        commande = erreur.cmd if isinstance(erreur.cmd, str) else " ".join(str(x) for x in erreur.cmd[:3])
+        raison, detail = "delai", f"{commande} : délai de {erreur.timeout:.0f} s dépassé"
+    elif isinstance(erreur, OSError) and erreur.errno in DISQUE:
+        raison, detail = "disque", str(erreur)
+    else:
+        raison, detail = "autre", f"{type(erreur).__name__} : {erreur}"
+    return raison, detail[-DETAIL_MAX:]
 
 
 def lire_config(chemin=CONFIG):
@@ -101,7 +156,25 @@ def ecrire_etat(etat, chemin=ETAT):
 
 
 def executer(commande, **options):
-    return subprocess.run(commande, capture_output=True, text=True, **options)
+    # errors="replace" : une sortie d'apt ou un nom de fichier qui n'est pas de l'UTF-8
+    # levait UnicodeDecodeError, que rien n'attrapait — service tombé, aucun état publié.
+    return subprocess.run(commande, capture_output=True, text=True, errors="replace", **options)
+
+
+def git_distant(commande, defaut, lancer, attendre, timeout, avant_essai=None):
+    """Lance une commande git qui parle à la source, réessaie si le réseau manque, et lève
+    Echec avec la raison lue dans la sortie de git."""
+    for pause in (*ESSAIS_RESEAU, None):
+        if avant_essai:
+            avant_essai()
+        r = lancer(commande, env=ENV_GIT, timeout=timeout)
+        if r.returncode == 0:
+            return r
+        sortie = (r.stderr or r.stdout or "").strip() or f"git a rendu le code {r.returncode}"
+        raison = classer_git(sortie, defaut)
+        if raison != "reseau" or pause is None:
+            raise Echec(raison, sortie[-DETAIL_MAX:])
+        attendre(pause)
 
 
 def signataires_autorises(chemin=SIGNATAIRES):
@@ -128,15 +201,15 @@ def signataires_autorises(chemin=SIGNATAIRES):
     return True, ""
 
 
-def dernier_commit(config, lancer=executer):
-    r = lancer([*GIT, "ls-remote", config["source"], f"refs/heads/{config['branche']}"], env=ENV_GIT, timeout=60)
-    if r.returncode != 0 or not r.stdout.strip():
-        raise RuntimeError(f"source injoignable : {(r.stderr or r.stdout).strip()[:300]}")
+def dernier_commit(config, lancer=executer, attendre=time.sleep):
+    r = git_distant([*GIT, "ls-remote", config["source"], f"refs/heads/{config['branche']}"], "source", lancer, attendre, 60)
+    if not r.stdout.strip():
+        raise Echec("source", f"branche {config['branche']} absente de {config['source']}")
     return r.stdout.split()[0]
 
 
-def verifier(config, installee, lancer=executer, signataires=SIGNATAIRES):
-    distant = dernier_commit(config, lancer)
+def verifier(config, installee, lancer=executer, signataires=SIGNATAIRES, attendre=time.sleep):
+    distant = dernier_commit(config, lancer, attendre)
     reponse = {"disponible": not meme_commit(distant, installee), "distant": distant[:12], "installee": installee}
     # La signature ne se contrôle qu'une fois le commit téléchargé ; ici on dit seulement
     # si une installation aurait une chance d'être acceptée.
@@ -152,25 +225,54 @@ def commit_du_clone(depot, lancer=executer):
     r = lancer([*GIT, "-C", str(depot), "rev-parse", "--verify", "HEAD^{commit}"], env=ENV_GIT)
     commit = r.stdout.strip()
     if r.returncode != 0 or not COMMIT.match(commit):
-        raise RuntimeError(f"clone illisible : {(r.stderr or r.stdout).strip()[:300]}")
+        raise Echec("clone", f"clone illisible : {(r.stderr or r.stdout).strip()[:300]}")
     return commit
 
 
-def cloner(config, commit, dossier_versions, lancer=executer):
+# runuser vit dans /usr/sbin (paquet util-linux-extra sur Ubuntu 26.04), absent du PATH
+# réduit donné aux tests : lancé par son nom, il restait introuvable et l'installation
+# échouait avant même de télécharger (constaté sur le HUB le 17/09/2026). On le cherche
+# donc ici, dans les dossiers d'administration, et on le passe en chemin absolu.
+DOSSIERS_ADMIN = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+
+def abaisseur(chemin=None):
+    """Chemin absolu de runuser, qui fait tourner les tests sous un compte sans droits."""
+    trouve = shutil.which("runuser", path=chemin or os.environ.get("PATH_ADMIN") or DOSSIERS_ADMIN)
+    if not trouve:
+        raise Echec("outil", "runuser est introuvable : installe le paquet util-linux-extra "
+                             "(sudo apt install util-linux-extra), les tests ne peuvent pas "
+                             "tourner sous un compte sans droits.")
+    return trouve
+
+
+def effacer(chemin):
+    """Efface un fichier, un lien ou un dossier ; une erreur remonte (classée « disque ») au
+    lieu d'être tue : un reste qu'on n'arrive pas à effacer fait échouer la suite."""
+    chemin = Path(chemin)
+    if chemin.is_symlink() or chemin.is_file():
+        chemin.unlink()
+    elif chemin.exists():
+        shutil.rmtree(chemin)
+
+
+def cloner(config, commit, dossier_versions, lancer=executer, attendre=time.sleep):
     cible = Path(dossier_versions) / commit
     if (cible / ".git").is_dir():
         return cible
     provisoire = Path(dossier_versions) / f".{commit}.tmp"
-    shutil.rmtree(provisoire, ignore_errors=True)
-    provisoire.parent.mkdir(parents=True, exist_ok=True)
+    Path(dossier_versions).mkdir(parents=True, exist_ok=True)
     # --no-local : pour une source sur disque, git lierait sinon ses objets en dur, et
     # leur propriétaire pourrait les réécrire après la vérification. --depth 1 : seul
     # le commit installé compte, et c'est lui qui est vérifié.
-    r = lancer([*GIT, "clone", "--quiet", "--no-local", "--depth", "1", "--single-branch", "--no-recurse-submodules",
-                "--branch", config["branche"], "--", config["source"], str(provisoire)], env=ENV_GIT, timeout=600)
-    if r.returncode != 0:
+    commande = [*GIT, "clone", "--quiet", "--no-local", "--depth", "1", "--single-branch", "--no-recurse-submodules",
+                "--branch", config["branche"], "--", config["source"], str(provisoire)]
+    try:
+        # Un .tmp resté d'un essai coupé ferait refuser le clone (« already exists »).
+        git_distant(commande, "clone", lancer, attendre, 600, avant_essai=lambda: effacer(provisoire))
+    except Echec:
         shutil.rmtree(provisoire, ignore_errors=True)
-        raise RuntimeError(f"clone impossible : {r.stderr.strip()[:300]}")
+        raise
     obtenu = commit_du_clone(provisoire, lancer)
     if obtenu != commit:
         # La branche a avancé entre la vérification et le clone : on garde ce qu'on a
@@ -179,6 +281,10 @@ def cloner(config, commit, dossier_versions, lancer=executer):
         if (cible / ".git").is_dir():
             shutil.rmtree(provisoire, ignore_errors=True)
             return cible
+    # Un dossier à ce nom sans .git n'est pas une version : c'est le reste d'un essai
+    # interrompu (coupure pendant un effacement). os.replace refuse d'écraser un dossier
+    # non vide, et l'erreur remontait en « source injoignable ».
+    effacer(cible)
     os.replace(provisoire, cible)
     return cible
 
@@ -217,7 +323,8 @@ def lancer_tests(depot, lancer=executer, compte=COMPTE_TESTS, donner=donner_au_c
     # Une copie sans .git, dans un dossier temporaire donné à nobody : les tests peuvent
     # y écrire, le clone que root installera reste intact (un .git/config réécrit ferait
     # exécuter une commande au prochain git lancé par root).
-    with tempfile.TemporaryDirectory(prefix="hub-tests-") as bac:
+    bac = tempfile.mkdtemp(prefix="hub-tests-")
+    try:
         copie, maison = Path(bac) / "depot", Path(bac) / "maison"
         shutil.copytree(depot, copie, symlinks=True, ignore=shutil.ignore_patterns(".git"))
         maison.mkdir()
@@ -227,10 +334,15 @@ def lancer_tests(depot, lancer=executer, compte=COMPTE_TESTS, donner=donner_au_c
         environnement = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": str(maison), "TMPDIR": str(maison),
                          "LANG": "C.UTF-8", "PYTHONDONTWRITEBYTECODE": "1"}
         try:
-            r = lancer(["runuser", "-u", compte, "--", sys.executable, "-m", "unittest", "discover", "-s", "tests"],
+            r = lancer([abaisseur(), "-u", compte, "--", sys.executable, "-m", "unittest", "discover", "-s", "tests"],
                        cwd=str(copie), env=environnement, timeout=900)
         except subprocess.TimeoutExpired:
             return False, "les tests ont dépassé 15 minutes"
+    finally:
+        # Un fichier que les tests laissent en cours d'écriture (processus fils encore vivant)
+        # faisait lever le nettoyage du dossier temporaire : des tests réussis devenaient un
+        # échec « source ». Le reste est dans /tmp, vidé au redémarrage.
+        shutil.rmtree(bac, ignore_errors=True)
     return r.returncode == 0, (r.stderr or r.stdout)[-800:]
 
 
@@ -241,24 +353,54 @@ def installer(depot, utilisateur, lancer=executer, verifie=None):
         # L'installateur ne remplace /etc/hub/signataires-autorises que s'il tourne depuis
         # le commit dont la signature vient d'être vérifiée (voir etape_mise_a_jour).
         environnement["HUB_MISE_A_JOUR_VERIFIEE"] = verifie
-    r = lancer(["bash", str(Path(depot) / "installer" / "hub-installer.sh"), "--pour-de-vrai", "--sans-audit"],
-               cwd=depot, env=environnement, timeout=3600)
+    try:
+        r = lancer(["bash", str(Path(depot) / "installer" / "hub-installer.sh"), "--pour-de-vrai", "--sans-audit"],
+                   cwd=depot, env=environnement, timeout=3600)
+    except subprocess.TimeoutExpired:
+        # Interrompu en plein travail : c'est un échec d'installation, qui appelle le retour
+        # à la version précédente, pas une erreur de source.
+        return False, "l'installateur a dépassé 60 minutes"
+    except OSError as erreur:
+        return False, f"installateur impossible à lancer : {erreur}"
     return r.returncode == 0, (r.stderr or r.stdout)[-800:]
 
 
 def menage(dossier_versions, a_garder):
-    versions = sorted((d for d in Path(dossier_versions).iterdir() if d.is_dir() and not d.name.startswith(".")),
-                      key=lambda d: d.stat().st_mtime, reverse=True)
+    """Après une installation réussie : une erreur ici ne doit pas la faire passer pour un échec."""
+    try:
+        versions = sorted((d for d in Path(dossier_versions).iterdir() if d.is_dir() and not d.name.startswith(".")),
+                          key=lambda d: d.stat().st_mtime, reverse=True)
+    except OSError as erreur:
+        print(f"hub-mise-a-jour : ménage impossible ({erreur})", file=sys.stderr)
+        return
     for d in versions[GARDER:]:
         if d.name not in a_garder:
             shutil.rmtree(d, ignore_errors=True)
 
 
 def appliquer(config, utilisateur, dossier_versions=VERSIONS, etat=ecrire_etat, lancer=executer, installee=None,
-              signataires=SIGNATAIRES, tests=lancer_tests):
+              signataires=SIGNATAIRES, tests=lancer_tests, attendre=time.sleep):
+    """Toute erreur finit en état « echec » classé et détaillé : le menu n'attend jamais un
+    état qui ne viendra pas, et ne dit plus « source injoignable » pour un disque plein."""
+    suivi = {}
+
+    def publier(e):
+        if e.get("version"):
+            suivi["version"] = e["version"]
+        etat(e)
+
+    try:
+        return _appliquer(config, utilisateur, dossier_versions, publier, lancer, installee, signataires, tests, attendre)
+    except Exception as erreur:  # classée plutôt que perdue : voir classer_erreur
+        raison, detail = classer_erreur(erreur)
+        etat({"etape": "echec", "raison": raison, "detail": detail, **({"version": suivi["version"]} if suivi else {})})
+        return 1
+
+
+def _appliquer(config, utilisateur, dossier_versions, etat, lancer, installee, signataires, tests, attendre):
     installee = installee if installee is not None else version_installee()
     etat({"etape": "verification"})
-    commit = dernier_commit(config, lancer)
+    commit = dernier_commit(config, lancer, attendre)
     if meme_commit(commit, installee):
         etat({"etape": "a-jour", "version": commit[:12]})
         return 0
@@ -271,7 +413,7 @@ def appliquer(config, utilisateur, dossier_versions=VERSIONS, etat=ecrire_etat, 
         if Path(dossier_versions).is_dir() else None
 
     etat({"etape": "telechargement", "version": commit[:12]})
-    depot = cloner(config, commit, dossier_versions, lancer)
+    depot = cloner(config, commit, dossier_versions, lancer, attendre)
 
     # Rien du clone ne s'exécute avant cette vérification, pas même ses tests.
     signataire, verifie = verifier_signature(depot, signataires, lancer)
@@ -306,28 +448,34 @@ def appliquer(config, utilisateur, dossier_versions=VERSIONS, etat=ecrire_etat, 
     return 1
 
 
-def main(arguments):
+def main(arguments, config=CONFIG, ecrire=ecrire_etat):
     if not arguments or arguments[0] not in ("verifier", "appliquer"):
         print(__doc__.strip().splitlines()[-2:], file=sys.stderr)
         return 2
-    config = lire_config()
-    if not config:
-        print(json.dumps({"erreur": "configuration", "detail": f"{CONFIG} absent ou sans source"}))
+    appliquer_demande = arguments[0] == "appliquer"
+    lue = lire_config(config)
+    if not lue:
+        detail = f"{config} absent ou sans source"
+        # Sans état publié, le menu attendait une étape qui ne venait jamais.
+        if appliquer_demande:
+            ecrire({"etape": "echec", "raison": "configuration", "detail": detail})
+        print(json.dumps({"erreur": "configuration", "detail": detail}))
         return 3
-    try:
-        if arguments[0] == "verifier":
-            print(json.dumps(verifier(config, version_installee())))
+    if not appliquer_demande:
+        try:
+            print(json.dumps(verifier(lue, version_installee())))
             return 0
-        utilisateur = os.environ.get("HUB_UTILISATEUR") or (arguments[1] if len(arguments) > 1 else None)
-        if not utilisateur:
-            print("hub-mise-a-jour appliquer : HUB_UTILISATEUR manquant", file=sys.stderr)
-            return 2
-        return appliquer(config, utilisateur)
-    except (RuntimeError, OSError, subprocess.SubprocessError) as erreur:
-        if arguments[0] == "appliquer":
-            ecrire_etat({"etape": "echec", "raison": "source", "detail": str(erreur)})
-        print(json.dumps({"erreur": "source", "detail": str(erreur)}))
-        return 1
+        except Exception as erreur:  # classée, jamais une trace brute à la place du JSON attendu
+            raison, detail = classer_erreur(erreur)
+            print(json.dumps({"erreur": raison, "detail": detail}))
+            return 1
+    utilisateur = os.environ.get("HUB_UTILISATEUR") or (arguments[1] if len(arguments) > 1 else None)
+    if not utilisateur:
+        detail = "HUB_UTILISATEUR manquant (/etc/hub/mise-a-jour.env)"
+        ecrire({"etape": "echec", "raison": "configuration", "detail": detail})
+        print(f"hub-mise-a-jour appliquer : {detail}", file=sys.stderr)
+        return 2
+    return appliquer(lue, utilisateur)
 
 
 if __name__ == "__main__":

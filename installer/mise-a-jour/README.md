@@ -98,15 +98,35 @@ ci-dessus avec la nouvelle ligne.
 
 ### Diagnostic, un soir de panne
 
+Le menu affiche la raison et, en petit, le détail technique de l'échec. Le même, en entier :
+
 ```sh
-cat /run/hub-mise-a-jour/etat.json          # "raison": "signataires" | "signature" | "tests" | …
-journalctl -u hub-mise-a-jour -n 50
+cat /run/hub-mise-a-jour/etat.json          # "raison" et "detail" du dernier essai
+journalctl -u hub-mise-a-jour -b            # sortie du service, depuis le démarrage
+systemctl status hub-mise-a-jour            # le service a-t-il seulement démarré ?
 hub-mise-a-jour verifier                    # "verifiable": false = aucun signataire utilisable
 ls -l /etc/hub/signataires-autorises        # root, -rw-r--r-- ; sinon refusé
 # Vérifier à la main le commit que le HUB téléchargerait :
 git clone --depth 1 --branch master https://github.com/MetaSphere-DEVELOPPEMENT/hub.git /tmp/hub-verif
 git -C /tmp/hub-verif -c gpg.ssh.allowedSignersFile=/etc/hub/signataires-autorises verify-commit HEAD
 ```
+
+| `raison` | Ce qui a échoué | Où chercher |
+|---|---|---|
+| `reseau` | DNS, connexion, TLS : git n'a pas joint la source (trois essais, à 5 et 15 s) | `resolvectl query github.com` ; proxy dans `/etc/environment`, que le service lit aussi |
+| `source` | La source a répondu non : dépôt ou branche introuvable, accès refusé, « dubious ownership » | `/etc/hub/mise-a-jour.json` ; source ssh : clé et `known_hosts` de **root** |
+| `clone` | Le clone a échoué pour une autre raison (objets refusés par `fsck`…) ou est illisible | le détail ; relancer le `git clone` ci-dessus en root |
+| `disque` | Écriture impossible : place, droits, dossier inattendu dans `/var/lib/hub/versions` | `df -h /var/lib/hub` ; `ls -la /var/lib/hub/versions` |
+| `delai` | Une commande git a dépassé son délai (60 s pour la source, 10 min pour le clone) | débit ; le détail nomme la commande |
+| `outil` | Un outil manque (`runuser`, du paquet `util-linux-extra`) | le détail nomme l'outil et le paquet ; `apt install util-linux-extra` |
+| `configuration` | `/etc/hub/mise-a-jour.json` ou `/etc/hub/mise-a-jour.env` absent ou incomplet | relancer l'installateur |
+| `tests`, `signature`, `signataires`, `installation` | Voir les sections ci-dessus | le détail |
+| `autre` | Erreur imprévue (type et message dans le détail) | `journalctl -u hub-mise-a-jour -b` |
+
+Avant le 17/09/2026, tout ce qui n'était ni signature, ni tests, ni installation sortait en
+« source injoignable » sans détail : un dossier de version resté d'un essai interrompu
+(que `os.replace` refusait d'écraser), un délai dépassé ou un disque plein s'affichaient
+comme une panne de réseau.
 
 « No principal matched » : la clé qui a signé n'est pas dans le fichier. Aucune
 sortie et code 1 : le commit de tête n'est pas signé (voir la liste des cas plus haut).

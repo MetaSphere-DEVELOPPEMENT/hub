@@ -21,6 +21,8 @@
   --attention: #ffb547;
   --alerte: #ff6b6b;
   --depasse: #ff8a4c;
+  /* Globe barré de l'en-tête : --alerte tombait à 2,35:1 sur le motif rubans (mesuré le 17/09/2026). */
+  --picto-aucun: #ff9b9b;
   /* Initiales des avatars : encre foncée sur la couleur du profil. En blanc, sur turquoise
      ou ambre, elles tombaient à 2,05–2,2:1 (1,5:1 en thème clair). */
   --encre-avatar: #06070c;
@@ -95,6 +97,7 @@
   --attention: #955800;
   --alerte: #b8322f;
   --depasse: #a8480f;
+  --picto-aucun: var(--alerte);
   --anneau: #0e1322;
   --liseré-focus: rgb(14 19 34 / .6);
   --verre: rgba(255, 255, 255, .42);
@@ -322,6 +325,24 @@ body.calque-ouvert .ecran *, body.calque-ouvert .ecran *::before, .calque:not(.o
 .meteo-puce .temp { font-size: var(--t-3); font-weight: 600; color: var(--texte); font-variant-numeric: tabular-nums; }
 .meteo-puce .ville { font-weight: 500; }
 
+/* Internet : le pictogramme seul, rond comme l'avatar voisin ; le libellé à la sélection.
+   Chaque état a sa forme (globe, globe marqué « ! », globe barré) ; la couleur la double. */
+.internet-puce { padding: .34rem; gap: .46rem; }
+.internet-puce .internet-libelle { display: none; white-space: nowrap; }
+.internet-puce.focus .internet-libelle { display: inline; padding-right: .46rem; }
+.picto-internet { display: inline-flex; flex: none; color: var(--texte-doux); }
+.picto-internet svg { width: 1.5rem; height: 1.5rem; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; overflow: visible; }
+.internet-puce .picto-internet svg { width: 1.74rem; height: 1.74rem; }
+[data-etat="local"] .picto-internet, .etat-local .picto-internet { color: var(--attention); }
+[data-etat="aucun"] .picto-internet, .etat-aucun .picto-internet { color: var(--picto-aucun); }
+/* Le signe se découpe dans le globe : un liseré couleur du fond autour de la pastille et de la barre. */
+.picto-internet .marque-etat { fill: currentColor; stroke: var(--encre); stroke-width: 1.6; }
+.picto-internet .signe-etat { stroke: var(--encre); stroke-width: 2.6; }
+.picto-internet .fente-etat { stroke: var(--encre); stroke-width: 4.8; }
+.picto-internet .barre-etat { stroke-width: 2.4; }
+.reseau-info .valeur { display: flex; align-items: center; gap: .46rem; }
+.legende-internet .phrase { display: flex; align-items: center; gap: .61rem; }
+
 /* L'heure en bout d'en-tête, la date discrète à sa gauche, sur la même ligne. */
 .horloge { flex: none; display: flex; flex-direction: row-reverse; align-items: baseline; gap: .8rem; margin-left: .3rem; font-variant-numeric: tabular-nums; }
 .heure { font-size: var(--t-5); font-weight: 300; letter-spacing: -.02em; line-height: 1; }
@@ -548,6 +569,12 @@ kbd.fleche { font-family: system-ui, sans-serif; font-size: var(--t-2); line-hei
   transition: color var(--focus-duree), background-color var(--focus-duree), transform var(--focus-duree) var(--sortie);
 }
 .bouton.rond { padding: .64rem; }
+/* Une nouvelle version attend : un point à la couleur du mode, cerclé du fond pour se
+   détacher de l'engrenage. Discret, sans texte : l'annonce l'a dit une fois. */
+.avec-pastille { position: relative; }
+.pastille-maj { flex: none; width: .62rem; height: .62rem; border-radius: 50%; background: rgb(var(--accent)); box-shadow: 0 0 0 .14rem var(--encre), 0 0 .6rem rgb(var(--accent) / .8); }
+.avec-pastille .pastille-maj { position: absolute; top: .05rem; right: .05rem; }
+.entree .pastille-maj { margin-left: auto; }
 .bouton svg { width: .99rem; height: .99rem; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .bouton.focus {
   color: var(--focus-texte);
@@ -919,6 +946,18 @@ body.ambiant .ecran { opacity: 0; transform: scale(1.05); visibility: hidden; tr
   z-index: 20;
 }
 .annonce.visible, .bulle-voix.visible { opacity: 1; visibility: visible; transform: translate(-50%, 0); transition: opacity .35s var(--souple), transform .45s var(--ressort); }
+/* Échec d'une mise à jour : le message, puis le détail technique en petit. */
+.annonce.avec-detail { display: flex; flex-direction: column; align-items: center; gap: .23rem; max-width: min(64rem, 80vw); border-radius: 1.14rem; text-align: center; }
+/* Chasse fixe dans la carte, où l'on recopie ; dans l'annonce, qui passe, la police du menu se lit plus vite. */
+.annonce-detail { font-size: var(--t-1); line-height: 1.35; }
+.detail-maj { font: 400 var(--t-1)/1.35 ui-monospace, "Ubuntu Sans Mono", "DejaVu Sans Mono", monospace; }
+.annonce-detail, .detail-maj {
+  color: var(--texte-doux);
+  overflow-wrap: anywhere;
+  /* Sélectionnable : à recopier depuis le Bureau ou la souris, dans un rapport de panne. */
+  user-select: text; -webkit-user-select: text;
+}
+.detail-maj { display: block; margin-top: .38rem; }
 .bulle-voix { top: 14vh; bottom: auto; font-size: var(--t-4); font-weight: 600; display: flex; align-items: center; gap: .61rem; }
 .bulle-voix .ondes { display: flex; color: rgb(var(--accent)); }
 

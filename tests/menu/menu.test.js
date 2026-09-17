@@ -560,6 +560,8 @@ test("navigation : Haut depuis Fermer reste dans le contenu et atteint Recherche
   await page.click('[data-section="apropos"]');
   await page.evaluate(() => document.querySelector('[data-cle="fermer-reglages"]').dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
   await touche("ArrowUp");
+  assert.equal(await focus(), "maj-auto-true", "le réglage automatique, entre Rechercher et Fermer");
+  await touche("ArrowUp");
   assert.equal(await focus(), "maj-verifier");
   assert.equal((await messages("maj-etat")).length >= 1, true, "l'état d'une mise à jour en cours est demandé à l'ouverture");
 });
@@ -808,7 +810,7 @@ test("profil par défaut neutre ; des réglages existants gardent leurs profils 
 // déplacements ne revenaient pas au point de départ.
 test("accueil : rangées qui s'arrêtent au bout, et chaque déplacement se défait par la flèche opposée", async () => {
   await ouvrir({ retour: true, reprises: [{ titre: "Dune", fichier: "/d.mkv", position: 60, duree: 600 }], reglages: { profils: [{ id: "p", nom: "Samuel", meteo: { active: true, ville: "Lyon", lat: 45.7, lon: 4.8 } }], profilActif: "p" } });
-  await page.evaluate(() => { window.hub.recevoir({ type: "meteo", donnees: { current: { temperature_2m: 17, weather_code: 3, is_day: 1 } }, releveLe: new Date().toISOString() }); recevoirMinuteur(Date.now() + 600000); });
+  await page.evaluate(() => { window.hub.recevoir({ type: "meteo", donnees: { current: { temperature_2m: 17, weather_code: 3, is_day: 1 } }, releveLe: new Date().toISOString() }); window.hub.recevoir({ type: "internet", etat: "local" }); recevoirMinuteur(Date.now() + 600000); });
   const aller = async (depart, ...touches) => { await page.evaluate(s => definirFocus(document.querySelector(s), true), depart); await touche(...touches); return focus(); };
   assert.equal(await aller('[data-mode="tv"]', "ArrowLeft"), "tv", "Gauche s'arrête au bout de la rangée des cartes");
   assert.equal(await aller('[data-mode="bureau"]', "ArrowRight"), "bureau");
@@ -839,10 +841,12 @@ test("réglages : Droite depuis le sommaire va au premier réglage ; Rechercher 
   await touche("ArrowRight");
   assert.equal(await focus(), "maj-verifier");
   await touche("ArrowDown");
+  assert.match(await focus(), /^maj-auto-(true|false)$/, "le réglage automatique, sous Rechercher");
+  await touche("ArrowDown");
   assert.equal(await focus(), "fermer-reglages");
-  await touche("ArrowUp");
+  await touche("ArrowUp", "ArrowUp");
   assert.equal(await focus(), "maj-verifier");
-  await touche("ArrowDown", "ArrowLeft");
+  await touche("ArrowDown", "ArrowDown", "ArrowLeft");
   assert.equal(await focus(), "section-apropos", "Gauche depuis Fermer revient à la section, sans en ouvrir une autre");
   assert.equal(await page.evaluate(() => sectionCourante), "apropos");
   await page.evaluate(() => definirFocus(document.querySelector('[data-section="services"]')));
@@ -866,4 +870,107 @@ test("éditeur de profil : la flèche opposée ramène toujours d'où l'on vient
     if (await focus() !== depart) irreversibles.push(`${depart} ${k} → ${arrivee} → ${await focus()}`);
   }
   assert.deepEqual(irreversibles, []);
+});
+
+// ── Internet et mises à jour automatiques ─────────────────────────────────
+test("internet : trois états, pictogramme distinct et libellé à la sélection ; OK ouvre À propos", async () => {
+  await ouvrir({ retour: true });
+  assert.ok(await page.isHidden("#puce-internet"), "rien d'affiché tant que hub-menu n'a rien relevé");
+  assert.equal((await messages("internet")).length, 1, "l'état est redemandé à l'ouverture");
+  const formes = {};
+  for (const [etat, libelle] of [["internet", "Internet"], ["local", "Réseau local, sans Internet"], ["aucun", "Pas de réseau"]]) {
+    await page.evaluate(e => { definirFocus(document.querySelector('[data-mode="tv"]'), true); window.hub.recevoir({ type: "internet", etat: e }); }, etat);
+    assert.ok(await page.isVisible("#puce-internet"), etat);
+    assert.ok(await page.isHidden("#internet-libelle"), `${etat} : libellé caché hors sélection`);
+    assert.equal(await page.getAttribute("#puce-internet", "aria-label"), libelle);
+    formes[etat] = await page.evaluate(() => [...document.querySelectorAll("#internet-picto svg > *")].map(x => x.getAttribute("class") || x.tagName).join(","));
+    await page.evaluate(() => definirFocus(document.querySelector("#puce-internet"), true));
+    assert.equal(await page.textContent("#internet-libelle"), libelle);
+    assert.ok(await page.isVisible("#internet-libelle"));
+  }
+  assert.equal(new Set(Object.values(formes)).size, 3, `trois formes : ${JSON.stringify(formes)}`);
+  await page.evaluate(() => window.hub.recevoir({ type: "internet", etat: "local", nuance: "portail" }));
+  assert.equal(await page.textContent("#internet-libelle"), "Connexion à valider (portail)");
+  await touche("Enter");
+  await page.waitForFunction(() => sectionCourante === "apropos" && pile.at(-1) === "reglages");
+  assert.match(await page.textContent(".reseau-info"), /Connexion à valider/);
+  await page.evaluate(() => window.hub.recevoir({ type: "internet", etat: "bizarre" }));
+  assert.doesNotMatch(await page.textContent("#contenu-reglages"), /internet\./, "jamais de clé brute");
+  assert.deepEqual(page.erreurs, []);
+});
+
+test("internet : traduit en anglais, et légende dans l'aide", async () => {
+  await ouvrir({ retour: true, reglages: { profils: [{ id: "p", nom: "Sam", langue: "en" }], profilActif: "p" } });
+  await page.evaluate(() => window.hub.recevoir({ type: "internet", etat: "aucun" }));
+  assert.equal(await page.getAttribute("#puce-internet", "aria-label"), "No network");
+  await page.evaluate(() => ACTIONS.aide());
+  assert.match(await page.textContent("#contenu-aide"), /Local network, no Internet/);
+  assert.equal(await page.locator("#contenu-aide .legende-internet svg").count(), 3);
+});
+
+test("mise à jour automatique : pastille sur l'engrenage et À propos, annonce une seule fois par version", async () => {
+  await ouvrir({ retour: true });
+  assert.ok(await page.isHidden("#pastille-maj-pied"));
+  const dispo = v => ({ type: "maj", verification: { disponible: true, verifiable: true, distant: v, installee: "000000" }, auto: true, annoncer: true });
+  await page.evaluate(m => window.hub.recevoir(m), dispo("abc123"));
+  assert.ok(await page.isVisible("#pastille-maj-pied"));
+  assert.equal(await page.textContent("#annonce"), "Nouvelle version du HUB (abc123) : Réglages → À propos.");
+  await page.evaluate(() => { document.querySelector("#annonce").textContent = ""; });
+  // hub-menu ne redemande pas l'annonce ; et même s'il le faisait, la page ne la répète pas.
+  await page.evaluate(m => window.hub.recevoir({ ...m, annoncer: false }), dispo("abc123"));
+  await page.evaluate(m => window.hub.recevoir(m), dispo("abc123"));
+  assert.equal(await page.textContent("#annonce"), "");
+  await page.evaluate(m => window.hub.recevoir(m), dispo("def456"));
+  assert.match(await page.textContent("#annonce"), /def456/);
+  await touche("r");
+  assert.ok(await page.isVisible("#pastille-maj-apropos"));
+  // Une version non vérifiable n'a pas de pastille : elle ne pourrait pas s'installer.
+  await page.evaluate(() => window.hub.recevoir({ type: "maj", verification: { disponible: true, verifiable: false, distant: "fff" }, auto: true, annoncer: false }));
+  assert.ok(await page.isHidden("#pastille-maj-apropos"));
+});
+
+test("mise à jour automatique : la version trouvée avant un mode garde sa pastille au retour", async () => {
+  await ouvrir({ retour: true, majAuto: { disponible: true, distant: "abc123", installee: "000000" } });
+  assert.ok(await page.isVisible("#pastille-maj-pied"));
+  assert.equal(await page.textContent("#annonce"), "", "pas d'annonce au retour");
+  await page.evaluate(() => ACTIONS.reglages("apropos"));
+  assert.match(await page.textContent("#contenu-reglages"), /Nouvelle version disponible \(abc123\)/);
+  assert.equal(await page.locator('[data-cle="maj-appliquer"]').count(), 1);
+});
+
+test("mise à jour automatique : réglage dans À propos, activé par défaut, enregistré dans systeme", async () => {
+  await ouvrir({ retour: true });
+  await page.evaluate(() => ACTIONS.reglages("apropos"));
+  assert.match(await page.textContent("#contenu-reglages"), /Rechercher automatiquement les mises à jour/);
+  assert.equal(await page.getAttribute('[data-cle="maj-auto-true"]', "class"), "option choisie");
+  await page.click('[data-cle="maj-auto-false"]');
+  await attendreReglages(d => d.systeme.miseAJourAuto === false);
+  await page.click('[data-cle="maj-auto-true"]');
+  await attendreReglages(d => d.systeme.miseAJourAuto === true);
+  // La page ne vérifie jamais d'elle-même : c'est hub-menu qui planifie (Internet, modes, installation).
+  assert.deepEqual(await messages("maj-verifier"), []);
+});
+
+test("mise à jour : l'échec suivi s'annonce avec son détail, lisible dans la carte", async () => {
+  await ouvrir({ retour: true });
+  await page.evaluate(() => ACTIONS.reglages("apropos"));
+  await page.evaluate(() => window.hub.recevoir({ type: "maj", verification: { disponible: true, distant: "abc1234" }, etat: null }));
+  await page.click('[data-cle="maj-appliquer"]');
+  const detail = "fatal: unable to access 'https://github.com/x/hub.git/': Could not resolve host: github.com";
+  await page.evaluate(d => window.hub.recevoir({ type: "maj", etat: { etape: "echec", raison: "reseau", detail: d, version: "abc1234" } }), detail);
+  assert.match(await page.textContent("#annonce"), /Réseau injoignable \(Internet ou DNS\)/);
+  assert.match(await page.textContent("#annonce .annonce-detail"), /Could not resolve host: github\.com/);
+  assert.match(await page.textContent("#contenu-reglages .detail-maj"), /Could not resolve host: github\.com/);
+  const style = await page.evaluate(() => { const c = getComputedStyle(document.querySelector(".detail-maj")); return { selection: c.userSelect || c.webkitUserSelect, taille: parseFloat(c.fontSize) / parseFloat(getComputedStyle(document.documentElement).fontSize) }; });
+  assert.equal(style.selection, "text");
+  assert.ok(style.taille >= .899, `détail à ${style.taille} rem`);
+  // Long : tronqué par le début, la fin du message reste.
+  await page.evaluate(() => window.hub.recevoir({ type: "maj", etat: { etape: "echec", raison: "disque", detail: "x".repeat(900) + " No space left on device" } }));
+  const texte = await page.textContent("#contenu-reglages .detail-maj");
+  assert.ok(texte.length <= 300 && texte.startsWith("…") && texte.endsWith("No space left on device"), texte);
+  assert.match(await page.textContent("#contenu-reglages"), /Écriture impossible sur le disque/);
+  // Une recherche en erreur dit pourquoi, détail compris.
+  await page.evaluate(() => window.hub.recevoir({ type: "maj", verification: { erreur: "reseau", detail: "Could not resolve host: github.com" }, etat: null }));
+  assert.match(await page.textContent("#contenu-reglages"), /Réseau injoignable \(Internet ou DNS\)\./);
+  assert.match(await page.textContent("#contenu-reglages .detail-maj"), /Could not resolve host/);
 });
