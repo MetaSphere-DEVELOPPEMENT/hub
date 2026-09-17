@@ -541,6 +541,33 @@ test("navigation : Haut depuis Fermer reste dans le contenu et atteint Recherche
   assert.equal((await messages("maj-etat")).length >= 1, true, "l'état d'une mise à jour en cours est demandé à l'ouverture");
 });
 
+// Audit du 17/09/2026 : un focus sorti du contenu changeait la section affichée (Haut depuis
+// « Sombre » ouvrait Arrière-plan ; Gauche depuis GeForce NOW, Enceinte réseau).
+test("réglages : sortir du contenu ne change jamais de section", async () => {
+  await ouvrir({ retour: true });
+  await touche("r");
+  assert.equal(await focus(), "section-apparence");
+  await touche("ArrowRight");
+  assert.equal(await focus(), "theme-sombre");
+  await touche("ArrowUp");
+  assert.equal(await focus(), "theme-sombre", "Haut s'arrête au bord du contenu");
+  assert.equal(await page.textContent("#contenu-reglages h3"), "Apparence");
+  await touche("ArrowLeft");
+  assert.equal(await focus(), "section-apparence", "Gauche revient sur la section affichée");
+  assert.equal(await page.textContent("#contenu-reglages h3"), "Apparence");
+
+  await page.evaluate(() => { fermerTout(); ACTIONS.reglages("services"); });
+  await page.evaluate(() => definirFocus(document.querySelector('[data-cle="service-geforcenow-true"]'), true));
+  await touche("ArrowLeft");
+  assert.equal(await focus(), "section-services");
+  assert.equal(await page.textContent("#contenu-reglages h3"), "Streaming et jeux");
+
+  const derniere = await page.evaluate(() => { const l = [...document.querySelectorAll("#contenu-reglages [data-nav]")].at(-1); definirFocus(l, true); return l.dataset.cle; });
+  await touche("ArrowDown");
+  assert.equal(await focus(), derniere, "Bas s'arrête au bord du contenu");
+  assert.equal(await page.textContent("#contenu-reglages h3"), "Streaming et jeux");
+});
+
 test("mise à jour : un état « terminee » ancien ne relance pas le menu", async () => {
   await ouvrir({ retour: true });
   await page.evaluate(() => window.hub.recevoir({ type: "maj", etat: { etape: "terminee", version: "abc" } }));

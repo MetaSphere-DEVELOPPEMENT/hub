@@ -764,7 +764,11 @@ function definirFocus(cible, silencieux = false) {
 
   if (cible.dataset.accent) accentuer(cible.dataset.accent);
   else if (pile.at(-1) === "accueil") accentuer(cartes.find(c => c.dataset.mode === profil().dernier)?.dataset.accent || "tv");
-  if (cible.dataset.section && cible.dataset.section !== sectionCourante) {
+  // Parcourir le sommaire change la section ; y revenir depuis le contenu, jamais : on
+  // rentre sur la section qu'on quittait (voisin), et un focus égaré ne doit pas remplacer
+  // sous les yeux la page qu'on était en train de régler (audit du 17/09/2026 : Haut depuis
+  // « Sombre » ouvrait Arrière-plan).
+  if (cible.dataset.section && cible.dataset.section !== sectionCourante && !precedent?.closest(".contenu")) {
     sectionCourante = cible.dataset.section;
     rendreSection(false);
   }
@@ -789,8 +793,16 @@ function defiler(cible) {
 const ZONES = ".contenu, .sommaire, .entete, .pied, .modes, .reprises, .applis, .grille-jeux, .editeur-identite, .editeur-securite, .choix, .pave";
 function voisin(depart, direction) {
   const zone = depart.closest(ZONES);
-  const dansZone = zone && voisinParmi(depart, direction, candidats().filter(e => zone.contains(e)));
-  return dansZone || voisinParmi(depart, direction, candidats());
+  const liste = candidats();
+  const dansZone = zone && voisinParmi(depart, direction, liste.filter(e => zone.contains(e)));
+  if (dansZone) return dansZone;
+  // Le contenu d'une feuille est un cul-de-sac en haut et en bas : le sommaire est à
+  // gauche, pas au-dessus. Gauche ramène sur l'entrée de la section affichée.
+  if (zone?.classList.contains("contenu")) {
+    if (direction !== "gauche") return null;
+    return liste.find(e => e.dataset.section === sectionCourante) || null;
+  }
+  return voisinParmi(depart, direction, liste);
 }
 function voisinParmi(depart, direction, liste) {
   const a = depart.getBoundingClientRect();
