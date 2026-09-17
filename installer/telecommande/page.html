@@ -58,6 +58,9 @@ body {
   background-attachment: fixed;
 }
 button, input { font: inherit; color: inherit; }
+/* Clavier Bluetooth, contrôle de sélection, lecteur d'écran : la cible doit se voir.
+   :focus-visible ne s'allume pas au toucher, le doigt ne voit donc rien changer. */
+:focus-visible { outline: 3px solid rgb(var(--tv)); outline-offset: 3px; }
 button {
   touch-action: manipulation;
   -webkit-user-select: none; user-select: none;
@@ -97,7 +100,8 @@ svg { display: block; }
   outline: none; caret-color: rgb(var(--tv));
   transition: border-color .2s, box-shadow .2s;
 }
-#code:focus { border-color: rgb(var(--tv) / .7); box-shadow: 0 0 0 4px rgb(var(--tv) / .15); }
+/* Un halo à 15 % se confondait avec le fond : le champ actif porte un anneau plein. */
+#code:focus { border-color: rgb(var(--tv)); box-shadow: 0 0 0 3px rgb(var(--tv) / .75); }
 #code::placeholder { color: var(--texte-pale); }
 .secoue { animation: secoue .38s var(--souple); }
 @keyframes secoue { 20% { transform: translateX(-10px); } 45% { transform: translateX(8px); } 70% { transform: translateX(-5px); } }
@@ -194,7 +198,7 @@ header .marque { margin-right: auto; }
   border-radius: 999px; background: var(--verre); border: 1px solid var(--lisere);
 }
 .bascule button {
-  min-height: 38px; border: 0; border-radius: 999px; background: transparent;
+  min-height: 44px; border: 0; border-radius: 999px; background: transparent;
   color: var(--texte-doux); font-size: 14px; font-weight: 600;
 }
 .bascule button[aria-pressed="true"] { background: var(--verre-fort); color: var(--texte); }
@@ -203,7 +207,8 @@ header .marque { margin-right: auto; }
 .gaucher .colonne-volume { order: -1; }
 .pave-tactile {
   position: relative; overflow: hidden;
-  height: min(46dvh, 400px); min-height: 250px;
+  /* Hauteur réduite par ajusterPave() quand Retour et Accueil passeraient sous le pli. */
+  height: min(46dvh, 400px); min-height: 200px;
   border-radius: 28px;
   background:
     radial-gradient(90% 70% at 50% 0%, rgb(var(--tv) / .10), transparent 70%),
@@ -217,7 +222,7 @@ header .marque { margin-right: auto; }
 }
 .pave-tactile .aide {
   position: absolute; inset: auto 0 16px; text-align: center;
-  font-size: 13px; line-height: 1.6; color: var(--texte-pale); pointer-events: none;
+  font-size: 14px; line-height: 1.6; color: var(--texte-doux); pointer-events: none;
   transition: opacity .4s;
 }
 .pave-tactile.utilise .aide { opacity: 0; }
@@ -244,9 +249,11 @@ header .marque { margin-right: auto; }
 @keyframes eclair { from { opacity: .95; transform: rotate(var(--angle, 0deg)) translateY(0) scale(1); } to { opacity: 0; transform: rotate(var(--angle, 0deg)) translateY(-26px) scale(.9); } }
 .colonne-volume { display: grid; grid-template-rows: 1fr auto 1fr; gap: 8px; }
 .colonne-volume .touche { min-height: 0; font-size: 28px; font-weight: 400; }
-.colonne-volume .niveau { text-align: center; font-size: 13px; color: var(--texte-doux); font-variant-numeric: tabular-nums; }
+.colonne-volume .niveau { text-align: center; font-size: 14px; color: var(--texte-doux); font-variant-numeric: tabular-nums; }
 .disposition-pave #zone-croix, .disposition-pave #rangee-volume { display: none; }
 .disposition-boutons #zone-tactile { display: none; }
+/* L'anneau de focus serait découpé par la forme des secteurs : on les éclaire comme au toucher. */
+.secteur:focus-visible { outline: none; background: rgb(var(--tv) / .22); color: var(--texte); }
 /* Le pouce tombe du côté de la main qui tient : « Retour », le plus fréquent, y va. */
 body:not(.gaucher) #rangee-retour [data-cmd="retour"] { order: 2; }
 .haptique { position: fixed; left: -200px; top: 0; opacity: 0; pointer-events: none; }
@@ -284,7 +291,7 @@ form.texte input {
   border-radius: var(--rayon); border: 1px solid var(--lisere); background: var(--verre);
   outline: none; font-size: 17px;
 }
-form.texte input:focus { border-color: rgb(var(--tv) / .6); }
+form.texte input:focus { border-color: rgb(var(--tv)); box-shadow: 0 0 0 3px rgb(var(--tv) / .75); }
 form.texte input::placeholder { color: var(--texte-pale); }
 form.texte button {
   min-width: 58px; border: 0; border-radius: var(--rayon);
@@ -297,7 +304,7 @@ form.texte button {
 /* ── Encart « écran d'accueil » ──────────────────────────────────────────── */
 .encart {
   position: relative;
-  padding: 14px 44px 14px 16px; border-radius: var(--rayon);
+  padding: 14px 50px 14px 16px; border-radius: var(--rayon);
   background: linear-gradient(160deg, rgb(var(--tv) / .12), rgb(var(--tv) / .03));
   border: 1px solid rgb(var(--tv) / .25);
   font-size: 14px; line-height: 1.45; color: var(--texte-doux);
@@ -305,9 +312,9 @@ form.texte button {
 .encart strong { color: var(--texte); display: block; margin-bottom: 4px; font-size: 15px; }
 .encart ol { margin: 6px 0 0; padding-left: 20px; }
 .encart li + li { margin-top: 3px; }
-.encart .note { margin: 8px 0 0; font-size: 13px; color: var(--texte-pale); }
+.encart .note { margin: 8px 0 0; font-size: 14px; color: var(--texte-doux); }
 .encart .fermer {
-  position: absolute; top: 6px; right: 6px; width: 36px; height: 36px;
+  position: absolute; top: 3px; right: 3px; width: 44px; height: 44px;
   border: 0; border-radius: 50%; background: transparent; color: var(--texte-doux); font-size: 20px;
 }
 .encart .principal { min-height: 46px; margin-top: 10px; font-size: 16px; }
@@ -373,10 +380,14 @@ details.plateforme ol { margin: 8px 0 0; padding-left: 20px; }
 #securite { overflow-y: auto; }
 
 /* ── Message ─────────────────────────────────────────────────────────────── */
+/* En haut, sur l'en-tête : en bas, le message recouvrait le pavé tactile, sous le
+   pouce, et le clavier du téléphone le cachait pendant la saisie du texte. */
 #message {
-  position: fixed; left: 50%; bottom: max(24px, env(safe-area-inset-bottom));
-  transform: translate(-50%, 20px); opacity: 0; pointer-events: none;
-  max-width: calc(100vw - 32px);
+  position: fixed; left: 50%; top: max(12px, env(safe-area-inset-top));
+  transform: translate(-50%, -20px); opacity: 0; pointer-events: none;
+  /* left: 50 % borne la largeur spontanée à la moitié de l'écran : sans max-content, un
+     message court se coupait en deux lignes. */
+  width: max-content; max-width: calc(100vw - 32px);
   padding: 12px 18px; border-radius: 16px;
   background: rgba(24, 27, 38, .96); border: 1px solid var(--lisere);
   box-shadow: 0 16px 40px -12px rgba(0, 0, 0, .8);
@@ -762,6 +773,7 @@ function afficher(ecran) {
   } else {
     lireEtat();
     montrerEncart();
+    ajusterPave();
   }
 }
 
@@ -1085,7 +1097,29 @@ function appliquerPreferences() {
   }
   $("libelle-disposition").textContent = disposition === "pave" ? "Passer aux boutons" : "Passer au pavé tactile";
   $("libelle-main").textContent = main === "gaucher" ? "Main : gaucher" : "Main : droitier";
+  ajusterPave();
 }
+
+// Retour et Accueil servent à chaque instant : ils doivent tenir dans l'écran sans
+// défiler. L'encart du premier appairage (200 px et plus) les poussait sous le pli à
+// 390×844. Le pavé cède la hauteur qui manque, sans descendre sous 200 px, en deçà
+// desquels un glissement n'a plus la place de se distinguer d'un toucher.
+const PAVE_MINIMUM = 200;
+function ajusterPave() {
+  const pave = $("pave-tactile");
+  if (!pave.getClientRects().length) return;
+  // Le clavier ouvert (texte pour Kodi) rétrécit la fenêtre d'Android : on garde alors
+  // la hauteur du moment plutôt que de faire sauter la page sous le doigt.
+  if (document.activeElement?.matches("input")) return;
+  const naturelle = Math.min(innerHeight * .46, 400);
+  const haut = pave.getBoundingClientRect().top + scrollY;
+  const dessous = $("rangee-retour").getBoundingClientRect().bottom - pave.getBoundingClientRect().bottom;
+  const reste = innerHeight - 12 - haut - dessous;
+  pave.style.height = `${Math.round(Math.max(PAVE_MINIMUM, Math.min(naturelle, reste)))}px`;  // CSSOM : permis par la CSP
+}
+addEventListener("resize", ajusterPave);
+// L'encart change de hauteur en s'ouvrant, se fermant, ou en changeant de texte.
+if ("ResizeObserver" in window) new ResizeObserver(() => ajusterPave()).observe($("encart"));
 appliquerPreferences();
 
 // ── Comme une app ──────────────────────────────────────────────────────────

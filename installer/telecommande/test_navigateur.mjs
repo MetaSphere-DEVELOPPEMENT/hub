@@ -79,7 +79,8 @@ export async function appairer(page, banc) {
 
 let navigateur, banc;
 before(async () => {
-  navigateur = await chromium.launch({ channel: "chrome" });
+  // HUB_NAVIGATEUR=chromium : le Chromium de Playwright, là où Chrome n'est pas installé.
+  navigateur = await chromium.launch(process.env.HUB_NAVIGATEUR === "chromium" ? {} : { channel: "chrome" });
   banc = await lancerBanc();
 });
 after(async () => { await navigateur?.close(); banc?.arreter(); });
@@ -114,12 +115,47 @@ test("manifeste et icônes chargés sans violation CSP, encart Android puis masq
 });
 
 test("encart iPhone : gestes de Safari et avertissement sur le code à retaper", async () => {
-  const page = await ouvrir(navigateur, `http://127.0.0.1:${banc.ports.http}/`, IPHONE);
+  // 390×844 (iPhone 13 à 16) : l'audit du 17/09/2026 y trouvait Retour et Accueil sous le
+  // pli, l'encart ouvert, et « Téléphone relié » posé sur le pavé tactile.
+  const page = await ouvrir(navigateur, `http://127.0.0.1:${banc.ports.http}/`, { ...IPHONE, viewport: { width: 390, height: 844 } });
+  await page.locator("#code").focus();
+  // L'anneau apparaît par une transition de 0,2 s : on attend son état final.
+  const anneauVisible = a => a.contour !== "none" || (a.ombre !== "none" && a.alpha >= .5);
+  let anneau;
+  try {
+    await attendre(async () => anneauVisible(anneau = await page.evaluate(() => {
+      const cs = getComputedStyle(document.getElementById("code"));
+      const alpha = cs.boxShadow.match(/rgba?\(([^)]+)\)/)?.[1].split(",")[3] ?? "1";
+      return { contour: cs.outlineStyle, ombre: cs.boxShadow, alpha: parseFloat(alpha) };
+    })), 1500);
+  } catch { assert.fail(`focus du code invisible : ${JSON.stringify(anneau)}`); }
   await appairer(page, banc);
   await page.locator("#encart-ios").waitFor({ state: "visible" });
   const texte = await page.locator("#encart-ios").innerText();
   assert.match(texte, /Sur l'écran d'accueil/);
   assert.match(texte, /retapez un code/);
+
+  const g = await page.evaluate(() => {
+    const r = s => document.querySelector(s).getBoundingClientRect();
+    const m = document.getElementById("message");
+    return {
+      hauteur: innerHeight, retour: r('[data-cmd="retour"]').bottom, accueil: r('[data-cmd="accueil"]').bottom,
+      pave: r("#pave-tactile"), message: m.classList.contains("visible") ? r("#message") : null,
+      cibles: [...document.querySelectorAll('[data-action="disposition"], [data-action="encart-fermer"]')]
+        .map(e => { const b = e.getBoundingClientRect(); return [e.dataset.action, Math.round(b.width), Math.round(b.height)]; }),
+    };
+  });
+  assert.ok(g.retour <= g.hauteur && g.accueil <= g.hauteur, `Retour/Accueil sous le pli : ${g.retour} > ${g.hauteur}`);
+  assert.ok(g.pave.height >= 200, `pavé écrasé : ${g.pave.height} px`);
+  assert.ok(g.message, "« Téléphone relié » attendu à l'écran");
+  assert.ok(g.message.bottom <= g.pave.top || g.message.top >= g.pave.bottom, "le message recouvre le pavé");
+  for (const [nom, l, h] of g.cibles) assert.ok(l >= 44 && h >= 44, `${nom} : ${l}×${h} < 44 px`);
+
+  // Au clavier (Tab), le bouton atteint porte un contour visible.
+  await page.focus('[data-cmd="retour"]');
+  await page.keyboard.press("Tab");
+  const contour = await page.evaluate(() => { const cs = getComputedStyle(document.activeElement); return [cs.outlineStyle, parseFloat(cs.outlineWidth)]; });
+  assert.ok(contour[0] !== "none" && contour[1] >= 2, `contour de focus : ${contour}`);
   assert.deepEqual(page.erreurs, []);
   await page.context().close();
 });
