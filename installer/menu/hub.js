@@ -776,6 +776,22 @@ function definirFocus(cible, silencieux = false) {
 }
 
 function defiler(cible) {
+  // Le sommaire ne tient pas toujours (taille XL : Allumage, Raccourcis et À propos passaient
+  // sous le bord de la feuille, focus compris). Il défile d'une entrée d'avance, pour qu'on
+  // voie qu'il en reste.
+  const sommaire = cible.closest(".sommaire");
+  if (sommaire) {
+    const r = cible.getBoundingClientRect(), s = sommaire.getBoundingClientRect();
+    const avance = r.height;
+    const entrees = [...sommaire.querySelectorAll(".entree")];
+    let haut = sommaire.scrollTop;
+    if (cible === entrees[0]) haut = 0;
+    else if (cible === entrees.at(-1)) haut = sommaire.scrollHeight - sommaire.clientHeight;
+    else if (r.top < s.top + avance) haut -= s.top + avance - r.top;
+    else if (r.bottom > s.bottom - avance) haut += r.bottom - (s.bottom - avance);
+    if (haut !== sommaire.scrollTop) sommaire.scrollTo({ top: haut, behavior: profil().animations === "reduites" ? "auto" : "smooth" });
+    return;
+  }
   const zone = cible.closest(".contenu-defile");
   if (!zone) return;
   const cadre = zone.parentElement;

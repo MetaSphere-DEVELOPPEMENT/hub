@@ -568,6 +568,33 @@ test("réglages : sortir du contenu ne change jamais de section", async () => {
   assert.equal(await page.textContent("#contenu-reglages h3"), "Streaming et jeux");
 });
 
+// Audit du 17/09/2026 : en taille XL, les dernières entrées du sommaire étaient rognées par
+// la feuille, et leur focus invisible.
+test("réglages : en taille XL, le sommaire défile jusqu'à la dernière entrée", async () => {
+  await ouvrir({ retour: true, reglages: { profils: [{ id: "p", nom: "Samuel", animations: "reduites" }], profilActif: "p", systeme: { echelle: 1.2 } } });
+  await page.setViewportSize({ width: 1280, height: 720 });
+  // Sans la police Ubuntu Sans de la TV, les lignes sont plus basses : on garantit que le
+  // sommaire déborde, c'est son défilement qu'on éprouve.
+  await page.addStyleTag({ content: "#sommaire .entree { padding-block: .6rem; }" });
+  await touche("r");
+  assert.ok(await page.evaluate(() => { const s = document.querySelector("#sommaire"); return s.scrollHeight > s.clientHeight + 20; }), "le sommaire déborde");
+  const entrees = await page.evaluate(() => [...document.querySelectorAll("#sommaire .entree")].map(e => e.dataset.cle));
+  for (let i = 1; i < entrees.length; i++) await touche("ArrowDown");
+  assert.equal(await focus(), entrees.at(-1));
+  await page.waitForTimeout(100);
+  const vue = await page.evaluate(() => {
+    const e = document.querySelector("#sommaire .entree.focus").getBoundingClientRect();
+    const s = document.querySelector("#sommaire").getBoundingClientRect();
+    const f = document.querySelector("#reglages .feuille-corps").getBoundingClientRect();
+    return e.top >= Math.max(s.top, f.top) - 1 && e.bottom <= Math.min(s.bottom, f.bottom, innerHeight) + 1;
+  });
+  assert.ok(vue, "la dernière entrée sélectionnée est entièrement visible");
+  await touche("ArrowUp", "ArrowUp");
+  for (let i = 2; i < entrees.length; i++) await touche("ArrowUp");
+  assert.equal(await focus(), entrees[0]);
+  assert.ok(await page.evaluate(() => document.querySelector("#sommaire").scrollTop === 0), "retour en haut du sommaire");
+});
+
 test("mise à jour : un état « terminee » ancien ne relance pas le menu", async () => {
   await ouvrir({ retour: true });
   await page.evaluate(() => window.hub.recevoir({ type: "maj", etat: { etape: "terminee", version: "abc" } }));
