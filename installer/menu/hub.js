@@ -2497,9 +2497,22 @@ const ETAPES_MAJ = ["verification", "telechargement", "tests", "installation", "
 // signature. Les phrases qui l'entourent disent déjà « version » (i18n.js).
 function nomVersion(numero, commit) { return numero || commit || ""; }
 function majActive(e = maj.etat) { return !!e && !["terminee", "echec", "a-jour"].includes(e.etape); }
+// L'état « terminée » d'une installation reste dans /run jusqu'au redémarrage du HUB.
+// Dès qu'une version PLUS RÉCENTE est trouvée, il parle du passé : il cachait le bouton
+// Installer et la pastille, et la carte répétait « Mise à jour installée » (constaté sur
+// le HUB le 17/09/2026, resté sur 2c75d62 alors que la suivante était publiée).
+function etatDepasse(e = maj.etat, v = maj.verification) {
+  if (e?.etape !== "terminee" || !v?.disponible || v.erreur) {
+    return false;
+  }
+  const installee = String(e.version || "");
+  const distant = String(v.distant || "");
+  return !installee || !distant || !(distant.startsWith(installee) || installee.startsWith(distant));
+}
 function majDisponible() {
   const v = maj.verification;
-  return !!(v?.disponible && !v.erreur && v.verifiable !== false && !majActive() && maj.etat?.etape !== "terminee");
+  return !!(v?.disponible && !v.erreur && v.verifiable !== false && !majActive() &&
+            (maj.etat?.etape !== "terminee" || etatDepasse()));
 }
 function afficherPastilleMaj() {
   const dispo = majDisponible();
@@ -2535,7 +2548,7 @@ function contenuMiseAJour() {
   const actif = majActive(e);
   if (actif) {
     texte = t(`maj.etape.${e.etape}`, { v: nomVersion(e.numero, e.version) });
-  } else if (e?.etape === "terminee") {
+  } else if (e?.etape === "terminee" && !etatDepasse(e, v)) {
     texte = t("maj.terminee", { v: nomVersion(e.numero, e.version) });
   } else if (e?.etape === "echec") {
     texte = texteEchecMaj(e);
@@ -2557,7 +2570,7 @@ function contenuMiseAJour() {
   }
   if (!actif && !maj.enCours) {
     boutons.push(el("button", { class: "option", "data-nav": true, "data-cle": "maj-verifier", onclick: () => { maj.enCours = true; maj.etat = null; envoyer({ type: "maj-verifier" }); rendreSection(); } }, t("maj.rechercher")));
-    if (v?.disponible && v.verifiable !== false && e?.etape !== "terminee") {
+    if (v?.disponible && v.verifiable !== false && (e?.etape !== "terminee" || etatDepasse(e, v))) {
       boutons.push(el("button", { class: "option choisie", "data-nav": true, "data-cle": "maj-appliquer", onclick: () => { maj.etat = { etape: "verification" }; maj.suivie = true; envoyer({ type: "maj-appliquer" }); rendreSection(); } }, t("maj.installer")));
     }
   }
