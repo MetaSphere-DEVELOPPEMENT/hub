@@ -6,6 +6,7 @@
 import importlib.util
 import json
 import socket
+import subprocess
 import tempfile
 import time
 import unittest
@@ -166,9 +167,35 @@ class Telecommande(AvecDossier):
         hub_menu.ecrire_atomique(self.c["telecommande"], json.dumps(
             {"url": "http://192.168.1.50:8790/", "code": "123456", "expire": 5, "telephones": 1, "appairageLe": None, "secret": "x"}))
         self.assertEqual(hub_menu.etat_telecommande(self.c),
-                         {"url": "http://192.168.1.50:8790/", "code": "123456", "expire": 5, "telephones": 1, "appairageLe": None,
+                         {"url": "http://192.168.1.50:8790/", "code": "123456", "expire": 5, "telephones": 1,
+                          "listeTelephones": None, "appairageLe": None,
                           "https": None, "appairageOuvert": None, "appairageJusque": None, "empreinteRacineCourte": None,
                           "empreinteRacine": None})
+
+    def test_liste_des_telephones_relayee_ou_ecartee(self):
+        base = {"url": "http://192.168.1.50:8790/", "code": "123456"}
+        liste = [{"id": "2ab063", "nom": "Pixel 8", "cree": 1789400000000, "vu": 1789500000000}]
+        hub_menu.ecrire_atomique(self.c["telecommande"], json.dumps({**base, "listeTelephones": liste}))
+        self.assertEqual(hub_menu.etat_telecommande(self.c)["listeTelephones"], liste)
+        # Ce qui n'a pas la forme attendue n'atteint pas la page : elle en fait des boutons.
+        for mauvaise in ("2ab063", 42, [{"nom": "sans id"}], [["2ab063"]], [None]):
+            hub_menu.ecrire_atomique(self.c["telecommande"], json.dumps({**base, "listeTelephones": mauvaise}))
+            self.assertIsNone(hub_menu.etat_telecommande(self.c)["listeTelephones"], mauvaise)
+
+    def test_retirer_un_telephone_passe_par_la_commande_du_service(self):
+        appels = []
+
+        def executer(commande, **_kw):
+            appels.append(commande)
+            return subprocess.CompletedProcess(commande, 0)
+
+        self.assertTrue(hub_menu.retirer_telephone("2ab063", executer=executer))
+        self.assertEqual(appels, [["hub-telecommande", "--revoquer", "2ab063"]])
+        # Rien du réseau ne devient argument : un identifiant qui n'a pas la forme
+        # attendue n'appelle rien du tout.
+        for mauvais in (None, 42, "", "2ab063; rm -rf /", "../../etc", "x" * 40):
+            self.assertFalse(hub_menu.retirer_telephone(mauvais, executer=executer), mauvais)
+        self.assertEqual(len(appels), 1)
 
     def test_fenetre_d_appairage_et_empreinte_courte(self):
         base = {"url": "http://192.168.1.50:8790/", "code": "123456"}

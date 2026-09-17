@@ -108,6 +108,11 @@ la télécommande n'est ouverte ni à un invité, ni à une page web étrangère
   `localStorage`. Le HUB n'en garde que l'**empreinte SHA-256**, dans
   `~/.config/hub/telecommande-jetons.json` (0600). Envoyé en `Authorization: Bearer`,
   jamais en cookie : pas de CSRF possible.
+- **Identifiant d'appareil.** 128 bits tirés par le HUB au premier appairage et rendus
+  au téléphone (`appareil`), qui les range à côté de son jeton. **Il n'ouvre rien :**
+  un appairage ne réussit toujours que par le code de la TV (fenêtre ouverte) ou par un
+  ticket de transfert. Il ne sert qu'après coup, à savoir *quelle* entrée renouveler —
+  voir « Un téléphone, une entrée ».
 - **Liste blanche.** `tv gaming bureau eteindre reglages aide meteo profils retour
   gauche droite haut bas ok theme:clair theme:sombre` (les noms du socket du menu, un
   test vérifie qu'ils sont identiques à `hub-menu.py`) plus `accueil volume:+
@@ -191,7 +196,37 @@ Créée au premier démarrage dans `~/.config/hub/telecommande-tls/` (dossier 07
   `/api/certificat` ne la donne plus : venue par le même canal http que le certificat,
   elle aurait été remplacée avec lui (vérification circulaire, audit du 17/09/2026).
 
-## Révoquer un téléphone
+## Un téléphone, une entrée
+
+Avant le 18/09/2026, chaque appairage **ajoutait** une ligne : un téléphone relié trois
+fois comptait trois fois, et la liste du HUB se remplissait de doublons du même
+appareil. Désormais l'entrée est **renouvelée sur place** — même identifiant, même date
+d'appairage, secret neuf — dès que le HUB sait que c'est le même téléphone. Il ne le
+sait que de trois façons, toutes prouvées :
+
+| Preuve | Ce qui se passe |
+|---|---|
+| le **jeton précédent** est présenté avec le nouvel appairage (`Authorization: Bearer`) | son entrée est renouvelée |
+| un **ticket de transfert** http → https (délivré à un jeton valide) | son entrée garde ses jetons et reçoit celui de la nouvelle origine |
+| le **code de la TV** est juste **et** le téléphone renvoie son `appareil` | son entrée est renouvelée, l'ancien secret cesse de valoir |
+
+Ce qui ne prouve rien, et ne remplace donc jamais rien : le nom du téléphone, son
+adresse IP, son agent utilisateur. Et l'identifiant d'appareil **seul** ne suffit pas :
+sans code juste (donc sans être dans la pièce, écran d'appairage affiché), la requête
+est refusée en 403 avant même qu'on le regarde — un appareil non appairé ne peut pas
+prendre la place d'un autre. Si deux preuves se contredisent (un téléphone appairé
+présente son jeton *et* l'identifiant d'un autre), **le jeton gagne** : on ne renouvelle
+que sa propre entrée.
+
+**Ménage.** Un téléphone jamais revu depuis **180 jours** est oublié — au démarrage du
+service et à chaque appairage. Et la liste est plafonnée à **20** : au-delà, le moins
+récemment vu part, jamais celui qu'on vient d'appairer.
+
+## Retirer un téléphone
+
+Sur la TV : **Réglages → Télécommande** liste les téléphones reliés (nom, dernier
+usage) avec un bouton **Retirer** par ligne — deux appuis, le second confirme. Le menu
+appelle `hub-telecommande --revoquer <id>`.
 
 ```bash
 hub-telecommande --appairage         # sans le menu (SSH) : ouvre l'appairage 5 min, affiche le code
@@ -201,8 +236,29 @@ hub-telecommande --revoquer-tout     # tous
 ```
 
 Effet immédiat, sans redémarrer le service : il relit le fichier dès qu'il change. Le
-téléphone révoqué revient tout seul à l'écran d'appairage. Depuis le téléphone,
+téléphone révoqué revient tout seul à l'écran d'appairage (au deuxième refus, voir
+« Rester relié pendant un mode » : au plus six secondes). Depuis le téléphone,
 « ⋯ → Oublier ce téléphone » révoque aussi son propre jeton côté HUB.
+
+## Rester relié pendant un mode
+
+Un mode n'est pas une fenêtre de plus. **Bureau** ferme la session kiosque
+(`hub-vers-bureau`) et GDM rouvre aussitôt la session Ubuntu ; le service, s'il suivait
+la session, s'arrêtait à ce moment-là et le téléphone perdait la main en entrant dans le
+mode. Trois choses l'en empêchent :
+
+- l'unité **ne porte plus `PartOf=graphical-session.target`** : elle traverse le
+  changement de session, même adresse, même port, même jeton ;
+- `Restart=always` : un service tombé pendant un film revient seul (2 s) ;
+- la page **se reconnecte toute seule**, sans rien redemander : pastille « Reconnexion… »
+  et relances espacées (1, 2, 4, 8 puis 15 s), plus un essai immédiat au retour sur la
+  page, au réveil de l'écran et quand le wifi revient. Elle ne se croit déliée qu'après
+  **deux 401 d'affilée** — un seul refus, c'est un service qui redémarre, et effacer le
+  jeton pour si peu était justement ce qui faisait retaper un code et compter un
+  téléphone de plus.
+
+Ce qui reste vrai : pendant les modes **Jeux** et **Web**, rien ne se pilote (ni menu ni
+Kodi) — la page l'affiche (« En veille », « Rien à piloter ») mais reste reliée.
 
 ## Où vont les commandes
 
@@ -224,7 +280,7 @@ que `hub-voix`). `Input.SendText` n'a d'effet que si un clavier est ouvert dans 
 | Requête | Jeton | Réponse |
 |---|---|---|
 | `GET /` | non | la page |
-| `POST /api/appairer` `{"code":"123456","nom":"Pixel 8"}` | non | 200 `{"jeton","id","nom"}` · 403 `{"erreur":"code"}` code faux · 403 `{"erreur":"appairage-ferme"}` écran d'appairage fermé · 429 `{"attente"}` trop d'essais |
+| `POST /api/appairer` `{"code":"123456","nom":"Pixel 8","appareil":"…32 hex…"}` | facultatif | 200 `{"jeton","id","nom","appareil"}` · 403 `{"erreur":"code"}` code faux · 403 `{"erreur":"appairage-ferme"}` écran d'appairage fermé · 429 `{"attente"}` trop d'essais. `appareil` est facultatif, et ignoré s'il est mal formé ; le jeton présenté en `Authorization`, s'il est encore valide, prime sur lui (voir « Un téléphone, une entrée ») |
 | `POST /api/commande` `{"nom":"gauche"}` ou `{"nom":"texte","texte":"Dune"}` | oui | 200 `{"ok","cible","raison"?,"volume"?}` · 400 hors liste · 401 |
 | `GET /api/etat` | oui | `{"ok":true,"contexte":"menu"\|"kodi"\|"bureau"\|null}` |
 | `POST /api/oublier` `{}` | oui | révoque le jeton présenté |
@@ -234,7 +290,7 @@ que `hub-voix`). `Input.SendText` n'a d'effet que si un clavier est ouvert dans 
 | `GET /api/certificat` | non | `{"disponible","securise","https":"https://nom:8791/"}` (pas d'empreinte : elle ne fait foi que sur la TV) |
 | `GET /sonde` (https) | non | 204 vide, lisible en `no-cors` : prouve que le téléphone fait confiance |
 | `POST /api/transfert` `{}` | oui | `{"url":"https://nom:8791/#transfert=…"}` |
-| `POST /api/appairer` `{"transfert":"…","nom":…}` (https) | non | comme avec le code · 403 ticket faux, usé, expiré ou reçu en http |
+| `POST /api/appairer` `{"transfert":"…","nom":…}` (https) | non | comme avec le code, mais le téléphone **garde** son jeton http : une seule entrée pour les deux origines · 403 ticket faux, usé, expiré ou reçu en http |
 | `POST /api/dictee` (WAV 16 kHz mono 16 bits, `Content-Type: audio/wav`) | oui | 200 `{"ok","cible","commande","texte","raison"?}` · 400 format ou < 0,25 s · 413 > 10 s · 415 · 503 `voix-indisponible` |
 
 ## Photo de profil
@@ -256,7 +312,10 @@ d'adresse :
 
 ```json
 {"url": "http://192.168.1.50:8790/", "code": "123456", "expire": 1789308639458,
- "telephones": 1, "appairageLe": 1789308300000,
+ "telephones": 1,
+ "listeTelephones": [{"id": "2ab063", "nom": "Pixel 8",
+                      "cree": 1789200000000, "vu": 1789308200000}],
+ "appairageLe": 1789308300000,
  "appairageOuvert": true, "appairageJusque": 1789308600000,
  "https": "https://192.168.1.50:8791/",
  "empreinteRacine": "3A:9F:…:C2",
@@ -264,7 +323,9 @@ d'adresse :
 ```
 
 `expire`, `appairageLe` et `appairageJusque` en millisecondes epoch ; `telephones` =
-nombre de téléphones appairés ; `appairageLe` change quand un téléphone vient d'être
+nombre de téléphones appairés ; `listeTelephones` = les mêmes, le plus récemment vu
+d'abord, pour la liste de Réglages → Télécommande (**rien de secret n'y passe** : ni
+jeton, ni empreinte, ni identifiant d'appareil) ; `appairageLe` change quand un téléphone vient d'être
 relié (pour afficher « Téléphone relié » sur la TV). `appairageOuvert` : le code est-il
 accepté en ce moment (publié au plus 5 s après l'ouverture ou la fermeture) ;
 `appairageJusque` : fin de la fenêtre, `null` si fermée. Le menu doit relire le fichier
@@ -431,6 +492,29 @@ Node 22) :
   remplacé par le fichier « Télé. », page en https vérifié, vrai Vosk → datagrammes
   `voix:entendu:télé`, `tv`, `voix:repos` au menu** (sans Vosk, un faux reconnaisseur
   vérifie la capture et la durée envoyée).
+
+Le 18 septembre 2026 (Mac de développement, Python 3.9, Chromium de Playwright) :
+
+- `python3 installer/telecommande/test_telecommande.py` : 103 tests. Nouveaux : fichier
+  de jetons d'avant les appareils encore valable, ré-appairage par l'appareil et par le
+  jeton précédent sans doublon, transfert http → https en une seule entrée, appareil
+  inconnu ou mal formé qui n'emprunte l'entrée de personne, ménage des entrées jamais
+  revues (seul et à l'appairage), plafond de la liste, liste publiée sans rien de secret,
+  et — côté HTTP réel — **aucun appareil ne remplace l'entrée d'un autre sans code juste**
+  (code faux et écran d'appairage fermé), un téléphone appairé ne renouvelant que la
+  sienne. Les 6 tests `ServiceHTTPS` échouent **sur ce Mac seulement** : la LibreSSL
+  d'Apple refuse les contraintes de nom du certificat
+  (`unsupported name constraint type`). Ils passent sur le HUB (OpenSSL).
+- `node --test installer/telecommande/test_navigateur.mjs` : 3 tests de plus, tous
+  passés — coupure réseau (pastille « Reconnexion… », retour tout seul, aucun code
+  redemandé), un 401 isolé qui ne délie pas mais deux d'affilée qui délient, et
+  ré-appairage du même téléphone sans seconde entrée (même `id`, même date d'appairage).
+  Les 4 tests HTTPS et dictée échouent **sur ce Mac seulement** : ni Google Chrome
+  (`channel: "chrome"`) ni `certutil` (outils NSS) n'y sont installés.
+- `cd tests/menu && npm test` : 156 tests, 155 passés, 1 sauté — dont la liste des
+  téléphones dans Réglages → Télécommande (dernier usage en toutes lettres, un appui
+  qui arme « Confirmer », le second qui envoie `telecommande-retirer`).
+- **Rien n'a été essayé sur un vrai téléphone ni sur le HUB.**
 
 Le 17 septembre 2026, sur un Mac (Python 3.9.6 lié à LibreSSL 2.8.3, OpenSSL 3.6.4 de
 Homebrew en ligne de commande) — correctifs de l'audit de sécurité du même jour :

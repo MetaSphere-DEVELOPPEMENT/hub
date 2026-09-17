@@ -757,6 +757,10 @@ CHAMPS_TELECOMMANDE = {
     "code": lambda v: isinstance(v, str),
     "expire": lambda v: True,
     "telephones": lambda v: True,
+    # Les téléphones reliés, le plus récemment vu d'abord : nom, date d'appairage,
+    # dernier usage. Rien de secret n'y passe ; l'identifiant sert à en retirer un.
+    "listeTelephones": lambda v: isinstance(v, list) and all(
+        isinstance(t, dict) and isinstance(t.get("id"), str) for t in v),
     "appairageLe": lambda v: True,
     "https": lambda v: isinstance(v, str),
     # Le code n'est utilisable que fenêtre ouverte (voir ouvrir_appairage) ; sinon la
@@ -813,6 +817,24 @@ def fermer_appairage(c):
         Path(c["telecommande-appairage"]).unlink(missing_ok=True)
     except OSError:
         pass
+
+
+def retirer_telephone(ident, executer=subprocess.run):
+    """Retirer un téléphone depuis Réglages → Télécommande.
+
+    On passe par `hub-telecommande --revoquer`, la commande qui existe déjà, plutôt
+    que d'écrire nous-mêmes le fichier des jetons : elle prend le même verrou que le
+    service, qui relit le fichier dès qu'il change — le téléphone est délié tout de
+    suite, sans redémarrage. L'identifiant vient de la liste publiée par le service ;
+    on le refuse s'il n'a pas la forme attendue, rien du réseau ne devenant argument."""
+    if not isinstance(ident, str) or not re.fullmatch(r"[0-9a-f]{4,32}", ident):
+        return False
+    try:
+        r = executer(["hub-telecommande", "--revoquer", ident], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError) as erreur:
+        print(f"hub-menu : téléphone non retiré ({erreur})", file=sys.stderr)
+        return False
+    return getattr(r, "returncode", 1) == 0
 
 
 def suivre_appairage(c, affiche, touche_le, maintenant=None):
@@ -2025,6 +2047,15 @@ def lancer(arguments=None):
                 if self.appairage_affiche:
                     # Le service publie l'ouverture en quelques secondes : on relit sans attendre le tour suivant.
                     GLib.timeout_add_seconds(1, lambda: self.surveiller_telecommande() and False)
+            elif genre == "telecommande-retirer":
+                ident = message.get("id")
+
+                def retirer():
+                    retirer_telephone(ident)
+                    # Le service a réécrit le fichier : la liste de la TV suit aussitôt.
+                    GLib.idle_add(lambda: self.surveiller_telecommande() and False)
+                    return None
+                self.en_fond(retirer)
             elif genre == "recopie-code":
                 nouveau = message.get("nouveau") is True
                 self.en_fond(lambda: {"type": "recopie-code", "code": code_recopie(nouveau), "permise": recopie_permise(), "nouveau": nouveau})

@@ -222,7 +222,8 @@ class FenetreAppairage(AvecDossier):
 class Jetons(AvecDossier):
     def test_creation_fichier_0600_sans_le_jeton_en_clair(self):
         j = T.Jetons(self.chemins["jetons"], horloge=self.horloge)
-        ident, jeton = j.creer("Pixel")
+        ident, jeton, appareil = j.creer("Pixel")
+        self.assertRegex(appareil, r"^[0-9a-f]{32}$")
         self.assertGreaterEqual(len(jeton), 40)
         mode = stat.S_IMODE(os.stat(self.chemins["jetons"]).st_mode)
         self.assertEqual(mode, 0o600)
@@ -234,8 +235,8 @@ class Jetons(AvecDossier):
 
     def test_revocation_vue_par_le_service_en_cours(self):
         service = T.Jetons(self.chemins["jetons"], horloge=self.horloge)
-        ident, jeton = service.creer("Pixel")
-        _autre, jeton2 = service.creer("iPhone")
+        ident, jeton, _appareil = service.creer("Pixel")
+        _autre, jeton2, _a2 = service.creer("iPhone")
         # La révocation passe par une autre instance (la ligne de commande), comme en vrai.
         ligne_de_commande = T.Jetons(self.chemins["jetons"], horloge=self.horloge)
         self.assertTrue(ligne_de_commande.revoquer(ident))
@@ -250,6 +251,92 @@ class Jetons(AvecDossier):
         j = T.Jetons(self.chemins["jetons"], horloge=self.horloge)
         self.assertIsNone(j.valide("x"))
         self.assertEqual(j.lister(), [])
+
+    def test_fichier_d_avant_les_appareils_reste_valable(self):
+        """Une entrée écrite par la version précédente (« empreinte » seule) ouvre
+        encore : mettre à jour le HUB ne doit pas délier les téléphones."""
+        self.chemins["jetons"].parent.mkdir(parents=True)
+        ancien = "u" * 43
+        self.chemins["jetons"].write_text(json.dumps({"telephones": [
+            {"id": "2ab063", "nom": "Pixel", "empreinte": T._empreinte(ancien),
+             "cree": 1_700_000_000_000, "vu": 1_700_000_000_000}]}))
+        j = T.Jetons(self.chemins["jetons"], horloge=self.horloge)
+        self.assertEqual(j.valide(ancien), "2ab063")
+        self.assertEqual([t["nom"] for t in j.lister()], ["Pixel"])
+
+    def test_meme_appareil_renouvele_sur_place_sans_doublon(self):
+        j = T.Jetons(self.chemins["jetons"], horloge=self.horloge)
+        ident, jeton, appareil = j.creer("Pixel")
+        self.horloge.t += 86400
+        # Le téléphone a perdu son jeton (stockage effacé) mais garde son appareil :
+        # il retape le code de la TV et retrouve SON entrée.
+        ident2, jeton2, appareil2 = j.creer("Pixel", appareil=appareil)
+        self.assertEqual((ident2, appareil2), (ident, appareil))
+        self.assertEqual(len(j.lister()), 1, "le même téléphone ne compte qu'une fois")
+        self.assertIsNone(j.valide(jeton), "l'ancien secret ne vaut plus rien")
+        self.assertEqual(j.valide(jeton2), ident)
+        self.assertEqual(j.lister()[0]["cree"], int((self.horloge.t - 86400) * 1000),
+                         "la date d'appairage d'origine est gardée")
+
+    def test_jeton_precedent_renouvelle_la_meme_entree(self):
+        j = T.Jetons(self.chemins["jetons"], horloge=self.horloge)
+        ident, _jeton, _appareil = j.creer("Pixel")
+        ident2, jeton2, _a = j.creer("Pixel renommé", remplace=ident)
+        self.assertEqual(ident2, ident)
+        self.assertEqual(len(j.lister()), 1)
+        self.assertEqual(j.lister()[0]["nom"], "Pixel renommé")
+        self.assertEqual(j.valide(jeton2), ident)
+
+    def test_transfert_garde_les_deux_origines_dans_une_seule_entree(self):
+        j = T.Jetons(self.chemins["jetons"], horloge=self.horloge)
+        ident, jeton_http, _a = j.creer("Pixel")
+        _i, jeton_https, _a2 = j.creer("Pixel", remplace=ident, ajouter=True)
+        self.assertEqual(len(j.lister()), 1)
+        self.assertEqual(j.valide(jeton_http), ident, "le raccourci http déjà posé marche encore")
+        self.assertEqual(j.valide(jeton_https), ident)
+
+    def test_appareil_inconnu_ou_mal_forme_n_emprunte_l_entree_de_personne(self):
+        j = T.Jetons(self.chemins["jetons"], horloge=self.horloge)
+        ident, jeton, _appareil = j.creer("Pixel")
+        # Un identifiant qui n'a pas la forme attendue n'est même pas lu.
+        for mauvais in (None, "", 42, "PIXEL", "z" * 32, "ab" * 8):
+            self.assertIsNone(T.appareil_propre(mauvais), mauvais)
+        # Et un appareil inconnu ouvre une entrée à lui, sans toucher à l'autre.
+        autre, jeton_autre, _a = j.creer("Invité", appareil="f" * 32)
+        self.assertNotEqual(autre, ident)
+        self.assertEqual(len(j.lister()), 2)
+        self.assertEqual(j.valide(jeton), ident, "l'entrée du premier téléphone est intacte")
+        self.assertEqual(j.valide(jeton_autre), autre)
+
+    def test_menage_des_entrees_jamais_revues(self):
+        j = T.Jetons(self.chemins["jetons"], horloge=self.horloge)
+        vieux, jeton_vieux, _a = j.creer("Téléphone d'un invité")
+        self.horloge.t += T.OUBLI_TELEPHONE_S + 86400
+        recent, jeton_recent, _a2 = j.creer("Pixel")
+        self.assertEqual([t["id"] for t in j.lister()], [recent],
+                         "l'appairage fait le ménage des téléphones jamais revus")
+        self.assertIsNone(j.valide(jeton_vieux))
+        self.assertEqual(j.valide(jeton_recent), recent)
+        self.assertEqual(j.menage(), 0, "rien à oublier une seconde fois")
+        self.assertNotEqual(vieux, recent)
+
+    def test_menage_seul_sans_appairage(self):
+        j = T.Jetons(self.chemins["jetons"], horloge=self.horloge)
+        j.creer("Pixel")
+        self.horloge.t += T.OUBLI_TELEPHONE_S + 1
+        self.assertEqual(j.menage(), 1)
+        self.assertEqual(j.lister(), [])
+
+    def test_plafond_le_moins_recemment_vu_part(self):
+        j = T.Jetons(self.chemins["jetons"], horloge=self.horloge)
+        idents = []
+        for i in range(T.TELEPHONES_MAX + 3):
+            self.horloge.t += 60
+            idents.append(j.creer(f"Téléphone {i}")[0])
+        restants = [t["id"] for t in j.lister()]
+        self.assertEqual(len(restants), T.TELEPHONES_MAX)
+        self.assertNotIn(idents[0], restants, "le plus ancien vu s'en va")
+        self.assertIn(idents[-1], restants, "celui qu'on vient d'appairer reste")
 
 
 # ── Serveur HTTP réel sur la boucle locale ──────────────────────────────────
@@ -533,6 +620,91 @@ class AppairageHTTP(AvecServeur):
         self.assertEqual(etat2["telephones"], 1)
         self.assertEqual((etat2["https"], etat2["empreinteRacine"], etat2["empreinteRacineCourte"]),
                          (None, None, None), "sans HTTPS, pas d'empreinte")
+
+    def test_liste_publiee_sans_rien_de_secret(self):
+        self.appairer()
+        etat = json.loads(self.chemins["etat"].read_text())
+        self.assertEqual(len(etat["listeTelephones"]), 1)
+        entree = etat["listeTelephones"][0]
+        self.assertEqual(sorted(entree), ["cree", "id", "nom", "vu"])
+        self.assertEqual(entree["nom"], "Test")
+        # Ni jeton, ni empreinte, ni identifiant d'appareil : la TV affiche cette liste.
+        self.assertNotIn("appareil", json.dumps(etat))
+        self.assertNotIn("empreinte", json.dumps(etat["listeTelephones"]))
+
+
+class ReAppairage(AvecServeur):
+    """Un même téléphone relié deux fois ne doit compter qu'une fois."""
+
+    def appairer_avec(self, corps, jeton=None):
+        self.service.fenetre.ouvrir()
+        # L'horloge d'essai peut avoir sauté : on lit le code d'après, pas celui d'avant.
+        self.service.appairage.verifier_expiration()
+        statut, _h, rep = self.requete("POST", "/api/appairer",
+                                       {"code": self.service.appairage.code, **corps}, jeton=jeton)
+        return statut, rep
+
+    def test_reappairage_avec_l_appareil_ne_cree_pas_de_doublon(self):
+        statut, rep = self.appairer_avec({"nom": "Pixel"})
+        self.assertEqual(statut, 200)
+        self.assertRegex(rep["appareil"], r"^[0-9a-f]{32}$")
+        # Le téléphone a perdu son jeton (icône d'écran d'accueil, stockage nettoyé) :
+        # il retape le code et renvoie son appareil.
+        statut2, rep2 = self.appairer_avec({"nom": "Pixel", "appareil": rep["appareil"]})
+        self.assertEqual(statut2, 200)
+        self.assertEqual(rep2["id"], rep["id"])
+        self.assertEqual(len(self.service.jetons.lister()), 1, "un téléphone, une entrée")
+        self.assertEqual(self.requete("GET", "/api/etat", jeton=rep["jeton"])[0], 401,
+                         "l'ancien secret est bien renouvelé")
+        self.assertEqual(self.requete("GET", "/api/etat", jeton=rep2["jeton"])[0], 200)
+
+    def test_reappairage_avec_le_jeton_precedent_ne_cree_pas_de_doublon(self):
+        _s, rep = self.appairer_avec({"nom": "Pixel"})
+        _s2, rep2 = self.appairer_avec({"nom": "Pixel"}, jeton=rep["jeton"])
+        self.assertEqual(rep2["id"], rep["id"])
+        self.assertEqual(len(self.service.jetons.lister()), 1)
+
+    def test_sans_code_juste_aucun_appareil_ne_remplace_l_entree_d_un_autre(self):
+        _s, victime = self.appairer_avec({"nom": "Pixel"})
+        avant = self.service.jetons.lister()
+        faux = "000000" if self.service.appairage.code != "000000" else "111111"
+        # Code faux : l'appareil de la victime ne sert à rien.
+        statut, rep = self.requete("POST", "/api/appairer",
+                                   {"code": faux, "nom": "Voleur", "appareil": victime["appareil"]})[0::2]
+        self.assertEqual((statut, rep["erreur"]), (403, "code"))
+        # Écran d'appairage fermé : rien n'est même comparé.
+        self.service.fenetre.fermer()
+        statut2, rep2 = self.requete("POST", "/api/appairer",
+                                     {"code": self.service.appairage.code, "nom": "Voleur",
+                                      "appareil": victime["appareil"]})[0::2]
+        self.assertEqual((statut2, rep2["erreur"]), (403, "appairage-ferme"))
+        self.assertEqual(self.service.jetons.lister(), avant, "la liste n'a pas bougé")
+        self.assertEqual(self.requete("GET", "/api/etat", jeton=victime["jeton"])[0], 200,
+                         "le téléphone visé garde sa télécommande")
+
+    def test_un_telephone_appairé_ne_renouvelle_que_sa_propre_entree(self):
+        _s, victime = self.appairer_avec({"nom": "Pixel"})
+        _s2, autre = self.appairer_avec({"nom": "iPhone"})
+        # L'autre téléphone présente SON jeton et l'appareil de la victime : c'est le
+        # jeton qui fait foi, la victime n'est pas touchée.
+        _s3, rep = self.appairer_avec({"nom": "iPhone", "appareil": victime["appareil"]},
+                                      jeton=autre["jeton"])
+        self.assertEqual(rep["id"], autre["id"])
+        self.assertEqual(len(self.service.jetons.lister()), 2)
+        self.assertEqual(self.requete("GET", "/api/etat", jeton=victime["jeton"])[0], 200)
+
+    def test_appareil_mal_forme_ignore_sans_erreur(self):
+        statut, rep = self.appairer_avec({"nom": "Pixel", "appareil": "../../etc/passwd"})
+        self.assertEqual(statut, 200)
+        self.assertRegex(rep["appareil"], r"^[0-9a-f]{32}$")
+        self.assertNotIn("passwd", self.chemins["jetons"].read_text())
+
+    def test_l_appairage_fait_le_menage(self):
+        _s, vieux = self.appairer_avec({"nom": "Invité"})
+        self.horloge.t += T.OUBLI_TELEPHONE_S + 86400
+        _s2, neuf = self.appairer_avec({"nom": "Pixel"})
+        self.assertEqual([t["id"] for t in self.service.jetons.lister()], [neuf["id"]])
+        self.assertEqual(self.requete("GET", "/api/etat", jeton=vieux["jeton"])[0], 401)
 
 
 class Commandes(AvecServeur):
@@ -1045,6 +1217,10 @@ class ServiceHTTPS(AvecDossier):
         statut, _h, rep = self.requete("POST", "/api/appairer", {"transfert": ticket, "nom": "Pixel"}, securise=True)
         self.assertEqual(statut, 200, "le ticket a été consommé par la tentative http ?")
         self.assertEqual(self.requete("GET", "/api/etat", jeton=rep["jeton"], securise=True)[0], 200)
+        # Le même téléphone sur son autre origine : une seule entrée, et le jeton http
+        # reste valable pour le raccourci déjà posé sur l'écran d'accueil.
+        self.assertEqual(len(self.service.jetons.lister()), 1, "le transfert a créé un doublon")
+        self.assertEqual(self.requete("GET", "/api/etat", jeton=jeton_http)[0], 200)
         self.assertEqual(self.requete("POST", "/api/appairer", {"transfert": ticket}, securise=True)[0], 403)
 
     def test_ticket_expire(self):

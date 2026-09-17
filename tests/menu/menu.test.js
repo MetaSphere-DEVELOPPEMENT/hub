@@ -520,6 +520,35 @@ test("télécommande : QR code et code d'appairage, annonce quand un téléphone
   assert.match(await page.textContent("#contenu-reglages"), /indisponible/);
 });
 
+test("télécommande : les téléphones reliés, leur dernier usage, et en retirer un", async () => {
+  const jour = 86400000;
+  const liste = [
+    { id: "2ab063", nom: "Pixel 8", cree: Date.now() - 30 * jour, vu: Date.now() - 3 * jour },
+    { id: "9fe410", nom: "iPhone de Camille", cree: Date.now() - 2 * jour, vu: Date.now() },
+  ];
+  const etat = { url: "http://192.168.1.50:8790/", code: "482913", expire: Date.now() + 240000, telephones: 2, appairageOuvert: true, listeTelephones: liste };
+  await ouvrir({ retour: true, telecommande: etat });
+  await page.evaluate(() => ACTIONS.reglages("telecommande"));
+  await page.waitForFunction(() => document.querySelector(".telephones"));
+  const lignes = await page.locator(".telephones li").allInnerTexts();
+  assert.equal(lignes.length, 2, "un téléphone, une ligne — jamais deux fois le même");
+  assert.match(lignes[0], /Pixel 8/);
+  assert.match(lignes[0], /il y a 3 jours/);
+  assert.match(lignes[1], /aujourd'hui/);
+
+  // Retirer demande deux appuis : le premier arme, le second envoie.
+  await page.click('[data-cle="retirer-2ab063"]');
+  assert.deepEqual(await messages("telecommande-retirer"), []);
+  assert.equal(await page.textContent('[data-cle="retirer-2ab063"]'), "Confirmer");
+  await page.click('[data-cle="retirer-2ab063"]');
+  assert.deepEqual(await messages("telecommande-retirer"), [{ type: "telecommande-retirer", id: "2ab063" }]);
+
+  // hub-menu republie l'état sans lui : la ligne disparaît.
+  await page.evaluate(e => window.hub.recevoir({ type: "telecommande", etat: { ...e, telephones: 1, listeTelephones: e.listeTelephones.slice(1) } }), etat);
+  assert.equal(await page.locator(".telephones li").count(), 1);
+  assert.deepEqual(page.erreurs, []);
+});
+
 test("mise à jour : rechercher, installer, suivre la progression puis relancer le menu", async () => {
   await ouvrir({ retour: true });
   await page.evaluate(() => window.hub.recevoir({ type: "commande", nom: "reglages" }));
