@@ -437,6 +437,11 @@ enceintes.
   manifeste d'Ubuntu 26.04.1 Desktop (`releases.ubuntu.com/26.04/ubuntu-26.04.1-desktop-amd64.manifest`,
   relevé le 15/09/2026) ; on ne s'appuie pas dessus pour 19 caractères. Lecteur
   comparé à Pillow sur 400 JPEG réels du poste de travail : 400 concordants.
+- **Mode ambiant sur le bureau** (17/09/2026). Le menu est fermé en mode Bureau :
+  `hub-veille-bureau` (autostart) surveille l'inactivité par Mutter et lance
+  `hub-menu --ambiant`, qui se ferme au premier geste sans rien lancer. L'écran noir et le
+  verrouillage de GNOME passent après (`idle-delay` relevé, verrouillage inchangé).
+  `installer/veille/README.md` ; **rien d'éprouvé** hors tests.
 
 ## Ce qui reste à trancher avant le prototype
 

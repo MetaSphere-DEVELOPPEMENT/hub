@@ -5,4 +5,3 @@ Comment=Compte le temps passé sur le bureau pour le profil du HUB, et ramène a
 Exec=/usr/local/bin/hub-temps-ecran bureau
 OnlyShowIn=ubuntu;
 NoDisplay=true
-X-GNOME-Autostart-Phase=Application
