@@ -187,3 +187,22 @@ test("sélection : anneau épais et décalé sur toute cible, coche sur l'option
     assert.deepEqual(coches, ['"✓"', "none"], theme);
   }
 });
+
+// Audit du 17/09/2026 : les feuilles (réglages, météo, jeux, aide) étaient posées à 3 % du haut
+// et 2,2 % de la droite, quelle que soit la marge de sécurité réglée pour la TV.
+test("zone sûre : les feuilles respectent la marge de sécurité réglée", async () => {
+  for (const marge of [5, 8]) {
+    await page?.close();
+    await ouvrir(reglages({ marge }));
+    for (const calque of ["reglages", "meteo", "jeux", "aide"]) {
+      const bords = await page.evaluate(c => {
+        fermerTout(); ACTIONS[c]();
+        const f = document.querySelector(`#${c} .feuille-corps`);
+        f.style.transition = "none"; f.style.transform = "none";
+        const r = f.getBoundingClientRect();
+        return { haut: r.top / innerHeight * 100, bas: (innerHeight - r.bottom) / innerHeight * 100, droite: (innerWidth - r.right) / innerWidth * 100, gauche: r.left / innerWidth * 100 };
+      }, calque);
+      for (const [cote, v] of Object.entries(bords)) assert.ok(v >= marge - .1, `${calque}, marge ${marge} % : ${cote} à ${v.toFixed(1)} %`);
+    }
+  }
+});

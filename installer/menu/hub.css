@@ -597,9 +597,11 @@ kbd.fleche { font-family: system-ui, sans-serif; font-size: var(--t-2); line-hei
 .feuille { background: var(--voile); }
 .feuille-corps {
   position: absolute;
-  top: 3vh; bottom: 3vh; right: 2.2vw;
+  /* Dans la zone sûre réglée (Réglages → Marge de sécurité TV), comme l'accueil : à 3 %
+     et 2,2 % fixes, une TV qui rogne ses bords coupait le haut des feuilles et leur droite. */
+  top: calc(var(--marge) * 1vh); bottom: calc(var(--marge) * 1vh); right: calc(var(--marge) * 1vw);
   /* Plus large qu'avant la base 1/44 : le texte a grandi d'un tiers, pas l'écran. */
-  width: min(60rem, 92vw);
+  width: min(60rem, calc(100vw - var(--marge) * 2vw));
   display: grid;
   grid-template-columns: minmax(12.5rem, auto) 1fr;
   border-radius: 1.52rem;
@@ -612,7 +614,7 @@ kbd.fleche { font-family: system-ui, sans-serif; font-size: var(--t-2); line-hei
   transition: transform .6s var(--souple);
 }
 .calque.ouvert .feuille-corps { transform: none; }
-.feuille-corps.simple { grid-template-columns: 1fr; width: min(54rem, 92vw); }
+.feuille-corps.simple { grid-template-columns: 1fr; width: min(54rem, calc(100vw - var(--marge) * 2vw)); }
 
 .sommaire {
   padding: 1.4rem .8rem;
@@ -777,7 +779,7 @@ body.gestion .tuile-profil .avatar { position: relative; }
 /* ── Clavier à l'écran ───────────────────────────────────────────────────── */
 #clavier { display: grid; place-items: end center; background: var(--voile); }
 .clavier-corps {
-  margin-bottom: 5vh;
+  margin-bottom: calc(var(--marge) * 1vh);
   padding: 1.37rem;
   border-radius: 1.37rem;
   background: var(--verre-feuille);
@@ -942,7 +944,7 @@ body.sans-animation *, body.sans-animation *::before, body.sans-animation *::aft
 .cadenas svg { width: 1em; height: 1em; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; opacity: .8; }
 .nom-tuile { display: flex; align-items: center; }
 
-.dialogue.editeur { width: min(60rem, 94vw); text-align: left; }
+.dialogue.editeur { width: min(60rem, calc(100vw - var(--marge) * 2vw)); text-align: left; }
 .editeur-colonnes { display: grid; grid-template-columns: 1fr 1fr; gap: 1.82rem; }
 .editeur-identite { text-align: center; }
 .editeur-identite .etiquette-champ { text-align: left; }
@@ -1050,9 +1052,16 @@ body.avec-applis.avec-reprises .reprise { height: 5.01rem; }
 :root[data-taille="grande"] body.avec-applis.avec-reprises .reprise { height: 4.4rem; }
 :root[data-taille="grande"] body.avec-applis.avec-reprises .reprise .lettre { display: none; }
 :root[data-taille="grande"] #meteo .jour:nth-child(n+4) { display: none; }
+:root[data-taille="grande"] #meteo .heure-meteo .picto-meteo { display: none; }
+:root[data-taille="grande"] .raccourci, :root[data-taille="grande"] .phrase { padding: .12rem 0; }
+:root[data-taille="grande"] .raccourcis + .sous-titre { margin-top: .6rem; }
+:root[data-taille="grande"] .raccourcis { row-gap: 0; }
+/* Même en M, six jours ne tiennent plus dans une feuille posée dans la zone sûre. */
+#meteo .jour:nth-child(n+6) { display: none; }
+:root[data-taille="grande"] .etapes { gap: .3rem; }
 
 /* Sous-écran Jeux */
-.feuille-corps.simple.large { width: min(64rem, 94vw); }
+.feuille-corps.simple.large { width: min(64rem, calc(100vw - var(--marge) * 2vw)); }
 .jeux-tete { display: flex; align-items: center; justify-content: space-between; }
 .jeux-tete h3 { margin-bottom: 0; }
 .grille-jeux { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.06rem; margin-top: .46rem; }

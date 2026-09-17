@@ -799,7 +799,9 @@ function defiler(cible) {
   const position = r.top - z.top;
   const hauteurUtile = cadre.clientHeight - parseFloat(getComputedStyle(cadre).paddingTop) * 2;
   const maximum = Math.max(0, zone.scrollHeight - hauteurUtile);
-  const decalage = borne(position - hauteurUtile * .4, 0, maximum);
+  // Sur la dernière cible, jusqu'en bas : une aide ou une note qui la suit doit se lire.
+  const derniere = [...zone.querySelectorAll("[data-nav]")].filter(e => e.getClientRects().length).at(-1) === cible;
+  const decalage = derniere ? maximum : borne(position - hauteurUtile * .4, 0, maximum);
   zone.style.transform = `translateY(${-decalage}px)`;
 }
 
