@@ -156,13 +156,52 @@ test("mouvement : chaque motif change visiblement en 1 s et en 5 s, et aucune p�
   assert.ok(pendules.faisceau >= 15, `le faisceau balaie ${pendules.faisceau.toFixed(1)}°`);
 });
 
-test("rythme : le motif cinéma est redessiné à 30 images par seconde au plus, toiles comprises", async () => {
+// Retour de la TV du 18/09/2026 : « retire les cercles animés, elles cassent l'immersion ».
+// Trois ondes concentriques partaient du centre de l'image du mode et la traversaient. Elles
+// sont parties, et rien ne doit les ramener : on compte les arcs et les traits tracés pendant
+// un cycle entier du motif, sur les deux toiles.
+test("cinéma : aucun cercle, aucun trait — le motif ne touche plus la toile des lignes", async () => {
+  await ouvrir({});
+  const trace = await page.evaluate(() => {
+    const P = CanvasRenderingContext2D.prototype;
+    const compte = { arc: 0, ellipse: 0, arcTo: 0, stroke: 0, effacements: 0 };
+    const origines = {};
+    for (const nom of ["arc", "ellipse", "arcTo", "stroke"]) {
+      origines[nom] = P[nom];
+      P[nom] = function (...a) { compte[nom]++; return origines[nom].apply(this, a); };
+    }
+    const [basse, lignes] = [[320, 180], [960, 540]].map(([w, h]) => { const t = document.createElement("canvas"); t.width = w; t.height = h; return t.getContext("2d"); });
+    const efface = lignes.clearRect.bind(lignes);
+    lignes.clearRect = (...a) => { compte.effacements++; return efface(...a); };
+    // Un cycle complet et large : les ondes duraient 6 s, le filigrane 14 s.
+    for (let s = 0; s <= 30; s += .25) window.hubFond.peindreFond("cinema", "aurore", "sombre", s, [62, 224, 208], true, basse, lignes);
+    const d = lignes.getImageData(0, 0, 960, 540).data;
+    let poses = 0;
+    for (let i = 3; i < d.length; i += 4) if (d[i]) poses++;
+    for (const nom of ["arc", "ellipse", "arcTo", "stroke"]) P[nom] = origines[nom];
+    return { ...compte, poses };
+  });
+  assert.deepEqual(trace, { arc: 0, ellipse: 0, arcTo: 0, stroke: 0, effacements: 0, poses: 0 },
+    "le motif cinéma trace encore quelque chose");
+  // Et à l'écran : la toile des lignes reste cachée, les autres motifs la reprennent.
+  await page.close();
+  await ouvrir(profil({ motif: "cinema" }));
+  assert.equal(await page.evaluate(() => document.getElementById("fond-lignes").hidden), true);
+  await page.evaluate(() => { profil().motif = "profondeur"; appliquerTout(); });
+  await page.waitForTimeout(200);
+  assert.equal(await page.evaluate(() => document.getElementById("fond-lignes").hidden), false);
+  assert.deepEqual(page.erreurs, []);
+});
+
+test("rythme : le motif cinéma est redessiné à 30 images par seconde au plus", async () => {
   await ouvrir(profil({ motif: "cinema", fond: "aurore" }));
   const { dessins, images } = await page.evaluate(() => new Promise(fin => {
-    const c = document.getElementById("fond-lignes").getContext("2d");
-    const effacer = c.clearRect.bind(c);
+    // Le voile du bas : un dégradé linéaire, créé une fois et une seule par image du motif
+    // cinéma. Compté sur la toile du fond — celle des lignes ne sert plus à ce motif.
+    const c = document.getElementById("fond").getContext("2d");
+    const creer = c.createLinearGradient.bind(c);
     let n = 0;
-    c.clearRect = (...a) => { n++; return effacer(...a); };
+    c.createLinearGradient = (...a) => { n++; return creer(...a); };
     let images = 0;
     const debut = performance.now();
     (function compter(t) { images++; if (t - debut < 2000) requestAnimationFrame(compter); else fin({ dessins: n, images }); })(debut);
@@ -423,6 +462,73 @@ test("image du mode : le jeu se choisit dans les réglages, s'enregistre, et « 
   await page.evaluate(() => { profil().visuels = "jeu-9"; appliquerTout(); });
   await page.waitForTimeout(200);
   assert.equal((await visuelVisible()).jeu, "jeu-1");
+  assert.deepEqual(page.erreurs, []);
+});
+
+// Retour de la TV du 18/09/2026 : « la couleur du fond qui passe sur la totalité de l'image
+// fait que l'image ne se voit pas bien ». Le fond passe maintenant DERRIÈRE l'image
+// (index.html) et, en sombre, la photo est entière. La preuve se mesure : on photographie
+// deux fois la même vue, une fois sur l'aurore (turquoise) et une fois sur la braise
+// (orange), et on compare les pixels du cœur de l'image. Avant, l'écart moyen allait de 8 à
+// 21 sur 255 — la couleur du fond repeignait la photo — et sa saturation doublait d'une
+// palette à l'autre (jeu 3, mode TV : .27 sur l'aurore, .55 sur la braise). Aujourd'hui,
+// en sombre, les deux captures sont identiques au pixel près.
+const ZONE_IMAGE = { x: 1637, y: 350, largeur: 283, hauteur: 380 };
+async function coeurDeLImage(jeu, mode, theme, fond) {
+  await page?.close();
+  await ouvrir(profil({ motif: "cinema", fond, theme, visuels: jeu, animations: "reduites" }));
+  await page.evaluate(m => definirFocus(document.querySelector(`.onglet[data-mode="${m}"]`), true), mode);
+  await page.waitForTimeout(400);
+  const png = (await page.screenshot()).toString("base64");
+  return page.evaluate(async ([png, z]) => {
+    const i = new Image(); i.src = "data:image/png;base64," + png; await i.decode();
+    const c = document.createElement("canvas"); c.width = z.largeur; c.height = z.hauteur;
+    const x = c.getContext("2d");
+    x.drawImage(i, z.x, z.y, z.largeur, z.hauteur, 0, 0, z.largeur, z.hauteur);
+    const d = x.getImageData(0, 0, z.largeur, z.hauteur).data;
+    const lin = v => { v /= 255; return v <= .03928 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4; };
+    const L = [];
+    let sat = 0, n = 0;
+    for (let k = 0; k < d.length; k += 4) {
+      L.push(.2126 * lin(d[k]) + .7152 * lin(d[k + 1]) + .0722 * lin(d[k + 2]));
+      const max = Math.max(d[k], d[k + 1], d[k + 2]), min = Math.min(d[k], d[k + 1], d[k + 2]);
+      sat += max ? (max - min) / max : 0;
+      n++;
+    }
+    const tri = [...L].sort((a, b) => a - b);
+    return {
+      pixels: [...d],
+      contraste: +((tri[Math.floor(n * .95)] + .05) / (tri[Math.floor(n * .05)] + .05)).toFixed(2),
+      saturation: +(sat / n).toFixed(3),
+    };
+  }, [png, ZONE_IMAGE]);
+}
+const ecartMoyen = (A, B) => {
+  let s = 0;
+  for (let i = 0; i < A.length; i += 4) s += (Math.abs(A[i] - B[i]) + Math.abs(A[i + 1] - B[i + 1]) + Math.abs(A[i + 2] - B[i + 2])) / 3;
+  return 4 * s / A.length;
+};
+
+test("image du mode : le fond passe derrière elle — sa couleur ne déteint pas, et la photo garde son contraste", async () => {
+  for (const jeu of ["jeu-1", "jeu-2", "jeu-3"]) {
+    for (const mode of ["tv", "bureau"]) {
+      const aurore = await coeurDeLImage(jeu, mode, "sombre", "aurore");
+      const braise = await coeurDeLImage(jeu, mode, "sombre", "braise");
+      const ecart = ecartMoyen(aurore.pixels, braise.pixels);
+      assert.equal(ecart, 0, `${jeu} ${mode} : la couleur du fond déteint sur l'image (${ecart.toFixed(2)}/255)`);
+      assert.deepEqual([aurore.contraste, aurore.saturation], [braise.contraste, braise.saturation], `${jeu} ${mode}`);
+      // Sa propre étendue de lumière, pas celle d'un voile uni. Le pire des trois jeux
+      // (le bureau du jeu 1, une pièce sombre) mesure 2,2 ; il était à 1,6 sous le voile.
+      assert.ok(aurore.contraste >= 2, `${jeu} ${mode} : image délavée (contraste ${aurore.contraste}:1)`);
+    }
+  }
+  // En clair, l'image est volontairement retenue pour ne pas peser sur un fond pâle : le
+  // fond transparaît donc encore un peu, mais la photo a gagné en contraste (jeu 3, bureau :
+  // 1,62 sous le voile, 2,8 aujourd'hui) et ne change presque plus de couleur avec la palette.
+  const clairA = await coeurDeLImage("jeu-3", "bureau", "clair", "aurore");
+  const clairB = await coeurDeLImage("jeu-3", "bureau", "clair", "braise");
+  assert.ok(ecartMoyen(clairA.pixels, clairB.pixels) < 20, `clair : le fond déteint encore (${ecartMoyen(clairA.pixels, clairB.pixels).toFixed(1)}/255)`);
+  assert.ok(clairA.contraste >= 2.5, `clair : image délavée (contraste ${clairA.contraste}:1)`);
   assert.deepEqual(page.erreurs, []);
 });
 

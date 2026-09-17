@@ -57,7 +57,7 @@ la TV**) :
 | Motif | Toile floue | Toile des traits (960 px de large, transparente) | Calque en plus |
 |---|---|---|---|
 | nappes (celui d'avant) | 192×108, 5 remplissages | — | — |
-| cinéma (défaut d'un profil neuf) | 320×180, 4 remplissages | 3 cercles | image du mode : calque fixe, masque peint une fois |
+| cinéma (défaut d'un profil neuf) | 320×180, 4 remplissages | — (les 3 cercles sont partis le 18/09/2026) | image du mode : calque fixe, masque peint une fois |
 | aurore boréale | 320×180, ~320 bandes de 3 px | 150 étoiles (sombre) | — |
 | profondeur | 320×180, 3 remplissages | ~45 traits, 3 orbes | — |
 | faisceaux | 320×180, 9 coins | 90 grains de poussière | — |
@@ -118,8 +118,8 @@ rubans et nappes n'avaient rien à corriger (leur bas était déjà à .033 et .
 **Les six couleurs du motif cinéma se ressemblaient toutes.** La teinte du mode, mêlée à
 92 % dans la grande tache, mangeait la palette : la planche motif × couleur montrait six
 vignettes violettes. La couleur choisie tient maintenant la grande tache (un quart de teinte
-du mode), la tache de droite porte franchement la couleur du mode, et les ondes sont à la
-couleur du mode. Écart chromatique minimal entre deux couleurs, côté droit de l'écran :
+du mode) et la tache de droite porte franchement la couleur du mode. Écart chromatique
+minimal entre deux couleurs, côté droit de l'écran :
 **.024 → .232** avec le violet des Jeux, **.055 → .304** avec le turquoise de la TV.
 
 - [ ] sur la TV : le sol de « profondeur » reste-t-il derrière les onglets et les tuiles ?
@@ -127,6 +127,56 @@ couleur du mode. Écart chromatique minimal entre deux couleurs, côté droit de
 - [ ] sur la TV : faisceaux et rubans, rien de trop clair en bas de l'écran ?
 - [ ] sur la TV, en 30 Hz comme en 60 Hz : les fonds bougent-ils assez pour qu'on le voie —
       et pas trop pour qu'on les oublie derrière le texte ?
+
+### Les cercles retirés, l'image rendue nette (18/09/2026)
+
+Retour sur photo de la TV, motif cinéma, jeu d'images 3, mode Bureau : « retire les cercles
+animés, elles cassent l'immersion, et la couleur du fond qui passe sur la totalité de
+l'image fait que l'image ne se voit pas bien ». Sur la photo, les trois ondes concentriques
+traversaient le bureau, et la teinte du fond posait un voile coloré où l'on ne distinguait
+plus l'écran, la lampe ni le clavier.
+
+**Les ondes concentriques sont parties.** `lignesCinema`, le jeton `onde` de ses rythmes et
+le repère `FILIGRANE` ont été supprimés, pas mis en sommeil ; le motif cinéma ne figure plus
+parmi ceux qui tracent, et sa toile des lignes reste cachée — `peindreFond` ne l'efface même
+plus (518 000 pixels de moins par image). Il n'a pas fallu accélérer les taches pour
+autant : remesuré sans les ondes, le motif change encore **23 % de l'image en 1 s** et 35 %
+en 5 s au pire instant du cycle (seuils des tests : 12 % et 15 %), plus que les trois autres
+motifs. Un test refuse désormais tout arc, toute ellipse et tout trait tracés par le motif
+cinéma sur un cycle entier de 30 s.
+
+**Le fond passe maintenant derrière l'image.** `#visuel-mode` est le dernier des calques de
+fond dans `index.html` : le motif, sa teinte et le voile du bas (`.vignette`) sont sous
+elle, et non plus dessus. En thème sombre la photo est entière (opacité 1, le jeu 2 compris),
+et ce sont ses deux dégradés de masque — éteinte jusqu'à 9 % de sa hauteur, pleine de 24 à
+80 %, éteinte à 95 % — qui la retirent sous l'en-tête et sous les rangées, là où le voile
+s'en chargeait. Aucun bord, aucun cadre : les fondus sont les mêmes qu'avant, seulement
+resserrés à gauche (pleine à 54 % de la boîte au lieu de 64 %).
+
+Mesuré au cœur de l'image (283 × 380 px en 1920×1080, thème sombre), en photographiant deux
+fois la même vue sur deux palettes opposées — l'aurore turquoise et la braise orange :
+
+| Vue | Contraste (p95/p5) | Saturation, aurore → braise | Écart entre les deux captures |
+|---|---|---|---|
+| jeu 3, Bureau (la vue de la photo) | **2,50 → 7,44** | .553 → .276 devient .589 → .589 | 7,7 → **0** |
+| jeu 3, TV | 11,69 → 12,91 | .266 → .554 devient .537 → .537 | 7,8 → **0** |
+| jeu 1, Bureau | 1,61 → 2,20 | .585 → .369 devient .654 → .654 | 7,7 → **0** |
+| jeu 2, Bureau | 3,48 → 4,90 | .569 → .458 devient .708 → .708 | 20,4 → **0** |
+
+Avant, changer la couleur du fond changeait la photo : sa saturation doublait d'une palette
+à l'autre. Aujourd'hui les deux captures sont identiques au pixel près — la photo a ses
+couleurs, pas celles du fond. En thème clair, où l'image est volontairement retenue pour ne
+pas peser sur un fond pâle, elle est passée de .24 à .55 d'opacité : contraste **1,62 →
+2,86** (jeu 3, Bureau) et écart entre palettes 24,7 → 14,6.
+
+Rien ne change pour « Aucun » et « Filigrane » : le fond, son voile et le pictogramme sont
+exactement ce qu'ils étaient. Les textes du héros, l'en-tête, les onglets et les tuiles
+restent au-dessus de 4,5:1 sur les trois jeux, les cinq motifs et les deux thèmes.
+
+- [ ] sur la TV : plus aucun cercle sur l'image, et le motif cinéma bouge-t-il encore assez ?
+- [ ] sur la TV : l'écran, la lampe et le clavier du jeu 3 se distinguent-ils de trois mètres ?
+- [ ] sur la TV : le bord gauche de l'image reste-t-il invisible, sans arête ni cadre ?
+- [ ] sur la TV, thème clair : l'image se voit-elle sans faire une tache sur le fond pâle ?
 
 ### Mesure indicative, hors TV
 

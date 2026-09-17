@@ -171,22 +171,29 @@ body:not([data-motif="nappes"]) #fond { filter: none; }
 #filigrane svg, .apercu-filigrane svg { display: block; width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: .65; stroke-linecap: round; stroke-linejoin: round; }
 :root[data-theme="clair"] #filigrane { color: #0e1322; opacity: .07; }
 
-/* L'image du mode choisi, à la place du filigrane (motif cinéma). Elle ne doit montrer
-   aucun bord : deux dégradés statiques l'effacent avant ses arêtes, l'un sur la boîte
-   (fondu vers la gauche, du côté du héros), l'autre sur l'image (fondu vers le haut et
-   vers le bas). Deux masques d'un seul dégradé chacun sur deux éléments emboîtés plutôt
-   qu'un masque composé : `mask-composite` n'est pas éprouvé sur la WebKitGTK de la TV.
-   Masques et cadrage sont fixes : peints une fois dans le calque, ils ne coûtent rien par
-   image du fond (les nappes, les ondes et le halo continuent dessous et autour). Les trois
-   images du jeu choisi sont posées en même temps, seule celle du mode choisi est opaque :
-   changer de mode croise deux opacités, que le compositeur fait sans repeindre. */
+/* L'image du mode choisi, à la place du filigrane (motif cinéma). Elle est le dernier des
+   calques de fond (index.html) : le motif, sa teinte et le voile de la vignette passent
+   DERRIÈRE elle. Retour de la TV du 18/09/2026 — « la couleur du fond qui passe sur la
+   totalité de l'image fait que l'image ne se voit pas bien » : le voile du bas et la
+   grande tache la recouvraient d'un film coloré, et l'écran, la lampe et le clavier ne se
+   distinguaient plus. Posée dessus et opaque, la photo garde ses couleurs et son contraste.
+   Elle ne doit pour autant montrer aucun bord : deux dégradés statiques l'effacent avant
+   ses arêtes, l'un sur la boîte (fondu vers la gauche, du côté du héros), l'autre sur
+   l'image (fondu vers le haut et vers le bas). Ces deux fondus font aussi le travail que
+   le voile faisait pour les textes : l'image est éteinte sous l'en-tête et sous les
+   rangées, et n'existe pleinement qu'entre les deux. Deux masques d'un seul dégradé chacun
+   sur deux éléments emboîtés plutôt qu'un masque composé : `mask-composite` n'est pas
+   éprouvé sur la WebKitGTK de la TV. Masques et cadrage sont fixes : peints une fois dans
+   le calque, ils ne coûtent rien par image du fond (le motif continue dessous et autour).
+   Les trois images du jeu choisi sont posées en même temps, seule celle du mode choisi est
+   opaque : changer de mode croise deux opacités, que le compositeur fait sans repeindre. */
 #visuel-mode {
   position: fixed;
   top: 6vh; height: 88vh; right: -3vh;
   width: 104vh;
   pointer-events: none;
-  -webkit-mask-image: linear-gradient(90deg, transparent, rgb(0 0 0 / .3) 28%, #000 64%);
-  mask-image: linear-gradient(90deg, transparent, rgb(0 0 0 / .3) 28%, #000 64%);
+  -webkit-mask-image: linear-gradient(90deg, transparent, rgb(0 0 0 / .25) 26%, #000 54%);
+  mask-image: linear-gradient(90deg, transparent, rgb(0 0 0 / .25) 26%, #000 54%);
 }
 /* Les jeux d'images vont du 3/2 au 16/9, sujet à droite et côté gauche vide : cadrées à
    droite, c'est ce côté-là que le cadrage mange, jamais le sujet. La boîte est plus haute
@@ -198,23 +205,26 @@ body:not([data-motif="nappes"]) #fond { filter: none; }
   object-position: 100% 50%;
   opacity: 0;
   transition: opacity .16s linear;
-  -webkit-mask-image: linear-gradient(180deg, transparent, #000 16%, #000 84%, transparent);
-  mask-image: linear-gradient(180deg, transparent, #000 16%, #000 84%, transparent);
+  /* Éteinte jusqu'à 9 % (la date, l'heure et le profil), pleine de 24 à 80 %, éteinte de
+     nouveau à 95 % (les rangées et le pied). Ce sont des paliers du masque, pas une
+     couleur posée dessus : là où la photo se voit, elle se voit entière. */
+  -webkit-mask-image: linear-gradient(180deg, transparent, transparent 9%, #000 24%, #000 80%, transparent 95%);
+  mask-image: linear-gradient(180deg, transparent, transparent 9%, #000 24%, #000 80%, transparent 95%);
 }
-#visuel-mode img.visible { opacity: .92; }
+#visuel-mode img.visible { opacity: 1; }
 /* Thème clair : les images sont sombres. Posées telles quelles, elles feraient une tache
-   noire sur le fond pâle. On les efface presque (elles ne restent qu'en ombre colorée du
-   mode) et on allonge le fondu de gauche : aucun rectangle, aucune arête. */
+   noire sur le fond pâle. On les retient donc — assez pour qu'on lise la scène, pas assez
+   pour qu'elle pèse — et on allonge le fondu de gauche : aucun rectangle, aucune arête. */
 :root[data-theme="clair"] #visuel-mode {
-  -webkit-mask-image: linear-gradient(90deg, transparent, rgb(0 0 0 / .22) 34%, #000 78%);
-  mask-image: linear-gradient(90deg, transparent, rgb(0 0 0 / .22) 34%, #000 78%);
+  -webkit-mask-image: linear-gradient(90deg, transparent, rgb(0 0 0 / .2) 32%, #000 64%);
+  mask-image: linear-gradient(90deg, transparent, rgb(0 0 0 / .2) 32%, #000 64%);
 }
-:root[data-theme="clair"] #visuel-mode img.visible { opacity: .24; }
+:root[data-theme="clair"] #visuel-mode img.visible { opacity: .55; }
 /* Le jeu 2 est nettement plus lumineux que les deux autres (bobine dorée, manette violette
-   éclatante) : un cran d'opacité en moins suffit à le remettre au niveau des autres, en
-   sombre comme en clair. */
-#visuel-mode[data-jeu="jeu-2"] img.visible { opacity: .78; }
-:root[data-theme="clair"] #visuel-mode[data-jeu="jeu-2"] img.visible { opacity: .17; }
+   éclatante). En sombre il reste entier comme les autres — c'est une photo, elle a droit à
+   ses hautes lumières, et plus rien n'est écrit dessus. En clair, où l'opacité sert à ne
+   pas peser sur un fond pâle, il garde son cran en moins. */
+:root[data-theme="clair"] #visuel-mode[data-jeu="jeu-2"] img.visible { opacity: .46; }
 #photos {
   position: fixed; inset: 0;
   overflow: hidden;
@@ -251,8 +261,10 @@ body:not([data-motif="nappes"]) #fond { filter: none; }
   background: radial-gradient(120% 90% at 50% 45%, transparent 45%, var(--vignette) 100%);
   pointer-events: none;
 }
-/* Motif cinéma : le bas s'assombrit aussi sur le filigrane et les ondes, sous les rangées
-   (maquette C). Dans ce calque fixe, peint une fois. */
+/* Motif cinéma : le bas s'assombrit aussi sur le filigrane, sous les rangées (maquette C).
+   Dans ce calque fixe, peint une fois. L'image du mode, elle, passe par-dessus : c'est son
+   propre masque qui l'éteint là, et non ce voile — sans quoi la photo prenait la couleur
+   du fond sur toute sa hauteur. */
 body[data-motif="cinema"] .vignette {
   background:
     /* Le haut aussi : la grande tache à la couleur du mode montait sous la date et l'heure

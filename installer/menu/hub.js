@@ -366,8 +366,13 @@ const MOUVEMENTS = {
 // millième d'écran par image et l'œil ne le voit pas bouger du tout. Toutes différentes,
 // pour que rien ne se répète à l'identique, et aucune au-delà de 30 s (tests/menu).
 const RYTHMES = {
-  // Trois taches qui dérivent et respirent, trois ondes qui partent de l'image du mode.
-  cinema: { derive: [12, 10, 14, 11, 13, 9], souffle: [8, 10, 9], onde: 6, filigrane: 14, flotte: 10 },
+  // Trois taches qui dérivent et respirent, et le filigrane qui pivote et flotte. Les trois
+  // ondes concentriques qui partaient de l'image du mode ont été retirées le 18/09/2026 :
+  // vues de la TV, ces cercles traversaient la photo et cassaient l'immersion. Le motif ne
+  // vit plus que par ses taches, et cela suffit — remesuré sans les ondes, il change encore
+  // 23 % de l'image en 1 s (tests/menu, « mouvement » : 12 % demandés), plus que les trois
+  // autres motifs. Les amplitudes n'ont donc pas eu à bouger.
+  cinema: { derive: [12, 10, 14, 11, 13, 9], souffle: [8, 10, 9], filigrane: 14, flotte: 10 },
   // Trois rubans : l'ondulation qui court le long du ruban (vague, vague2), son épaisseur,
   // les rayons verticaux qui défilent, le glissement d'ensemble ; l'horizon qui respire ;
   // chaque étoile scintille à son rythme, entre 4 et 9 s.
@@ -391,7 +396,7 @@ const IMAGES_FOND_PAR_SECONDE = 30;
 // Deux toiles, deux finesses. Ce qui est flou par nature (taches, rubans, faisceaux,
 // ciel, soleil) se dessine en 320×180, un vingt-quatrième de la largeur 4K : agrandi par
 // le navigateur, il reste doux, et le remplir coûte 58 000 pixels par image. Les lignes
-// fines (sol quadrillé, ondes, étoiles, poussière, orbes) seraient des traînées floues à
+// fines (sol quadrillé, étoiles, poussière, orbes) seraient des traînées floues à
 // cette taille : elles vont sur une seconde toile de 960 pixels de large, transparente,
 // où un trait d'un pixel fait 2 px en 1080p et 4 px en 4K, l'épaisseur des maquettes.
 // Elle n'est qu'effacée puis tracée (quelques dizaines de traits), et ses 518 000
@@ -400,10 +405,9 @@ const IMAGES_FOND_PAR_SECONDE = 30;
 const RESOLUTIONS_FOND = { nappes: [192, 108], minimal: [192, 108], photos: [192, 108] };
 const RESOLUTION_MOTIF = [320, 180];
 const LARGEUR_LIGNES = 960;
-const MOTIFS_A_LIGNES = ["cinema", "rubans", "profondeur", "faisceaux"];
-// Centre des ondes et du filigrane du motif cinéma, en fractions de l'écran (maquette C :
-// 1480 × 400 sur 1920 × 1080), et côté du filigrane en fraction de la hauteur.
-const FILIGRANE = { x: .775, y: .4, taille: .76 };
+// Le motif cinéma n'a plus de lignes depuis que ses ondes concentriques sont parties :
+// ses taches seules tiennent dans la toile basse, et sa toile de lignes reste cachée.
+const MOTIFS_A_LIGNES = ["rubans", "profondeur", "faisceaux"];
 // Ligne d'horizon du motif profondeur.
 const HORIZON = .585;
 
@@ -515,7 +519,8 @@ function peindreNappes(c, choix, e, accent, teinter) {
 }
 
 // C · Cinéma : un dégradé maillé de trois taches qui dérivent et respirent, le bas
-// assombri pour les rangées. Les ondes et le filigrane sont à part (lignes, calque).
+// assombri pour les rangées. Le filigrane est à part (un calque, qu'une transform fait
+// pivoter) ; l'image du mode, elle, passe par-dessus tout ce calque-ci.
 // Première version (17/09/2026) : teinte du mode mêlée à moitié, taches de 30 % de l'écran :
 // l'accueil par défaut était presque noir, le reproche même de départ. La grande tache a
 // alors pris la couleur du mode à 92 % et la moitié de l'écran — et la planche motif ×
@@ -552,25 +557,6 @@ function peindreCinema(c, e) {
   g.addColorStop(1, rgba(e.base, .8));
   c.fillStyle = g;
   c.fillRect(0, h * .6, w, h * .4);
-}
-function lignesCinema(l, e, k) {
-  const w = l.canvas.width, h = l.canvas.height, { s, clair } = e, R = RYTHMES.cinema;
-  // Les ondes portent la couleur du mode : la grande tache tient maintenant celle de la
-  // palette, il faut que le mode se voie quand même, et trois cercles fins ne se mêlent
-  // à rien — ils restent franchement turquoise, violets ou ambre.
-  const couleur = encreTrait(e.teinter ? melange(e.c0, e.accent, .7) : e.c0, clair);
-  const x = FILIGRANE.x * w, y = FILIGRANE.y * h;
-  for (let i = 0; i < 3; i++) {
-    const p = (((s + i * R.onde / 3) / R.onde) % 1 + 1) % 1;
-    // Maquette : de 0,4 à 5,5 fois un cercle de 100 px en 1080p, allumée à 15 % du trajet.
-    const rayon = (.4 + p * 5.1) * .0926 * h;
-    const alpha = (p < .15 ? p / .15 : (1 - p) / .85) * (clair ? .5 : .6);
-    l.strokeStyle = rgba(couleur, alpha);
-    l.lineWidth = (1.2 + p * 2.6) * k;
-    l.beginPath();
-    l.arc(x, y, rayon, 0, 2 * Math.PI);
-    l.stroke();
-  }
 }
 // Le filigrane pivote et flotte : transform seulement, posée par dessinerFond.
 function mouvementFiligrane(s) {
@@ -796,7 +782,8 @@ function lignesFaisceaux(l, e, k) {
 }
 
 const PEINTRES = { cinema: peindreCinema, rubans: peindreRubans, profondeur: peindreProfondeur, faisceaux: peindreFaisceaux };
-const TRACEURS = { cinema: lignesCinema, rubans: lignesRubans, profondeur: lignesProfondeur, faisceaux: lignesFaisceaux };
+// Le motif cinéma n'y figure pas : il ne trace plus rien (ses ondes concentriques sont parties).
+const TRACEURS = { rubans: lignesRubans, profondeur: lignesProfondeur, faisceaux: lignesFaisceaux };
 
 // Un motif sur deux toiles : « c » la basse résolution, « l » les lignes (effacée ici
 // si « effacer »). Pure hormis les toiles : les aperçus et les tests l'appellent aussi.
@@ -807,10 +794,12 @@ function peindreFond(motif, couleur, theme, s, accent, teinter, c, l, effacer = 
   } else {
     PEINTRES[motif](c, e);
   }
-  if (!l) return;
+  // Un motif sans traceur (cinéma, nappes) ne touche pas la seconde toile : elle est
+  // cachée, et l'effacer à chaque image coûterait 518 000 pixels pour rien.
+  if (!l || !TRACEURS[motif]) return;
   if (effacer) l.clearRect(0, 0, l.canvas.width, l.canvas.height);
   l.globalCompositeOperation = "source-over";
-  TRACEURS[motif]?.(l, e, l.canvas.width / LARGEUR_LIGNES);
+  TRACEURS[motif](l, e, l.canvas.width / LARGEUR_LIGNES);
 }
 
 const toile = $("fond");
@@ -919,8 +908,9 @@ function preparerToiles(motif, theme, couleur) {
   }
   rafraichirVisuel(motif);
   document.body.dataset.motif = motif;
-  // La couleur de base du fond, pour le voile du bas qui passe sur l'image du mode et le
-  // filigrane (hub.css) : c'est lui qui noie le bas de l'image sous les rangées.
+  // La couleur de base du fond, pour le voile du haut et du bas (hub.css) : il calme le
+  // motif sous l'en-tête et sous les rangées, et noie le filigrane. Il passe sous l'image
+  // du mode, qui s'éteint seule par son masque.
   racine.style.setProperty("--fond-base", rvbHex((PALETTES[couleur] || PALETTES.aurore)[theme].base).join(" "));
 }
 addEventListener("resize", () => { preparation = ""; relancerFond(); });
