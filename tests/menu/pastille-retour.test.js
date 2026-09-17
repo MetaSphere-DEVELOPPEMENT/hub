@@ -181,7 +181,9 @@ test("au-dessus d'un élément en plein écran", async () => {
   await page.waitForTimeout(300);
   assert.ok(!(await pastilleVisible(page)), "le passage en plein écran la masque");
   await page.mouse.move(700, 500, { steps: 3 });
-  await page.waitForTimeout(100);
+  // Attendre qu'elle soit revenue plutôt que 100 ms fixes : la suite complète charge la
+  // machine (dix fichiers en parallèle) et le fondu arrivait après le clic.
+  for (let i = 0; i < 40 && !(await pastilleVisible(page)); i++) await page.waitForTimeout(50);
   // Un clic plutôt qu'elementFromPoint : en plein écran, Chromium rend inerte tout ce
   // qui est hors de l'élément plein écran, même dessiné devant (vu : visible, clic perdu).
   await page.mouse.click(...pointPastille(1920, 1080));
