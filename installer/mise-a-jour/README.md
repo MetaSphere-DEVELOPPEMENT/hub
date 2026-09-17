@@ -163,6 +163,53 @@ sans compte ni clé d'accès. La confiance vient de la signature, pas de la sour
 
 Quelle que soit la source, les commits doivent être signés.
 
+## Publier une version
+
+Le HUB se désignait par l'empreinte de son commit (« a03afa7 ») : illisible au
+téléphone, et impossible à comparer de tête. Il porte maintenant un **numéro**
+`MAJEUR.MINEUR.CORRECTIF`, écrit dans le fichier `VERSION` à la racine du dépôt.
+
+**Le numéro ne prouve rien.** Un dépôt hostile écrirait celui qu'il veut ; c'est la
+signature du commit qui fait la confiance, et l'empreinte reste ce que compare
+`hub-mise-a-jour` (à jour ? qu'installe-t-on ? qu'a-t-on vérifié ?). Le numéro n'est là
+que pour être lu : le menu l'affiche en grand dans Réglages → À propos, l'empreinte en
+petit à côté, et l'annonce dit « Nouvelle version disponible (1.1.0) ».
+
+Quand changer quoi :
+
+| | Quand |
+|---|---|
+| **CORRECTIF** (1.0.**1**) | une correction, rien de nouveau à raconter au propriétaire |
+| **MINEUR** (1.**1**.0) | une fonctionnalité de plus : un réglage, un mode, un service |
+| **MAJEUR** (**2**.0.0) | ce qui oblige à refaire quelque chose à la main sur le HUB |
+
+Marche à suivre :
+
+1. `VERSION` : le nouveau numéro, seul, sur une ligne.
+2. `NOUVEAUTES.md` : une nouvelle section en tête, `## 1.1.0 — 20 septembre 2026`, suivie
+   d'une ou deux phrases que le propriétaire comprend. C'est ce que le menu affiche sous
+   « Installer » ; les sections vont de la plus récente à la plus ancienne.
+3. `python3 -m unittest tests/test_version.py` : le numéro, la section et ce qu'affiche
+   le menu doivent s'accorder.
+4. Commit **signé** (`git commit -S`), comme tous les autres.
+5. **L'étiquette**, signée elle aussi, sur ce commit :
+   `git tag -s -m "1.1.0" v1.1.0 && git push --follow-tags`.
+
+L'étiquette n'est pas une décoration : avant tout téléchargement, `hub-mise-a-jour
+verifier` demande à la source ses étiquettes (`git ls-remote --tags`) et ne retient
+`v1.1.0` que si elle désigne **exactement** le commit distant. Sans étiquette, le menu
+s'en tient à l'empreinte plutôt que d'annoncer un numéro faux — rien ne casse, on perd
+seulement le numéro dans l'annonce.
+
+`tests/test_version.py` échoue si `v<VERSION>` existe déjà et que ce qui s'installe
+(`installer/`, `VERSION`, `NOUVEAUTES.md`) a changé depuis : deux contenus différents ne
+peuvent pas sortir sous le même numéro.
+
+Sur le HUB, l'installateur écrit trois lignes dans `/usr/local/share/hub/VERSION` — le
+numéro, l'empreinte du commit installé, sa date — et pose `NOUVEAUTES.md` à côté. Un HUB
+installé avant les numéros n'a qu'une ligne (l'empreinte) : le menu affiche alors
+« Version : inconnue » et l'empreinte, comme avant.
+
 ## Ce qui est garanti
 
 - Rien n'est installé ni exécuté (pas même les tests) si le commit n'est pas signé par
@@ -171,6 +218,7 @@ Quelle que soit la source, les commits doivent être signés.
 - Si l'installateur échoue, celui de la version précédente est relancé.
 - Les réglages, profils, codes et photos (`~/.config/hub`, `~/Images/HUB`) ne sont jamais touchés.
 - Les trois dernières versions restent dans `/var/lib/hub/versions/`.
+- Le numéro de version n'entre dans aucune décision : tout se compare sur l'empreinte.
 
 Tests : `python3 -m unittest tests/test_hub_mise_a_jour.py` (vrai git ≥ 2.34, vraies
 clés SSH jetables, installateur et `runuser` simulés).

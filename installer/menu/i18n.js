@@ -275,6 +275,12 @@ const TEXTES = {
     "maj.echec.signature": "Cette version n'est pas signée par une clé autorisée : rien n'a été installé.",
     "maj.non.verifiable": "Nouvelle version disponible ({v}), mais aucun signataire autorisé : elle ne peut pas être installée.",
     "maj.signee": "signée par {s}",
+    // Une version se dit « 1.0.0 » ; l'empreinte du commit reste affichée en petit, là où
+    // elle sert : c'est elle que la signature protège, pas le numéro.
+    "version.inconnue": "inconnue",
+    "apropos.commit": "commit {c}",
+    "apropos.version.date": "du {d}",
+    "maj.nouveautes": "Nouveautés",
     "apropos.machine": "Machine",
     "apropos.systeme": "Système",
     "apropos.adresse": "Adresse IP",
@@ -606,6 +612,10 @@ const TEXTES = {
     "maj.echec.signature": "This version is not signed by an authorised key: nothing was installed.",
     "maj.non.verifiable": "New version available ({v}), but no authorised signer: it can't be installed.",
     "maj.signee": "signed by {s}",
+    "version.inconnue": "unknown",
+    "apropos.commit": "commit {c}",
+    "apropos.version.date": "of {d}",
+    "maj.nouveautes": "What's new",
     "apropos.machine": "Device",
     "apropos.systeme": "System",
     "apropos.adresse": "IP address",

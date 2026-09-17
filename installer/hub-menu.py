@@ -722,20 +722,25 @@ def infos():
     except (OSError, ValueError, IndexError):
         allume = None
     libre = shutil.disk_usage("/").free
-    version = None
-    for chemin in ("/usr/local/share/hub/VERSION", Path(__file__).resolve().parent.parent / "VERSION"):
-        try:
-            version = Path(chemin).read_text().strip()
-            break
-        except OSError:
-            continue
+    # Installé d'abord, puis le dépôt tel quel : sur le Mac ou en mode Bureau, le menu
+    # lancé depuis les sources doit dire le numéro du dépôt, pas « dev ».
+    depot = Path(__file__).resolve().parent.parent
+    version = lire_version(VERSION_INSTALLEE)
+    if not version["numero"] and not version["commit"]:
+        version = lire_version(depot / "VERSION")
+    quoi = nouveautes(NOUVEAUTES_INSTALLEES) or nouveautes(depot / "NOUVEAUTES.md")
     return {
         "machine": socket.gethostname(),
         "systeme": systeme,
         "adresse": adresse_ip(),
         "allumeDepuis": allume,
         "disqueLibre": f"{libre / 1e9:.0f} Go",
-        "version": version or "dev",
+        # Le numéro pour l'humain, l'empreinte pour la vérification : les deux, jamais l'un
+        # à la place de l'autre (c'est la signature du commit qui fait la confiance).
+        "version": version["numero"],
+        "commit": version["commit"],
+        "versionDate": version["date"],
+        "nouveautes": quoi,
     }
 
 
@@ -981,6 +986,10 @@ def releve_internet():
 # ── Mise à jour ───────────────────────────────────────────────────────────
 ETAT_MISE_A_JOUR = Path("/run/hub-mise-a-jour/etat.json")
 VERSION_INSTALLEE = Path("/usr/local/share/hub/VERSION")
+NOUVEAUTES_INSTALLEES = Path("/usr/local/share/hub/NOUVEAUTES.md")
+# « 1.0.0 » : MAJEUR.MINEUR.CORRECTIF, écrit à la main dans le VERSION du dépôt.
+NUMERO_VERSION = re.compile(r"\d+\.\d+\.\d+")
+DATE_VERSION = re.compile(r"\d{4}-\d{2}-\d{2}")
 MAJ_AUTO_INTERVALLE_S = 6 * 3600
 # Une vérification qui échoue (GitHub injoignable un instant) se refait plus tôt, sans
 # marteler la source chaque minute.
@@ -1050,13 +1059,53 @@ def echec_sans_etat(bilan, lance_monotone, ecoule):
                       f"code {bilan.get('ExecMainStatus', '?')} (journalctl -u hub-mise-a-jour -b)"}
 
 
-def commit_installe(chemin=VERSION_INSTALLEE):
-    """Même lecture que hub-mise-a-jour : `git describe --always --dirty` → le commit."""
+def lire_version(chemin=VERSION_INSTALLEE):
+    """Le numéro lisible, l'empreinte du commit et la date de la version installée.
+
+    L'installateur écrit trois lignes : « 1.0.0 », l'empreinte (`git describe --always
+    --dirty`), « 2026-09-17 ». Un fichier d'une seule ligne vient d'une version
+    antérieure au numéro : c'était l'empreinte seule, et on la garde plutôt que de
+    prétendre ne rien savoir. LE NUMÉRO NE PROUVE RIEN : c'est l'empreinte que la
+    signature du commit protège, et c'est elle que compare la mise à jour."""
     try:
-        brut = Path(chemin).read_text().split()[0]
-    except (OSError, IndexError):
+        lignes = [l.strip() for l in Path(chemin).read_text(encoding="utf-8").splitlines()]
+    except OSError:
+        return {"numero": None, "commit": None, "date": None}
+    lignes = [l for l in lignes if l]
+    numero = lignes[0] if lignes and NUMERO_VERSION.fullmatch(lignes[0]) else None
+    reste = lignes[1:] if numero else lignes
+    brut = reste[0].split()[0] if reste and reste[0].split() else None
+    commit = brut.removesuffix("-dirty").rsplit("-g", 1)[-1] if brut else None
+    date = next((l for l in reste[1:] if DATE_VERSION.fullmatch(l)), None)
+    return {"numero": numero, "commit": commit or None, "date": date}
+
+
+def commit_installe(chemin=VERSION_INSTALLEE):
+    """Même lecture que hub-mise-a-jour : l'empreinte, et elle seule."""
+    return lire_version(chemin)["commit"]
+
+
+def nouveautes(chemin, maximum=400):
+    """Ce qu'apporte la version installée : le corps de la première section de
+    NOUVEAUTES.md, sans son titre. Fichier absent ou vide : rien à dire, rien à afficher."""
+    try:
+        texte = Path(chemin).read_text(encoding="utf-8")
+    except OSError:
         return None
-    return brut.removesuffix("-dirty").rsplit("-g", 1)[-1] or None
+    lignes, corps = texte.splitlines(), []
+    for i, ligne in enumerate(lignes):
+        if not ligne.startswith("## "):
+            continue
+        for suite in lignes[i + 1:]:
+            if suite.startswith("#"):
+                break
+            corps.append(suite.strip())
+        break
+    # Les paragraphes bout à bout, en une seule phrase suivie : le menu n'a qu'une ligne.
+    resume = " ".join(m for m in " ".join(corps).split(" ") if m).strip()
+    if not resume:
+        return None
+    return resume if len(resume) <= maximum else resume[:maximum - 1].rsplit(" ", 1)[0] + "…"
 
 
 def meme_commit(a, b):

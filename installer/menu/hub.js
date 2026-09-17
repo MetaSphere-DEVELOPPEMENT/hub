@@ -2318,8 +2318,14 @@ function rendreSection(garderFocus = true) {
         info(t("apropos.adresse"), i.adresse),
         info(t("apropos.allume"), i.allumeDepuis),
         info(t("apropos.disque"), i.disqueLibre),
-        info(t("apropos.version"), i.version)),
+        // Le numéro en grand, l'empreinte et la date en petit : on lit « Version 1.0.0 »
+        // au téléphone, et on retrouve le commit quand on vérifie une signature.
+        el("div", { class: "info version-info" }, el("div", { class: "etiquette" }, t("apropos.version")),
+          el("div", { class: "valeur" }, i.version || t("version.inconnue")),
+          (i.commit || i.versionDate) && el("div", { class: "version-detail" },
+            [i.commit && t("apropos.commit", { c: i.commit }), i.versionDate && t("apropos.version.date", { d: i.versionDate })].filter(Boolean).join(" · ")))),
         contenuMiseAJour(),
+        nouveautesVersion(i),
         rangee(t("maj.auto"), t("maj.auto.detail"),
           options("maj-auto", [[true, t("oui")], [false, t("non")]], s.miseAJourAuto !== false, v => { s.miseAJourAuto = v === true || v === "true"; }), false, true),
         el("div", { class: "options", style: "justify-content:flex-start;margin-top:.3rem" },
@@ -2377,6 +2383,12 @@ function recevoirInternet(message) {
 const maj = { verification: INITIAL.majAuto || null, etat: null, enCours: false, suivie: false, annoncees: new Set() };
 const ETAPES_MAJ = ["verification", "telechargement", "tests", "installation", "terminee"];
 
+// Le numéro lisible quand on le connaît (« 1.0.0 »), l'empreinte du commit sinon :
+// hub-mise-a-jour n'annonce un numéro que si l'étiquette git « v1.0.0 » désigne bien ce
+// commit, et un HUB installé avant les numéros n'en a pas. Jamais les deux dans une
+// phrase : l'empreinte se lit en petit dans À propos, là où elle sert à vérifier la
+// signature. Les phrases qui l'entourent disent déjà « version » (i18n.js).
+function nomVersion(numero, commit) { return numero || commit || ""; }
 function majActive(e = maj.etat) { return !!e && !["terminee", "echec", "a-jour"].includes(e.etape); }
 function majDisponible() {
   const v = maj.verification;
@@ -2400,14 +2412,24 @@ function detailMaj(detail) {
   return typeof detail === "string" && detail.trim() ? el("span", { class: "detail-maj" }, tronquer(detail, 300)) : null;
 }
 
+// Ce qu'apporte la version installée : la première section de NOUVEAUTES.md, lue par
+// hub-menu. Fichier absent du dépôt installé : rien ne s'affiche.
+function nouveautesVersion(infos) {
+  if (!infos.nouveautes) return null;
+  return el("div", { class: "rangee large nouveautes", id: "nouveautes" },
+    el("div", {},
+      el("div", { class: "titre" }, t("maj.nouveautes"), infos.version ? ` · ${infos.version}` : ""),
+      el("div", { class: "aide" }, infos.nouveautes)));
+}
+
 function contenuMiseAJour() {
   const { verification: v, etat: e } = maj;
   let texte = t("maj.detail"), boutons = [], detail = null;
   const actif = majActive(e);
   if (actif) {
-    texte = t(`maj.etape.${e.etape}`, { v: e.version || "" });
+    texte = t(`maj.etape.${e.etape}`, { v: nomVersion(e.numero, e.version) });
   } else if (e?.etape === "terminee") {
-    texte = t("maj.terminee", { v: e.version || "" });
+    texte = t("maj.terminee", { v: nomVersion(e.numero, e.version) });
   } else if (e?.etape === "echec") {
     texte = texteEchecMaj(e);
     detail = detailMaj(e.detail);
@@ -2419,7 +2441,8 @@ function contenuMiseAJour() {
     detail = detailMaj(v.detail);
   } else if (v) {
     // verifiable absent (ancien hub-mise-a-jour) : installable, comme avant.
-    texte = !v.disponible ? t("maj.a.jour") : v.verifiable === false ? t("maj.non.verifiable", { v: v.distant }) : t("maj.disponible", { v: v.distant });
+    const nom = nomVersion(v.numeroDistant, v.distant);
+    texte = !v.disponible ? t("maj.a.jour") : v.verifiable === false ? t("maj.non.verifiable", { v: nom }) : t("maj.disponible", { v: nom });
   }
   // Qui a signé la version en cours d'installation : dit discrètement, pas une étape de plus.
   if (typeof e?.signataire === "string" && e.signataire && ["tests", "installation", "terminee"].includes(e.etape)) {
@@ -2447,7 +2470,7 @@ function recevoirMiseAJour(message) {
   const v = maj.verification;
   if (message.auto && message.annoncer && majDisponible() && !maj.annoncees.has(v.distant)) {
     maj.annoncees.add(v.distant);
-    annoncer(t("maj.auto.annonce", { v: v.distant }));
+    annoncer(t("maj.auto.annonce", { v: nomVersion(v.numeroDistant, v.distant) }));
   }
   if (maj.etat?.etape === "echec" && maj.suivie) {
     maj.suivie = false;
@@ -2458,7 +2481,7 @@ function recevoirMiseAJour(message) {
   // resté d'une mise à jour passée ne doit pas faire redémarrer le menu en boucle.
   if (maj.etat?.etape === "terminee" && maj.suivie) {
     maj.suivie = false;
-    annoncer(t("maj.terminee", { v: maj.etat.version || "" }));
+    annoncer(t("maj.terminee", { v: nomVersion(maj.etat.numero, maj.etat.version) }));
     setTimeout(() => envoyer({ type: "relancer" }), 4000);
   }
   if (pile.at(-1) === "reglages" && sectionCourante === "apropos") rendreSection();

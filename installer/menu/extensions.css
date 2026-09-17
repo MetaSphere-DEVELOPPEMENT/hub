@@ -48,6 +48,10 @@
 /* Le compte à rebours du filet : le seul chiffre qui compte quand l'image vient de changer. */
 .compte-a-rebours { margin-top: .76rem; font-size: var(--t-4); font-weight: 700; font-variant-numeric: tabular-nums; color: var(--attention); }
 
+/* ── Réglages → À propos : le numéro de version, et ce qu'elle apporte ───── */
+.version-info .version-detail { margin-top: .15rem; font-size: var(--t-1); color: var(--texte-doux); font-variant-numeric: tabular-nums; }
+.rangee.nouveautes { margin-top: .53rem; }
+
 /* ── Cadre photo du mode ambiant ─────────────────────────────────────────── */
 #cadre { position: absolute; inset: 0; overflow: hidden; background: #000; }
 .cadre-photo { position: absolute; inset: 0; opacity: 0; transition: opacity 2.4s var(--souple); }

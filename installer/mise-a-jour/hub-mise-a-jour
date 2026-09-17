@@ -67,6 +67,9 @@ GIT = ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-
 # tout de suite, pas attendre une saisie jusqu'à la fin du délai.
 ENV_GIT = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
 COMMIT = re.compile(r"^[0-9a-f]{40}([0-9a-f]{24})?$")
+# « 1.0.0 » : MAJEUR.MINEUR.CORRECTIF, le numéro lisible d'une version (VERSION à la
+# racine du dépôt, étiquette git « v1.0.0 »). Une étiquette, pas une preuve : voir lire_version.
+NUMERO = re.compile(r"\d+\.\d+\.\d+")
 # Sortie de ssh-keygen -Y verify quand la clé figure dans le fichier : « for <nom> ».
 # Une signature valide d'une clé inconnue dit « with … No principal matched. ».
 SIGNATURE_RECONNUE = re.compile(r'^Good "git" signature for (\S.*?) with \S+ key ', re.M)
@@ -132,14 +135,37 @@ def lire_config(chemin=CONFIG):
     return {"source": donnees["source"], "branche": donnees.get("branche") or "main"}
 
 
-def version_installee(chemin=VERSION_INSTALLEE):
-    """L'installateur écrit `git describe --always --dirty` : on n'en garde que le commit."""
+def lire_version(chemin=VERSION_INSTALLEE):
+    """(numéro lisible, empreinte du commit). L'installateur écrit trois lignes :
+    « 1.0.0 », `git describe --always --dirty`, la date. Un fichier d'une seule ligne
+    vient d'une version antérieure au numéro : c'était l'empreinte seule.
+
+    LE NUMÉRO N'EST QU'UNE ÉTIQUETTE. Tout ce qui décide (est-on à jour ? qu'installe-t-on ?
+    qu'a-t-on signé ?) se fait sur l'empreinte, jamais sur lui : un dépôt hostile écrirait
+    le numéro qu'il veut, il ne fabrique pas une signature."""
     try:
-        brut = Path(chemin).read_text().split()[0]
+        lignes = [l.strip() for l in Path(chemin).read_text(encoding="utf-8").splitlines() if l.strip()]
+    except OSError:
+        return None, None
+    numero = lignes[0] if lignes and NUMERO.fullmatch(lignes[0]) else None
+    reste = lignes[1:] if numero else lignes
+    brut = reste[0].split()[0] if reste and reste[0].split() else None
+    commit = brut.removesuffix("-dirty").rsplit("-g", 1)[-1] if brut else None
+    return numero, (commit or None)
+
+
+def version_installee(chemin=VERSION_INSTALLEE):
+    return lire_version(chemin)[1]
+
+
+def numero_du_depot(depot):
+    """Le numéro lisible écrit dans le VERSION d'un clone, pour le dire pendant
+    l'installation. Absent ou mal formé : rien, et l'empreinte suffira."""
+    try:
+        premiere = Path(depot, "VERSION").read_text(encoding="utf-8").strip().splitlines()[0].strip()
     except (OSError, IndexError):
         return None
-    commit = brut.removesuffix("-dirty").rsplit("-g", 1)[-1]
-    return commit or None
+    return premiere if NUMERO.fullmatch(premiere) else None
 
 
 def meme_commit(a, b):
@@ -208,9 +234,36 @@ def dernier_commit(config, lancer=executer, attendre=time.sleep):
     return r.stdout.split()[0]
 
 
-def verifier(config, installee, lancer=executer, signataires=SIGNATAIRES, attendre=time.sleep):
+def numero_distant(config, commit, lancer=executer, attendre=time.sleep):
+    """Le numéro de la version disponible, avant tout téléchargement : le nom de
+    l'étiquette git « vX.Y.Z » posée sur ce commit exact. Publier une version, c'est
+    poser cette étiquette (installer/mise-a-jour/README.md) ; sans elle, le menu s'en
+    tient à l'empreinte plutôt que d'annoncer un numéro faux."""
+    try:
+        r = git_distant([*GIT, "ls-remote", "--tags", config["source"], "refs/tags/v*"],
+                        "source", lancer, attendre, 60)
+    except Echec:
+        return None
+    etiquettes = {}
+    for ligne in (r.stdout or "").splitlines():
+        morceaux = ligne.split()
+        if len(morceaux) != 2 or not morceaux[1].startswith("refs/tags/v"):
+            continue
+        # « refs/tags/v1.0.0^{} » : le commit qu'une étiquette annotée désigne ; il prime.
+        nom = morceaux[1][len("refs/tags/v"):]
+        pelee = nom.endswith("^{}")
+        nom = nom[:-3] if pelee else nom
+        if NUMERO.fullmatch(nom) and (pelee or nom not in etiquettes):
+            etiquettes[nom] = morceaux[0]
+    return next((nom for nom, sha in etiquettes.items() if meme_commit(sha, commit)), None)
+
+
+def verifier(config, installee, lancer=executer, signataires=SIGNATAIRES, attendre=time.sleep, numero=None):
     distant = dernier_commit(config, lancer, attendre)
-    reponse = {"disponible": not meme_commit(distant, installee), "distant": distant[:12], "installee": installee}
+    reponse = {"disponible": not meme_commit(distant, installee), "distant": distant[:12], "installee": installee,
+               # Les numéros lisibles, pour que le menu dise « Version 1.1.0 disponible »
+               # plutôt qu'une suite de caractères. Absents : il s'en tient aux empreintes.
+               "numero": numero, "numeroDistant": numero_distant(config, distant, lancer, attendre)}
     # La signature ne se contrôle qu'une fois le commit téléchargé ; ici on dit seulement
     # si une installation aurait une chance d'être acceptée.
     verifiable, detail = signataires_autorises(signataires)
@@ -398,11 +451,12 @@ def appliquer(config, utilisateur, dossier_versions=VERSIONS, etat=ecrire_etat, 
 
 
 def _appliquer(config, utilisateur, dossier_versions, etat, lancer, installee, signataires, tests, attendre):
-    installee = installee if installee is not None else version_installee()
+    numero_installe, lue = lire_version()
+    installee = installee if installee is not None else lue
     etat({"etape": "verification"})
     commit = dernier_commit(config, lancer, attendre)
     if meme_commit(commit, installee):
-        etat({"etape": "a-jour", "version": commit[:12]})
+        etat({"etape": "a-jour", "version": commit[:12], "numero": numero_installe})
         return 0
     # Avant de télécharger : sans référence, aucune version ne pourrait être acceptée.
     utilisable, detail = signataires_autorises(signataires)
@@ -412,7 +466,7 @@ def _appliquer(config, utilisateur, dossier_versions, etat, lancer, installee, s
     precedente = next((d for d in Path(dossier_versions).glob("*") if installee and meme_commit(d.name, installee)), None) \
         if Path(dossier_versions).is_dir() else None
 
-    etat({"etape": "telechargement", "version": commit[:12]})
+    etat({"etape": "telechargement", "version": commit[:12], "numero": numero_distant(config, commit, lancer, attendre)})
     depot = cloner(config, commit, dossier_versions, lancer, attendre)
 
     # Rien du clone ne s'exécute avant cette vérification, pas même ses tests.
@@ -424,16 +478,17 @@ def _appliquer(config, utilisateur, dossier_versions, etat, lancer, installee, s
         etat({"etape": "echec", "raison": "signature", "detail": verifie, "version": depot.name[:12]})
         return 1
 
-    etat({"etape": "tests", "version": depot.name[:12], "signataire": signataire})
+    numero = numero_du_depot(depot)
+    etat({"etape": "tests", "version": depot.name[:12], "numero": numero, "signataire": signataire})
     reussi, sortie = tests(depot, lancer)
     if not reussi:
         etat({"etape": "echec", "raison": "tests", "detail": sortie, "version": depot.name[:12]})
         return 1
 
-    etat({"etape": "installation", "version": depot.name[:12], "signataire": signataire})
+    etat({"etape": "installation", "version": depot.name[:12], "numero": numero, "signataire": signataire})
     reussi, sortie = installer(depot, utilisateur, lancer, verifie=verifie)
     if reussi:
-        etat({"etape": "terminee", "version": depot.name[:12], "signataire": signataire})
+        etat({"etape": "terminee", "version": depot.name[:12], "numero": numero, "signataire": signataire})
         menage(dossier_versions, {depot.name, precedente.name if precedente else ""})
         return 0
 
@@ -463,7 +518,8 @@ def main(arguments, config=CONFIG, ecrire=ecrire_etat):
         return 3
     if not appliquer_demande:
         try:
-            print(json.dumps(verifier(lue, version_installee())))
+            numero, installee = lire_version()
+            print(json.dumps(verifier(lue, installee, numero=numero)))
             return 0
         except Exception as erreur:  # classée, jamais une trace brute à la place du JSON attendu
             raison, detail = classer_erreur(erreur)
