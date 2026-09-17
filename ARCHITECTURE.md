@@ -272,7 +272,7 @@ prouvera.
 ```bash
 cle/construire-cle.sh
 cd vm && rm -f disque-hub-cle.qcow2
-./essayer-cle.sh --installer --sans-reseau   # VNC 127.0.0.1:5901, Entrée sur « Installer le HUB »
+./essayer-cle.sh --installer --sans-reseau   # VNC 127.0.0.1:5901, descendre sur « Installer le HUB » (dernière entrée), Entrée
 # … la VM s'éteint seule en fin d'installation
 ./essayer-cle.sh --sans-reseau               # premier démarrage, câble toujours débranché
 ./cable.py branche                           # une fois l'attente du réseau vue à l'écran

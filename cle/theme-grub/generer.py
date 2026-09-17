@@ -15,6 +15,8 @@ from PIL import Image, ImageDraw, ImageFilter
 LARGEUR, HAUTEUR = 1920, 1080
 ENCRE = (6, 7, 12)
 TURQUOISE = (62, 224, 208)
+# Même ambre que l'avertissement de theme.txt : la pastille et le texte disent la même chose.
+AMBRE = (240, 178, 94)
 
 
 def fond():
@@ -64,6 +66,23 @@ def main():
     halo = logo.filter(ImageFilter.GaussianBlur(14))
     halo.alpha_composite(logo)
     halo.save(dossier / "logo.png")
+    pastille_efface(dossier)
+
+
+def pastille_efface(dossier, cote=32):
+    """icons/efface.png : GRUB la pose devant les entrées de classe « efface » (grub.cfg).
+    Dessinée en 32 px, la taille de icon_width dans theme.txt, pour que GRUB n'ait pas à
+    la rééchantillonner ; tracée quatre fois plus grande puis réduite pour lisser le bord."""
+    grand = cote * 4
+    image = Image.new("RGBA", (grand, grand), (0, 0, 0, 0))
+    dessin = ImageDraw.Draw(image)
+    dessin.ellipse((0, 0, grand - 1, grand - 1), fill=(*AMBRE, 255))
+    # Le point d'exclamation en formes, pas en texte : generer.py tourne sans police garantie.
+    m = grand / 2
+    dessin.rounded_rectangle((m - grand * .07, grand * .18, m + grand * .07, grand * .62), grand * .07, fill=(*ENCRE, 255))
+    dessin.ellipse((m - grand * .085, grand * .70, m + grand * .085, grand * .87), fill=(*ENCRE, 255))
+    (dossier / "icons").mkdir(exist_ok=True)
+    image.resize((cote, cote), Image.LANCZOS).save(dossier / "icons" / "efface.png")
 
 
 if __name__ == "__main__":
