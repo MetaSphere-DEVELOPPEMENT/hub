@@ -68,16 +68,28 @@ class Lectures(unittest.TestCase):
             f.write_text(json.dumps({"source": "git@github.com:moi/hub.git"}))
             self.assertEqual(maj.lire_config(f), {"source": "git@github.com:moi/hub.git", "branche": "main"})
 
-    def test_modele_du_depot_ne_contient_aucune_cle(self):
-        # Le modèle livré est vide : tant que le propriétaire n'y a pas mis sa clé, un HUB
-        # installé avec refuse les mises à jour au lieu de faire confiance à n'importe qui.
+    def test_signataires_du_depot_bien_formes(self):
+        # Le fichier du dépôt porte la clé publique du propriétaire. Ce test exigeait
+        # autrefois un modèle vide : il a échoué sur le HUB (17/09/2026) dès que la vraie
+        # clé y a été ajoutée, et a bloqué la mise à jour. Ce qui compte, c'est que chaque
+        # ligne soit une entrée allowed_signers que git sait lire, et qu'aucune ne soit
+        # en double ; qu'il soit vide ou non, sa lecture doit rester cohérente.
         modele = chemin.parent / "signataires-autorises"
         self.assertTrue(modele.is_file())
+        entrees = [l.strip() for l in modele.read_text(encoding="utf-8").splitlines()
+                   if l.strip() and not l.lstrip().startswith("#")]
+        self.assertEqual(len(entrees), len(set(entrees)), "entrée en double")
+        for entree in entrees:
+            champs = entree.split()
+            self.assertGreaterEqual(len(champs), 4, entree)
+            self.assertEqual(champs[1], 'namespaces="git"', entree)
+            self.assertRegex(champs[2], r"^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp\d+|sk-ssh-ed25519@openssh\.com)$", entree)
+            self.assertRegex(champs[3], r"^[A-Za-z0-9+/]+=*$", entree)
         with tempfile.TemporaryDirectory() as d:
             copie = Path(d) / "s"
             shutil.copy(modele, copie)
             os.chmod(copie, 0o644)
-            self.assertEqual(maj.signataires_autorises(copie)[0], False)
+            self.assertEqual(maj.signataires_autorises(copie)[0], bool(entrees))
 
     def test_propriete_donnee_sans_suivre_les_liens(self):
         with tempfile.TemporaryDirectory() as d:
