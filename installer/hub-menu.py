@@ -1264,6 +1264,197 @@ def ligne_rendu(infos):
     ordre = ("webkit", "acceleration", "gsk", "ecran", "frequence", "echelle", "environnement")
     return "hub-menu : rendu " + " ; ".join(f"{k}={infos[k]}" for k in ordre if infos.get(k) not in (None, ""))
 
+
+# ── Affichage : les modes de l'écran ──────────────────────────────────────
+# POURQUOI gdctl. Mesuré sur la TV le 17/09/2026 : l'EDID ne propose aucun 3840×2160 à
+# 60 Hz (lien HDMI 1.4), le 4K plafonne à 30 Hz, et le compteur du menu relève 29,4
+# images/s en 4K contre 60,0 en 1920×1080. Il faut donc pouvoir changer de mode depuis
+# le canapé. Ubuntu 26.04 est en Wayland seul : ni xrandr, ni gnome-randr, ni wlr-randr
+# sur le HUB. gdctl (livré avec mutter) parle à org.gnome.Mutter.DisplayConfig, la même
+# interface que le panneau « Écrans » de GNOME.
+#
+# POURQUOI --persistent, ET PAS LE MODE PROVISOIRE DE MUTTER. Sans --persistent, mutter
+# revient seul au mode précédent si personne n'appelle ConfirmConfiguration : c'est ce
+# que fait la fenêtre « Conserver ces réglages ? » de GNOME Shell, que la session
+# kiosque n'a pas et que gdctl n'appelle jamais. Un mode qui marche serait donc repris
+# au bout d'une vingtaine de secondes. On applique donc pour de bon, et le filet est
+# tenu ici : sans « Garder » de la page, hub-menu réapplique le mode d'avant.
+GDCTL = "gdctl"
+# Le nom d'un mode chez mutter, et la seule forme que gdctl recevra jamais d'ici.
+NOM_MODE = re.compile(r"(\d{3,5})x(\d{3,5})@(\d+(?:\.\d+)?)")
+NOM_SORTIE = re.compile(r"[A-Za-z0-9._-]{1,32}")
+# 15 s pour répondre « Garder ce mode ? », comme la page l'affiche ; hub-menu attend un
+# peu plus longtemps, pour que la page revienne d'elle-même quand elle le peut encore.
+FILET_AFFICHAGE_S = 15
+FILET_AFFICHAGE_MARGE_S = 4
+# 50 Hz et au-delà : le mouvement est fluide. En dessous (30 Hz sur cette TV), il saccade.
+AFFICHAGE_FLUIDE_HZ = 50
+# Une TV annonce quarante modes, dont du 720×480 : sous 1280 de large, rien à proposer.
+AFFICHAGE_LARGEUR_MIN = 1280
+AFFICHAGE_MODES_MAX = 8
+
+
+def _arbre_gdctl(sortie):
+    """(niveau, texte) pour chaque ligne de `gdctl show`, qui dessine un arbre : « ├──x »
+    au niveau 0, « │  ├──y » au niveau 1, quatre colonnes par niveau. Les lignes sans
+    branche (« Monitors: ») sont au niveau -1."""
+    for brute in sortie.splitlines():
+        prefixe, branche, donnee = brute.partition("──")
+        if not branche:
+            yield -1, brute.strip()
+        else:
+            yield (0 if len(prefixe) <= 1 else len(prefixe) // 4), donnee.strip()
+
+
+def lire_modes(sortie):
+    """Les écrans et leurs modes, tels que `gdctl show --verbose` les décrit. Une sortie
+    inattendue (autre version, autre outil, message d'erreur) rend une liste vide plutôt
+    que d'inventer un mode."""
+    ecrans, ecran, mode, dans_modes = [], None, None, False
+    for niveau, texte in _arbre_gdctl(sortie):
+        if niveau == -1:
+            # Après les écrans vient la disposition : rien n'y décrit de mode.
+            if texte.startswith("Logical monitors"):
+                break
+        elif niveau == 0:
+            mots = texte.split(None, 1)
+            ecran, mode, dans_modes = None, None, False
+            if len(mots) == 2 and mots[0] == "Monitor" and NOM_SORTIE.fullmatch(mots[1].split()[0]):
+                nom = texte.partition("(")[2].rpartition(")")[0] or None
+                ecran = {"connecteur": mots[1].split()[0], "nom": nom, "modes": []}
+                ecrans.append(ecran)
+        elif niveau == 1 and ecran:
+            dans_modes, mode = texte.startswith("Modes"), None
+        elif niveau == 2 and ecran and dans_modes:
+            trouve = NOM_MODE.fullmatch(texte)
+            mode = None
+            if trouve:
+                mode = {
+                    "nom": texte, "largeur": int(trouve[1]), "hauteur": int(trouve[2]),
+                    "frequence": float(trouve[3]), "courant": False, "prefere": False,
+                }
+                ecran["modes"].append(mode)
+        elif niveau == 4 and mode:
+            # « is-current ⇒  yes », deux niveaux sous le mode (Properties, puis la clé).
+            cle, _, valeur = texte.partition("⇒")
+            if valeur.strip() == "yes" and cle.strip() in ("is-current", "is-preferred"):
+                mode["courant" if cle.strip() == "is-current" else "prefere"] = True
+    return ecrans
+
+
+def modes_confortables(modes, maximum=AFFICHAGE_MODES_MAX):
+    """Du plus confortable au moins bon : d'abord ce qui est fluide (50 Hz et plus), et
+    dans chaque groupe la plus grande définition. Sur cette TV, 1920×1080 à 60 Hz passe
+    donc devant 3840×2160 à 30 Hz. Sans doublon, et le mode actif toujours présent."""
+    ordre = sorted(modes, key=lambda m: (
+        m["frequence"] < AFFICHAGE_FLUIDE_HZ, -m["largeur"] * m["hauteur"],
+        -round(m["frequence"]), not m["courant"], -m["frequence"]))
+    retenus, vus = [], set()
+    for m in ordre:
+        cle = (m["largeur"], m["hauteur"], round(m["frequence"]))
+        if cle in vus or (m["largeur"] < AFFICHAGE_LARGEUR_MIN and not m["courant"]):
+            continue
+        vus.add(cle)
+        retenus.append(m)
+    garde = retenus[:maximum]
+    if any(m["courant"] for m in retenus) and not any(m["courant"] for m in garde):
+        garde = garde[:maximum - 1] + [m for m in retenus if m["courant"]][:1]
+    return garde
+
+
+def _sans_gdctl(erreur=None):
+    return {"gdctl": False, "connecteur": None, "nom": None, "ecrans": 0, "modes": [], "erreur": erreur}
+
+
+def modes_ecran(executer=subprocess.run, trouver=shutil.which):
+    """Ce que l'écran propose, lu par gdctl. Sans gdctl, ou si sa sortie n'est pas celle
+    qu'on connaît, la section reste en lecture seule plutôt que de deviner."""
+    if not trouver(GDCTL):
+        return _sans_gdctl()
+    try:
+        r = executer([GDCTL, "show", "--verbose"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError) as erreur:
+        return {**_sans_gdctl(str(erreur)[:200]), "gdctl": True}
+    if r.returncode != 0:
+        detail = (r.stderr or r.stdout or "").strip()[:200] or f"gdctl show : code {r.returncode}"
+        return {**_sans_gdctl(detail), "gdctl": True}
+    ecrans = [e for e in lire_modes(r.stdout) if e["modes"]]
+    if not ecrans:
+        return {**_sans_gdctl("sortie de gdctl non comprise"), "gdctl": True}
+    # Plusieurs écrans : on ne sait pas refaire leur disposition (« gdctl set » la réécrit
+    # en entier), donc on montre sans proposer de changer. Le HUB n'a que la TV.
+    ecran = next((e for e in ecrans if any(m["courant"] for m in e["modes"])), ecrans[0])
+    return {"gdctl": True, "connecteur": ecran["connecteur"], "nom": ecran["nom"],
+            "ecrans": len(ecrans), "modes": ecran["modes"], "erreur": None}
+
+
+def appliquer_mode(connecteur, mode, executer=subprocess.run):
+    """Applique un mode et l'enregistre (monitors.xml). Rend (True, None) ou (False, raison)."""
+    if not (isinstance(mode, str) and NOM_MODE.fullmatch(mode)) or not (isinstance(connecteur, str) and NOM_SORTIE.fullmatch(connecteur)):
+        return False, "mode ou sortie hors format"
+    commande = [GDCTL, "set", "--persistent", "--logical-monitor", "--primary",
+                "--monitor", connecteur, "--mode", mode]
+    try:
+        r = executer(commande, capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError) as erreur:
+        return False, str(erreur)[:200]
+    if r.returncode != 0:
+        return False, (r.stderr or r.stdout or "").strip()[:200] or f"gdctl set : code {r.returncode}"
+    return True, None
+
+
+def etat_affichage(executer=subprocess.run, trouver=shutil.which):
+    """Ce que la section Affichage montre : les modes proposés, le mode actif marqué."""
+    lu = modes_ecran(executer=executer, trouver=trouver)
+    return {**lu, "modes": modes_confortables(lu["modes"]), "filet": FILET_AFFICHAGE_S}
+
+
+def changer_mode(mode, executer=subprocess.run, trouver=shutil.which):
+    """Applique le mode demandé par la page. Son nom est toujours comparé à ce que gdctl
+    vient de lire : la page choisit dans une liste, elle ne dicte jamais une commande."""
+    lu = modes_ecran(executer=executer, trouver=trouver)
+    etat = {**lu, "modes": modes_confortables(lu["modes"]), "filet": FILET_AFFICHAGE_S}
+
+    def refus(raison):
+        return {**etat, "applique": False, "raison": raison, "avant": None}
+
+    if not lu["gdctl"]:
+        return refus("absent")
+    if lu["erreur"]:
+        return refus("lecture")
+    if lu["ecrans"] > 1:
+        return refus("plusieurs")
+    if not any(m["nom"] == mode for m in lu["modes"]):
+        return refus("inconnu")
+    avant = next((m["nom"] for m in lu["modes"] if m["courant"]), None)
+    if mode == avant:
+        return {**etat, "applique": True, "raison": None, "avant": None}
+    ok, erreur = appliquer_mode(lu["connecteur"], mode, executer=executer)
+    if not ok:
+        return {**refus("echec"), "erreur": erreur}
+    apres = modes_ecran(executer=executer, trouver=trouver)
+    return {**apres, "modes": modes_confortables(apres["modes"]), "filet": FILET_AFFICHAGE_S,
+            "applique": True, "raison": None, "avant": avant}
+
+
+def mode_a_retablir(reglages, lu):
+    """« Rétablir au démarrage » : le mode que le propriétaire a gardé, s'il n'est pas
+    déjà actif et qu'il existe encore sur cet écran. Un mode gardé a forcément été vu
+    à l'écran (le filet l'exigeait) : le réappliquer ne peut pas noircir la TV."""
+    voulu = ((reglages or {}).get("systeme") or {}).get("affichage") or {}
+    if not isinstance(voulu, dict) or voulu.get("retablir") is not True:
+        return None
+    mode = voulu.get("mode")
+    if not isinstance(mode, str) or not lu.get("gdctl") or lu.get("erreur"):
+        return None
+    if voulu.get("connecteur") and voulu["connecteur"] != lu.get("connecteur"):
+        return None
+    modes = lu.get("modes") or []
+    if any(m["nom"] == mode and m["courant"] for m in modes):
+        return None
+    return mode if any(m["nom"] == mode for m in modes) else None
+
+
 # ── Mode ambiant seul, sur le bureau Ubuntu ───────────────────────────────
 # Sur le bureau, le menu est fermé : hub-veille-bureau (installer/veille) lance
 # « hub-menu --ambiant » après l'inactivité réglée. Cette fenêtre ne doit rien pouvoir
@@ -1345,6 +1536,8 @@ def lancer(arguments=None):
             self.proxy_nm = None
             # Processus de la vérification automatique, arrêté si un mode démarre.
             self.verif_auto = None
+            # {"connecteur", "avant", "minuterie"} tant que « Garder ce mode ? » est posé.
+            self.filet_affichage = None
             self.vue = None
             self.ecoute = None
 
@@ -1368,6 +1561,8 @@ def lancer(arguments=None):
             if self.vue:
                 # Une seconde : le temps que la fenêtre plein écran soit sur son moniteur.
                 GLib.timeout_add_seconds(1, self.journaliser_rendu)
+                if not self.ambiant:
+                    GLib.timeout_add_seconds(2, self.retablir_affichage)
 
         def journaliser_rendu(self):
             infos = {}
@@ -1388,10 +1583,71 @@ def lancer(arguments=None):
             print(ligne_rendu(infos), file=sys.stderr, flush=True)
             return False
 
+        def retablir_affichage(self):
+            """Le mode gardé par le propriétaire, réappliqué si la session ne l'a pas fait
+            (une TV rallumée après le HUB revient parfois à son mode par défaut). Hors du
+            fil graphique : gdctl passe par D-Bus et peut prendre une seconde."""
+            def travail():
+                try:
+                    lu = modes_ecran()
+                    mode = mode_a_retablir(charger_reglages(c), lu)
+                    if not mode:
+                        return
+                    ok, erreur = appliquer_mode(lu["connecteur"], mode)
+                    print(f"hub-menu : affichage rétabli en {mode}" if ok
+                          else f"hub-menu : affichage non rétabli ({erreur})", file=sys.stderr, flush=True)
+                except Exception as erreur:  # un mode non rétabli ne doit jamais retenir le menu
+                    print(f"hub-menu : affichage non rétabli ({erreur})", file=sys.stderr)
+            threading.Thread(target=travail, daemon=True).start()
+            return False
+
+        # Affichage ────────────────────────────────────────────────────────
+        def changer_affichage(self, mode):
+            resultat = changer_mode(mode)
+            if resultat.get("applique") and resultat.get("avant"):
+                GLib.idle_add(self.armer_filet_affichage, resultat["connecteur"], resultat["avant"])
+            return {"type": "affichage", **resultat}
+
+        def armer_filet_affichage(self, connecteur, avant):
+            """Le vrai filet : si la TV n'affiche rien du nouveau mode, personne ne peut
+            répondre « Garder », et le mode d'avant revient tout seul. La page compte
+            aussi de son côté, plus tôt ; hub-menu la double si elle ne répond plus."""
+            self.desarmer_filet_affichage()
+            self.filet_affichage = {
+                "connecteur": connecteur, "avant": avant,
+                "minuterie": GLib.timeout_add_seconds(FILET_AFFICHAGE_S + FILET_AFFICHAGE_MARGE_S, self.filet_ecoule),
+            }
+            return False
+
+        def desarmer_filet_affichage(self):
+            if self.filet_affichage:
+                GLib.source_remove(self.filet_affichage["minuterie"])
+                self.filet_affichage = None
+
+        def filet_ecoule(self):
+            filet = self.filet_affichage
+            self.filet_affichage = None
+            if filet:
+                print(f"hub-menu : affichage non confirmé, retour en {filet['avant']}", file=sys.stderr, flush=True)
+                self.en_fond(self.revenir_affichage, filet["connecteur"], filet["avant"])
+            return False
+
+        def revenir_affichage(self, connecteur, avant):
+            ok, erreur = appliquer_mode(connecteur, avant)
+            etat = etat_affichage()
+            return {"type": "affichage", **etat, "applique": False, "raison": "revenu" if ok else "echec",
+                    "erreur": etat["erreur"] or (None if ok else erreur), "avant": None}
+
         def do_shutdown(self):
             # Le menu se ferme (un mode démarre) : plus d'écran d'appairage à la TV, et pas
             # de vérification de mise à jour qui continuerait pendant le film.
             self.arreter_verif_auto()
+            # Un mode jamais confirmé ne doit pas survivre au menu : l'écran est peut-être
+            # noir, et la touche qui a lancé Kodi a été tapée à l'aveugle.
+            if self.filet_affichage:
+                filet = self.filet_affichage
+                self.desarmer_filet_affichage()
+                appliquer_mode(filet["connecteur"], filet["avant"])
             fermer_appairage(c)
             if self.ecoute:
                 self.ecoute.close()
@@ -1775,6 +2031,23 @@ def lancer(arguments=None):
                 self.en_fond(armer)
             elif genre == "allumage-etat":
                 self.en_fond(lambda: {"type": "allumage", **etat_allumage()})
+            elif genre == "affichage-etat":
+                self.en_fond(lambda: {"type": "affichage", **etat_affichage()})
+            elif genre == "affichage-appliquer":
+                # Le nom n'est pas vérifié ici : changer_mode le compare aux modes que
+                # gdctl vient de lire, et refuse tout ce qui n'y est pas.
+                mode = message.get("mode")
+                if isinstance(mode, str) and len(mode) <= 32:
+                    self.en_fond(self.changer_affichage, mode)
+            elif genre == "affichage-garder":
+                # Vu à l'écran : plus de retour en arrière. La page a enregistré le mode
+                # dans les réglages ; monitors.xml le porte déjà (--persistent).
+                self.desarmer_filet_affichage()
+            elif genre == "affichage-revenir":
+                filet = self.filet_affichage
+                self.desarmer_filet_affichage()
+                if filet:
+                    self.en_fond(self.revenir_affichage, filet["connecteur"], filet["avant"])
 
         # La voix ──────────────────────────────────────────────────────────
         def ecouter_voix(self):

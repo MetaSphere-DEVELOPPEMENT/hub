@@ -85,11 +85,16 @@ fiche consultée. À lire dans le mode d'emploi.
 
 ### Ce que ça implique
 
-1. **4K à 60 Hz par l'HDMI du M720q : probablement non.** Le M720q a 2 DisplayPort
-   1.2 (4K 60 Hz) et 1 HDMI dont la version n'est pas publiée ; sur UHD 630, l'HDMI
-   native est en général en 1.4, soit 4K **30 Hz**. **À mesurer au branchement**
-   (`audit.sh` relève les modes offerts par la TV). Si c'est confirmé : adaptateur
-   **actif DisplayPort → HDMI 2.0**.
+1. **4K à 60 Hz par l'HDMI du M720q : non. Confirmé le 17/09/2026.** Le M720q a
+   2 DisplayPort 1.2 (4K 60 Hz) et 1 HDMI dont la version n'est pas publiée ; sur
+   UHD 630, l'HDMI native est en général en 1.4, soit 4K **30 Hz**. Branché en HDMI-2,
+   l'EDID de la TV ne propose **aucun** 3840×2160 à 60 Hz, et le compteur d'images du
+   menu relève 29,4 i/s en 4K contre 60,0 en 1920×1080 à 60 Hz. Remèdes, dans l'ordre :
+   un câble HDMI 2.0 (ou mieux) **avec** le « Format amélioré » de l'entrée HDMI dans
+   les réglages de la TV ; ou un adaptateur **actif DisplayPort → HDMI 2.0**. En
+   attendant, Réglages → **Affichage** (installer/menu/README.md, « Le mode de
+   l'écran ») laisse choisir 1920×1080 à 60 Hz depuis le canapé : le menu redevient
+   fluide, au prix de la netteté du texte.
 2. **La télécommande Sony ne pilote rien sans adaptateur USB-CEC** : le M720q n'a
    pas de CEC (contrainte n° 3).
 3. **Kodi : ajustement automatique de la fréquence** à activer. Dalle 50 Hz, TV

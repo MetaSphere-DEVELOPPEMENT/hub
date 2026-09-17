@@ -592,5 +592,186 @@ class Fluidite(AvecDossier):
                          "hub-menu : rendu webkit=2.52.6 ; acceleration=always ; ecran=3840x2160 ; frequence=30.00 Hz")
 
 
+# Sortie de `gdctl show --verbose` sur la TV du salon : un seul écran, un 4K plafonné à
+# 30 Hz par le lien HDMI 1.4, et des modes 60 Hz en 1080p. L'arbre est celui que dessine
+# gdctl (tools/gdctl de mutter) : quatre colonnes par niveau.
+GDCTL_TV = """\
+Monitors:
+└──Monitor HDMI-2 (SONY TV)
+   ├──Vendor: SNY
+   ├──Product: SONY TV
+   ├──Serial: 0x01010101
+   ├──Modes (5)
+   │   ├──3840x2160@30.000
+   │   │   ├──Dimension: 3840x2160
+   │   │   ├──Refresh rate: 30.000
+   │   │   ├──Preferred scale: 2.0
+   │   │   ├──Supported scales: [1.0, 2.0]
+   │   │   └──Properties: (2)
+   │   │       ├──is-current ⇒  yes
+   │   │       └──is-preferred ⇒  yes
+   │   ├──1920x1080@60.000
+   │   │   ├──Dimension: 1920x1080
+   │   │   ├──Refresh rate: 60.000
+   │   │   ├──Preferred scale: 1.0
+   │   │   ├──Supported scales: [1.0]
+   │   │   └──Properties: (0)
+   │   ├──1920x1080@50.000
+   │   │   ├──Dimension: 1920x1080
+   │   │   ├──Refresh rate: 50.000
+   │   │   ├──Preferred scale: 1.0
+   │   │   ├──Supported scales: [1.0]
+   │   │   └──Properties: (0)
+   │   ├──1280x720@60.000
+   │   │   ├──Dimension: 1280x720
+   │   │   ├──Refresh rate: 60.000
+   │   │   ├──Preferred scale: 1.0
+   │   │   ├──Supported scales: [1.0]
+   │   │   └──Properties: (0)
+   │   └──720x480@60.000
+   │       ├──Dimension: 720x480
+   │       ├──Refresh rate: 60.000
+   │       ├──Preferred scale: 1.0
+   │       ├──Supported scales: [1.0]
+   │       └──Properties: (0)
+   ├──Preferences
+   │   └──Backlight: None
+   └──Properties: (2)
+       ├──display-name ⇒  SONY TV
+       └──is-builtin ⇒  no
+
+Logical monitors:
+└──Logical monitor #1
+   ├──Position: (0, 0)
+   ├──Scale: 2.0
+   ├──Transform: normal
+   ├──Primary: yes
+   └──Monitors: (1)
+       └──HDMI-2 (SONY TV)
+"""
+
+
+class Affichage(unittest.TestCase):
+    def sortie(self, texte="", code=0):
+        return lambda *a, **k: SimpleNamespace(returncode=code, stdout=texte, stderr="")
+
+    def test_modes_et_mode_actif_lus_dans_la_sortie_de_gdctl(self):
+        ecrans = hub_menu.lire_modes(GDCTL_TV)
+        self.assertEqual(len(ecrans), 1)
+        self.assertEqual(ecrans[0]["connecteur"], "HDMI-2")
+        self.assertEqual(ecrans[0]["nom"], "SONY TV")
+        self.assertEqual([m["nom"] for m in ecrans[0]["modes"]],
+                         ["3840x2160@30.000", "1920x1080@60.000", "1920x1080@50.000", "1280x720@60.000", "720x480@60.000"])
+        actif = ecrans[0]["modes"][0]
+        self.assertEqual((actif["largeur"], actif["hauteur"], actif["frequence"]), (3840, 2160, 30.0))
+        self.assertTrue(actif["courant"] and actif["prefere"])
+        self.assertFalse(any(m["courant"] for m in ecrans[0]["modes"][1:]))
+
+    def test_une_sortie_inattendue_ne_donne_aucun_mode(self):
+        for texte in ("", "gdctl: command not found", "Monitors:\n(rien)", "3840x2160@30.000", GDCTL_TV.replace("──", " ")):
+            self.assertEqual(hub_menu.lire_modes(texte), [], texte[:30])
+
+    def test_les_modes_vont_du_plus_confortable_au_moins_bon(self):
+        modes = hub_menu.lire_modes(GDCTL_TV)[0]["modes"]
+        # 60 Hz d'abord, puis la définition ; le 4K à 30 Hz ferme la marche, le 720×480 sort.
+        self.assertEqual([m["nom"] for m in hub_menu.modes_confortables(modes)],
+                         ["1920x1080@60.000", "1920x1080@50.000", "1280x720@60.000", "3840x2160@30.000"])
+
+    def test_les_frequences_presque_egales_ne_font_pas_doublon(self):
+        modes = [
+            {"nom": "1920x1080@60.000", "largeur": 1920, "hauteur": 1080, "frequence": 60.0, "courant": False, "prefere": True},
+            {"nom": "1920x1080@59.940", "largeur": 1920, "hauteur": 1080, "frequence": 59.94, "courant": True, "prefere": False},
+        ]
+        # Le mode actif gagne le doublon : il doit rester marqué dans la liste affichée.
+        retenus = hub_menu.modes_confortables(modes)
+        self.assertEqual([m["nom"] for m in retenus], ["1920x1080@59.940"])
+        self.assertTrue(retenus[0]["courant"])
+
+    def test_le_mode_actif_est_toujours_propose(self):
+        # Le moins bon des dix, mais c'est celui qui est actif : il prend la dernière place.
+        modes = [{"nom": f"{1920 + i}x1080@60.000", "largeur": 1920 + i, "hauteur": 1080,
+                  "frequence": 60.0, "courant": i == 0, "prefere": False} for i in range(10)]
+        retenus = hub_menu.modes_confortables(modes, maximum=3)
+        self.assertEqual([m["nom"] for m in retenus],
+                         ["1929x1080@60.000", "1928x1080@60.000", "1920x1080@60.000"])
+
+    def test_sans_gdctl_la_section_reste_en_lecture_seule(self):
+        etat = hub_menu.etat_affichage(executer=self.sortie(GDCTL_TV), trouver=lambda _: None)
+        self.assertEqual(etat["gdctl"], False)
+        self.assertEqual(etat["modes"], [])
+        self.assertIsNone(etat["erreur"])
+        # Et rien ne s'applique, quoi que la page demande.
+        refus = hub_menu.changer_mode("1920x1080@60.000", executer=self.sortie(GDCTL_TV), trouver=lambda _: None)
+        self.assertEqual((refus["applique"], refus["raison"]), (False, "absent"))
+
+    def test_gdctl_en_echec_est_rapporte_sans_modes(self):
+        executer = lambda *a, **k: SimpleNamespace(returncode=1, stdout="", stderr="Could not connect to display config")
+        etat = hub_menu.etat_affichage(executer=executer, trouver=lambda _: "/usr/bin/gdctl")
+        self.assertTrue(etat["gdctl"])
+        self.assertEqual(etat["modes"], [])
+        self.assertIn("display config", etat["erreur"])
+
+    def test_applique_le_mode_choisi_et_l_enregistre(self):
+        appels = []
+
+        def executer(commande, **k):
+            appels.append(commande)
+            return SimpleNamespace(returncode=0, stdout=GDCTL_TV, stderr="")
+
+        r = hub_menu.changer_mode("1920x1080@60.000", executer=executer, trouver=lambda _: "/usr/bin/gdctl")
+        self.assertTrue(r["applique"])
+        self.assertEqual(r["avant"], "3840x2160@30.000")
+        self.assertIn(["gdctl", "set", "--persistent", "--logical-monitor", "--primary",
+                       "--monitor", "HDMI-2", "--mode", "1920x1080@60.000"], appels)
+
+    def test_refuse_une_valeur_qui_ne_vient_pas_de_la_liste(self):
+        appels = []
+
+        def executer(commande, **k):
+            appels.append(commande)
+            return SimpleNamespace(returncode=0, stdout=GDCTL_TV, stderr="")
+
+        for mauvais in ("1920x1080@60", "800x600@60.000", "; reboot", "1920x1080@60.000 --autre"):
+            r = hub_menu.changer_mode(mauvais, executer=executer, trouver=lambda _: "/usr/bin/gdctl")
+            self.assertEqual((r["applique"], r["raison"]), (False, "inconnu"), mauvais)
+        self.assertEqual([c for c in appels if "set" in c], [], "aucune application ne doit partir")
+        # Même en court-circuitant la liste, la commande refuse ce qui n'est pas un mode.
+        self.assertEqual(hub_menu.appliquer_mode("HDMI-2", "; reboot")[0], False)
+        self.assertEqual(hub_menu.appliquer_mode("HDMI-2 ; reboot", "1920x1080@60.000")[0], False)
+
+    def test_une_application_refusee_par_l_ecran_est_dite(self):
+        def executer(commande, **k):
+            if "set" in commande:
+                return SimpleNamespace(returncode=1, stdout="", stderr="No mode 1920x1080@60.000 available for HDMI-2")
+            return SimpleNamespace(returncode=0, stdout=GDCTL_TV, stderr="")
+
+        r = hub_menu.changer_mode("1920x1080@60.000", executer=executer, trouver=lambda _: "/usr/bin/gdctl")
+        self.assertEqual((r["applique"], r["raison"]), (False, "echec"))
+        self.assertIn("No mode", r["erreur"])
+
+    def test_gdctl_introuvable_a_l_execution_ne_plante_pas(self):
+        def executer(*a, **k):
+            raise OSError("[Errno 2] No such file or directory: 'gdctl'")
+
+        etat = hub_menu.etat_affichage(executer=executer, trouver=lambda _: "/usr/bin/gdctl")
+        self.assertEqual(etat["modes"], [])
+        self.assertIn("No such file", etat["erreur"])
+
+    def test_mode_a_retablir_au_demarrage(self):
+        lu = hub_menu.modes_ecran(executer=self.sortie(GDCTL_TV), trouver=lambda _: "/usr/bin/gdctl")
+        garde = {"systeme": {"affichage": {"mode": "1920x1080@60.000", "connecteur": "HDMI-2", "retablir": True}}}
+        self.assertEqual(hub_menu.mode_a_retablir(garde, lu), "1920x1080@60.000")
+        # Déjà actif, refusé, sur un autre écran, inconnu de l'écran, ou rien de gardé.
+        for reglages in (
+            {"systeme": {"affichage": {"mode": "3840x2160@30.000", "retablir": True}}},
+            {"systeme": {"affichage": {"mode": "1920x1080@60.000", "retablir": False}}},
+            {"systeme": {"affichage": {"mode": "1920x1080@60.000", "connecteur": "DP-1", "retablir": True}}},
+            {"systeme": {"affichage": {"mode": "2560x1440@60.000", "retablir": True}}},
+            {"systeme": {}}, {}, None,
+        ):
+            self.assertIsNone(hub_menu.mode_a_retablir(reglages, lu), reglages)
+        # Sans gdctl, rien à rétablir.
+        self.assertIsNone(hub_menu.mode_a_retablir(garde, hub_menu.modes_ecran(trouver=lambda _: None)))
+
 if __name__ == "__main__":
     unittest.main()
