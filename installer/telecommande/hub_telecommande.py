@@ -113,6 +113,17 @@ TAILLE_MAX_NOM = 40
 # Réécrire le fichier des jetons à chaque appui userait le disque pour rien : la date
 # de dernier usage ne sert qu'à reconnaître un vieux téléphone à révoquer.
 PRECISION_VU_S = 3600
+# Un téléphone jamais revu depuis six mois n'est celui de personne : il part au ménage,
+# plutôt que d'allonger la liste pour toujours. Six mois, parce qu'un téléphone de
+# vacances qu'on ressort l'été suivant doit encore s'y retrouver.
+OUBLI_TELEPHONE_S = 180 * 24 * 3600
+# Et jamais plus que ceci : au-delà, le moins récemment vu part. Une famille et ses
+# invités tiennent largement ; une liste qui déborde cache les vrais téléphones.
+TELEPHONES_MAX = 20
+# Un même téléphone tient deux jetons à la fois : celui de http://ip:8790 et celui de
+# https://nom:8791 (deux origines pour le navigateur, un seul appareil). Quatre laisse
+# la place à un favori resté sur l'ancien nom, sans faire une liste de jetons morts.
+EMPREINTES_PAR_TELEPHONE = 4
 
 OK, MAUVAIS, TROP, FERME = "ok", "mauvais", "trop", "ferme"
 
@@ -409,12 +420,45 @@ def _empreinte(jeton):
     return hashlib.sha256(jeton.encode("utf-8")).hexdigest()
 
 
+def appareil_propre(valeur):
+    """L'identifiant d'appareil présenté par le téléphone, ou None s'il n'a pas la
+    forme attendue. Ce n'est PAS une preuve d'identité : c'est un secret de 128 bits
+    tiré par le HUB puis rendu au téléphone, qui le range à côté de son jeton. Il sert
+    seulement à reconnaître « le même téléphone » quand celui-ci a perdu son jeton et
+    retape le code de la TV ; rien ne l'accepte sans cette preuve-là."""
+    return valeur if isinstance(valeur, str) and re.fullmatch(r"[0-9a-f]{32}", valeur) else None
+
+
+def _entree_lue(t):
+    """Une ligne du fichier, normalisée, ou None si elle n'ouvre rien.
+
+    Les fichiers d'avant le 18/09/2026 portaient une empreinte unique (« empreinte »)
+    et pas d'appareil : ils continuent de marcher, le téléphone garde son entrée."""
+    if not isinstance(t, dict) or not isinstance(t.get("id"), str) or not t["id"]:
+        return None
+    empreintes = t.get("empreintes")
+    if not isinstance(empreintes, list):
+        empreintes = [t.get("empreinte")]
+    empreintes = [e for e in empreintes if isinstance(e, str) and e][:EMPREINTES_PAR_TELEPHONE]
+    if not empreintes:
+        return None
+    return {"id": t["id"], "nom": t.get("nom"), "appareil": appareil_propre(t.get("appareil")),
+            "cree": t.get("cree"), "vu": t.get("vu"), "empreintes": empreintes}
+
+
 class Jetons:
     """Les téléphones appairés, relus dès que le fichier change.
 
     Relire à chaque vérification (un stat, rien de plus s'il n'a pas bougé) rend la
     révocation immédiate : `--revoquer` écrit le fichier, le service en cours le voit
     à la requête suivante, sans redémarrage.
+
+    UNE ENTRÉE PAR TÉLÉPHONE, PAS PAR APPAIRAGE. Ré-appairer le même téléphone
+    renouvelle son secret dans son entrée (même identifiant, même date d'appairage) au
+    lieu d'en ajouter une : sinon un téléphone qu'on relie trois fois compte trois fois
+    et remplit la liste. Le « même téléphone » n'est jamais cru sur parole : c'est
+    celui qui présente son jeton précédent, ou celui dont l'identifiant d'appareil
+    accompagne un code juste lu sur la TV (voir `creer`).
     """
 
     def __init__(self, chemin, horloge=time.time):
@@ -444,9 +488,7 @@ class Jetons:
             return self._liste
         try:
             donnees = json.loads(self.chemin.read_text(encoding="utf-8"))
-            liste = [t for t in donnees.get("telephones", [])
-                     if isinstance(t, dict) and isinstance(t.get("empreinte"), str)
-                     and isinstance(t.get("id"), str)]
+            liste = [e for e in (_entree_lue(t) for t in donnees.get("telephones", [])) if e]
         except (OSError, ValueError, AttributeError):
             # Fichier abîmé : personne n'entre. Ré-appairer vaut mieux que deviner.
             journal.warning("%s illisible : aucun téléphone reconnu", self.chemin)
@@ -459,17 +501,74 @@ class Jetons:
         self._signature = None
         self._lire()
 
-    def creer(self, nom):
-        jeton = secrets.token_urlsafe(32)
-        ident = secrets.token_hex(3)
+    @staticmethod
+    def _oubliees(liste, maintenant):
+        """Ce qui reste après l'oubli des téléphones jamais revus depuis six mois."""
+        limite = maintenant - OUBLI_TELEPHONE_S * 1000
+        return [t for t in liste if int(t.get("vu") or t.get("cree") or 0) >= limite]
+
+    @staticmethod
+    def _plafonnee(liste, garder):
+        """Au-delà du plafond, le moins récemment vu part — jamais celui qu'on vient
+        de reconnaître, sinon appairer un téléphone pourrait l'effacer lui-même."""
+        trop = len(liste) - TELEPHONES_MAX
+        if trop <= 0:
+            return liste
+        ordre = sorted(liste, key=lambda t: (t is garder, int(t.get("vu") or 0)))
+        partent = {id(t) for t in ordre[:trop]}
+        return [t for t in liste if id(t) not in partent]
+
+    def _copie(self):
+        return [dict(t, empreintes=list(t["empreintes"])) for t in self._lire()]
+
+    def menage(self):
+        """Nombre de téléphones oubliés. Appelé au démarrage du service et à chaque
+        appairage : la liste ne grandit pas toute seule pour l'éternité."""
         maintenant = int(self.horloge() * 1000)
         with self._verrou, self._verrou_fichier():
             self._signature = None
-            liste = list(self._lire())
-            liste.append({"id": ident, "nom": nom, "empreinte": _empreinte(jeton),
-                          "cree": maintenant, "vu": maintenant})
-            self._ecrire(liste)
-        return ident, jeton
+            liste = self._copie()
+            reste = self._oubliees(liste, maintenant)
+            if len(reste) == len(liste):
+                return 0
+            self._ecrire(reste)
+            return len(liste) - len(reste)
+
+    def creer(self, nom, remplace=None, appareil=None, ajouter=False):
+        """(identifiant, jeton, appareil) du téléphone appairé.
+
+        `remplace` : l'identifiant d'une entrée dont l'appelant a la preuve — le jeton
+        précédent présenté à l'appairage, ou le ticket de transfert http → https.
+        `appareil` : l'identifiant rendu au téléphone au dernier appairage, qu'il
+        renvoie après avoir retapé le code de la TV. Dans les deux cas l'entrée est
+        renouvelée sur place (même identifiant, même date d'appairage) ; sinon, et
+        seulement sinon, une entrée de plus. `ajouter` garde les jetons déjà délivrés
+        à cet appareil au lieu de les remplacer : c'est le passage http → https, où le
+        téléphone garde les deux origines.
+        """
+        jeton = secrets.token_urlsafe(32)
+        maintenant = int(self.horloge() * 1000)
+        with self._verrou, self._verrou_fichier():
+            self._signature = None
+            liste = self._oubliees(self._copie(), maintenant)
+            entree = None
+            if remplace is not None:
+                entree = next((t for t in liste if t["id"] == remplace), None)
+            if entree is None and appareil:
+                entree = next((t for t in liste if t["appareil"] == appareil), None)
+            if entree is None:
+                entree = {"id": secrets.token_hex(3), "nom": nom,
+                          "appareil": appareil or secrets.token_hex(16),
+                          "cree": maintenant, "vu": maintenant, "empreintes": []}
+                liste.append(entree)
+            else:
+                entree["nom"] = nom
+                entree["vu"] = maintenant
+                entree["appareil"] = entree["appareil"] or appareil or secrets.token_hex(16)
+            gardees = entree["empreintes"] if ajouter else []
+            entree["empreintes"] = (gardees + [_empreinte(jeton)])[-EMPREINTES_PAR_TELEPHONE:]
+            self._ecrire(self._plafonnee(liste, entree))
+        return entree["id"], jeton, entree["appareil"]
 
     def valide(self, jeton):
         """Identifiant du téléphone, ou None."""
@@ -479,7 +578,7 @@ class Jetons:
         with self._verrou:
             trouve = None
             for t in self._lire():
-                if hmac.compare_digest(t["empreinte"], empreinte):
+                if any(hmac.compare_digest(e, empreinte) for e in t["empreintes"]):
                     trouve = t
             if trouve is None:
                 return None
@@ -1321,30 +1420,41 @@ class Service:
         self.hotes_admis = frozenset(hotes)
         self.ecrire_etat()
 
-    def creer_ticket(self):
+    def creer_ticket(self, ident=None):
+        """Le ticket porte l'identifiant du téléphone qui l'a demandé : c'est lui qui
+        prouve, sur l'origine https où le jeton http n'existe pas, que c'est le même
+        appareil — sans quoi le passage à la version sécurisée créerait un doublon."""
         ticket = secrets.token_urlsafe(32)
         maintenant = self.horloge()
         with self._verrou_tickets:
-            self._tickets = {k: v for k, v in self._tickets.items() if v > maintenant}
+            self._tickets = {k: v for k, v in self._tickets.items() if v[0] > maintenant}
             if len(self._tickets) >= 20:
                 return None
-            self._tickets[_empreinte(ticket)] = maintenant + DUREE_TICKET_S
+            self._tickets[_empreinte(ticket)] = (maintenant + DUREE_TICKET_S, ident)
         return ticket
 
     def consommer_ticket(self, ticket):
+        """{"id": identifiant du téléphone} si le ticket vaut encore, sinon None."""
         if not isinstance(ticket, str) or not 20 <= len(ticket) <= 200:
-            return False
+            return None
         with self._verrou_tickets:
-            expire = self._tickets.pop(_empreinte(ticket), None)
-        return expire is not None and expire > self.horloge()
+            trouve = self._tickets.pop(_empreinte(ticket), None)
+        if trouve is None or trouve[0] <= self.horloge():
+            return None
+        return {"id": trouve[1]}
 
     def ecrire_etat(self):
         """Ce que la TV affiche : URL (pour le QR code), code, expiration."""
         if not self.url:
             return
         empreinte = self.tls.empreinte() if self.tls and self.tls_pret else None
+        # La liste, et pas seulement le compte : Réglages → Télécommande montre quels
+        # téléphones sont reliés et depuis quand on les a vus, pour en retirer un.
+        # Rien de secret n'y passe (ni jeton, ni identifiant d'appareil).
+        telephones = sorted(self.jetons.lister(), key=lambda t: -(t.get("vu") or 0))
         etat = {"url": self.url, "code": self.appairage.code, "expire": self.appairage.expire_ms,
-                "telephones": len(self.jetons.lister()), "appairageLe": self.appairage_le,
+                "telephones": len(telephones), "listeTelephones": telephones,
+                "appairageLe": self.appairage_le,
                 # Le code ne vaut rien tant que ceci est faux : le menu le dit plutôt que
                 # de laisser taper un code refusé.
                 "appairageOuvert": self.fenetre.ouverte(),
@@ -1658,10 +1768,13 @@ def _gestionnaire(service):
             ip = self.client_address[0]
             if "transfert" in corps:
                 # Seulement sur l'origine https : c'est tout l'objet du transfert.
-                if not self.securise or not service.consommer_ticket(corps.get("transfert")):
+                porteur = service.consommer_ticket(corps.get("transfert")) if self.securise else None
+                if porteur is None:
                     journal.info("transfert refusé depuis %s", ip)
                     return self._json(403, {"erreur": "transfert"})
-                return self._delivrer(corps, ip)
+                # Le même téléphone, sur son autre origine : il garde son entrée ET son
+                # jeton http, qui reste valable pour le raccourci déjà posé.
+                return self._delivrer(corps, ip, remplace=porteur["id"], ajouter=True)
             resultat = service.appairage.essayer(ip, corps.get("code"))
             if resultat == FERME:
                 journal.info("appairage refusé depuis %s : écran d'appairage fermé", ip)
@@ -1674,15 +1787,22 @@ def _gestionnaire(service):
             if resultat != OK:
                 journal.info("appairage : code faux depuis %s", ip)
                 return self._json(403, {"erreur": "code"})
-            return self._delivrer(corps, ip)
+            # Le code de la TV vient d'être donné : ce qui suit ne sert plus qu'à savoir
+            # QUELLE entrée renouveler. Le jeton précédent passe avant l'identifiant
+            # d'appareil — un téléphone appairé ne renouvelle jamais que le sien.
+            return self._delivrer(corps, ip, remplace=self._jeton(),
+                                  appareil=appareil_propre(corps.get("appareil")))
 
-        def _delivrer(self, corps, ip):
+        def _delivrer(self, corps, ip, remplace=None, appareil=None, ajouter=False):
             nom = nom_du_telephone(corps.get("nom"), self.headers.get("User-Agent"))
-            ident, jeton = service.jetons.creer(nom)
+            connus = {t["id"] for t in service.jetons.lister()}
+            ident, jeton, appareil = service.jetons.creer(nom, remplace=remplace,
+                                                          appareil=appareil, ajouter=ajouter)
             service.appairage_le = int(service.horloge() * 1000)
             service.ecrire_etat()
-            journal.info("appairage : %s (%s) depuis %s", nom, ident, ip)
-            self._json(200, {"jeton": jeton, "id": ident, "nom": nom})
+            journal.info("appairage : %s (%s) depuis %s%s", nom, ident, ip,
+                         "" if ident not in connus else " — entrée renouvelée, pas de doublon")
+            self._json(200, {"jeton": jeton, "id": ident, "nom": nom, "appareil": appareil})
 
         def _dictee(self):
             if not self._jeton():
@@ -1713,14 +1833,15 @@ def _gestionnaire(service):
             self._json(200, resultat)
 
         def _transfert(self):
-            if not self._jeton():
+            ident = self._jeton()
+            if not ident:
                 return self._json(401, {"erreur": "jeton"})
             if self._corps() is None:
                 return
             origine = self._origine_https()
             if not origine:
                 return self._json(404, {"erreur": "https-desactive"})
-            ticket = service.creer_ticket()
+            ticket = service.creer_ticket(ident)
             if ticket is None:
                 return self._json(429, {"erreur": "trop"}, {"Retry-After": str(DUREE_TICKET_S)})
             self._json(200, {"url": f"{origine}/#transfert={ticket}"})
@@ -1962,6 +2083,11 @@ def main(argv=None):
         journal.warning("hub_voix_logique introuvable : seul le menu est pilotable "
                         "(ni Kodi ni le bureau quand le menu est fermé)")
     service = Service(chemins, tls=None if args.sans_https else AutoriteLocale(chemins["tls"]))
+    # Un HUB qui n'appaire plus rien ne ferait jamais le ménage : on l'ouvre ici aussi.
+    oublies = service.jetons.menage()
+    if oublies:
+        journal.info("%d téléphone(s) jamais revu(s) depuis %d jours : oublié(s)",
+                     oublies, OUBLI_TELEPHONE_S // 86400)
     arret = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: arret.set())
     signal.signal(signal.SIGINT, lambda *_: arret.set())

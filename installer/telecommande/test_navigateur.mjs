@@ -317,6 +317,82 @@ test("boutons conservés, et gaucher/droitier place Retour et le volume sous le 
   await page.context().close();
 });
 
+// ── Rester relié pendant un mode ────────────────────────────────────────────
+// Entrer dans un mode peut couper la télécommande quelques secondes (le mode Bureau
+// change de session, une mise à jour relance le service). Le jeton reste valable :
+// la page doit revenir toute seule, sans jamais renvoyer à l'écran d'appairage — un
+// code retapé, c'était un téléphone de plus dans la liste du HUB.
+test("coupure réseau : la page annonce la reconnexion, revient seule, sans redemander de code", async () => {
+  const page = await remoteAppairee();
+  const pastille = page.locator("#contexte");
+  await page.context().setOffline(true);
+  const avant = banc.menu().length;
+  await page.locator("#rangee-retour [data-cmd=retour]").tap();
+  await attendre(async () => (await pastille.innerText()).includes("Reconnexion"));
+  assert.equal(await page.locator("#telecommande").isVisible(), true,
+    "une coupure ne délie pas le téléphone");
+  assert.equal(await page.locator("#appairage").isVisible(), false);
+  await page.context().setOffline(false);
+  // Sans rien toucher : la relance suivante retrouve le HUB (1 s, puis 2, 4, 8, 15).
+  await attendre(async () => !(await pastille.innerText()).includes("Reconnexion"), 12000);
+  const apres = banc.menu().length;
+  await page.locator("#rangee-retour [data-cmd=retour]").tap();
+  assert.deepEqual(await recus(apres, 1), ["retour"], "la télécommande repilote le HUB");
+  assert.equal(avant, apres, "rien n'est parti pendant la coupure");
+  assert.deepEqual(page.erreurs, []);
+  await page.context().close();
+});
+
+test("un seul 401 ne délie pas le téléphone, deux d'affilée oui", async () => {
+  const page = await remoteAppairee();
+  let refus = 1;
+  await page.route("**/api/etat", route => refus-- > 0
+    ? route.fulfill({ status: 401, contentType: "application/json", body: '{"erreur":"jeton"}' })
+    : route.continue());
+  // lireEtat est la fonction que la page appelle toutes les six secondes : on la
+  // déclenche pour ne pas faire attendre le tour de sondage.
+  await page.evaluate(() => lireEtat(true));
+  await attendre(async () => (await page.locator("#contexte").innerText()).includes("Reconnexion"));
+  await attendre(async () => !(await page.locator("#contexte").innerText()).includes("Reconnexion"), 12000);
+  assert.equal(await page.locator("#telecommande").isVisible(), true,
+    "un refus isolé (service qui redémarre) ne renvoie pas à l'appairage");
+
+  // Révoqué pour de bon : la page revient à l'appairage au refus suivant.
+  await page.route("**/api/etat", route => route.fulfill(
+    { status: 401, contentType: "application/json", body: '{"erreur":"jeton"}' }));
+  await page.locator("#appairage").waitFor({ state: "visible", timeout: 15000 });
+  assert.deepEqual(page.erreurs, []);
+  await page.context().close();
+});
+
+test("ré-appairer le même téléphone ne l'ajoute pas une seconde fois au HUB", async () => {
+  const b = await lancerBanc();
+  const url = `http://127.0.0.1:${b.ports.http}/`;
+  const page = await ouvrir(navigateur, url);
+  await appairer(page, b);
+  const premier = b.etat().listeTelephones;
+  assert.equal(premier.length, 1);
+
+  // Le jeton disparaît (icône d'écran d'accueil sur iPhone, stockage nettoyé) mais
+  // l'identifiant d'appareil, lui, reste : on retape le code de la TV.
+  const appareil = await page.evaluate(() => {
+    localStorage.removeItem("hub-telecommande-jeton");
+    return localStorage.getItem("hub-telecommande-appareil");
+  });
+  assert.match(appareil, /^[0-9a-f]{32}$/);
+  await page.reload();
+  await page.locator("#appairage").waitFor({ state: "visible" });
+  await appairer(page, b);
+
+  const apres = b.etat().listeTelephones;
+  assert.equal(apres.length, 1, "le même téléphone compte encore pour un");
+  assert.equal(apres[0].id, premier[0].id, "même entrée, renouvelée");
+  assert.equal(apres[0].cree, premier[0].cree, "la date d'appairage d'origine est gardée");
+  assert.deepEqual(page.erreurs, []);
+  await page.context().close();
+  b.arreter();
+});
+
 // ── HTTPS local ─────────────────────────────────────────────────────────────
 // Sans raccourci : Chrome vérifie la chaîne avec son propre vérificateur, la racine
 // du HUB étant installée dans le magasin NSS d'un HOME jetable (ce que fait un

@@ -7,6 +7,19 @@ lisibles depuis le canapé : le menu affiche cette première section sous « Ins
 **La première section doit porter le numéro du fichier `VERSION`.** Un test le vérifie
 (`tests/test_version.py`). Marche à suivre pour publier : `installer/mise-a-jour/README.md`.
 
+## 1.0.5 — 18 septembre 2026
+
+Le téléphone reste la télécommande quand un mode démarre. Passer au Bureau fermait la
+session du HUB, et le service de la télécommande s'arrêtait avec elle : le téléphone
+perdait la main juste au moment d'en avoir besoin. Le service traverse maintenant le
+changement de session, et la page du téléphone se reconnecte toute seule, sans jamais
+redemander le code affiché sur la TV.
+
+Un téléphone relié deux fois ne compte plus deux fois. Le HUB reconnaît l'appareil et
+renouvelle son entrée au lieu d'en ajouter une, et les téléphones jamais revus depuis
+six mois sont oubliés. Réglages → Télécommande montre désormais les téléphones reliés,
+leur dernière utilisation, et permet d'en retirer un.
+
 ## 1.0.4 — 18 septembre 2026
 
 Le bouton Éteindre ouvre un menu au lieu d'un interrupteur : éteindre, redémarrer, mettre
