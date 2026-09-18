@@ -6,17 +6,26 @@
 
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { chromium } from "playwright-core";
+import { readFileSync } from "node:fs";
+import { chromium, webkit } from "playwright-core";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 
+// Le moteur : « chrome » par défaut, « chromium » celui de Playwright, « webkit » celui de
+// la famille de la TV. Un rendu peut n'exister que dans l'un d'eux — la WebKitGTK du HUB
+// ignorait les `mask-image` en dégradé que Chromium applique, et ça ne s'est vu que sur une
+// photo du salon (18/09/2026). HUB_NAVIGATEUR=webkit rejoue toute la suite dans WebKit.
+const lancerNavigateur = () => process.env.HUB_NAVIGATEUR === "webkit" ? webkit.launch()
+  : chromium.launch(process.env.HUB_NAVIGATEUR === "chromium" ? {} : { channel: "chrome" });
+
 const ici = path.dirname(fileURLToPath(import.meta.url));
-const PAGE = pathToFileURL(path.join(ici, "../../installer/menu/index.html")).href;
+const MENU = path.join(ici, "../../installer/menu");
+const PAGE = pathToFileURL(path.join(MENU, "index.html")).href;
 const MOTIFS = ["cinema", "rubans", "profondeur", "faisceaux", "nappes"];
 const COULEURS = ["aurore", "nebuleuse", "ocean", "braise", "emeraude", "crepuscule"];
 
 let navigateur, page;
-before(async () => { navigateur = await chromium.launch(process.env.HUB_NAVIGATEUR === "chromium" ? {} : { channel: "chrome" }); });
+before(async () => { navigateur = await lancerNavigateur(); });
 after(async () => { await navigateur?.close(); });
 beforeEach(async () => { await page?.close(); page = null; });
 
@@ -388,7 +397,7 @@ test("image du mode : celle du mode choisi s'affiche à droite, change avec l'on
   assert.deepEqual(demandes.sort(), ["jeu-1/mode-bureau.webp", "jeu-1/mode-jeux.webp", "jeu-1/mode-tv.webp"]);
   // Le fondu d'une image à l'autre reste court, et le masque ne bouge jamais.
   const fondu = await page.evaluate(() => {
-    const cs = getComputedStyle(document.querySelector("#visuel-mode img"));
+    const cs = getComputedStyle(document.querySelector("#visuel-mode canvas"));
     return { durees: cs.transitionDuration.split(",").map(parseFloat), propriete: cs.transitionProperty };
   });
   assert.ok(Math.max(...fondu.durees) <= .2, `fondu ${fondu.durees}`);
@@ -402,7 +411,7 @@ test("image du mode : celle du mode choisi s'affiche à droite, change avec l'on
 
 test("image du mode : animations réduites, aucun fondu ; image absente, le pictogramme en filigrane reprend", async () => {
   await ouvrir(profil({ motif: "cinema", dernier: "tv", animations: "reduites" }));
-  const duree = await page.evaluate(() => parseFloat(getComputedStyle(document.querySelector("#visuel-mode img")).transitionDuration));
+  const duree = await page.evaluate(() => parseFloat(getComputedStyle(document.querySelector("#visuel-mode canvas")).transitionDuration));
   assert.ok(duree <= .01, `fondu en animations réduites : ${duree} s`);
   // Une image qui manque du dossier, ou illisible : elle quitte la page, le filigrane revient.
   await page.close();
@@ -428,7 +437,7 @@ test("image du mode : le jeu se choisit dans les réglages, s'enregistre, et « 
   await page.waitForTimeout(300);
   const rangee = await page.evaluate(() => [...document.querySelectorAll(".vignettes.visuels .vignette-fond")].map(v => ({
     cle: v.dataset.cle, choisie: v.classList.contains("choisie"), libelle: v.querySelector(".libelle").textContent,
-    apercu: v.querySelector(".apercu-visuel img")?.getAttribute("src") || (v.querySelector(".apercu-filigrane") ? "filigrane" : null),
+    apercu: v.querySelector(".apercu-visuel")?.dataset.source || (v.querySelector(".apercu-filigrane") ? "filigrane" : null),
   })));
   assert.deepEqual(rangee, [
     { cle: "visuels-jeu-1", choisie: false, libelle: "Jeu 1", apercu: "images/jeu-1/mode-tv.webp" },
@@ -550,6 +559,123 @@ test("image du mode : le fond passe derrière elle — sa couleur ne déteint pa
   const clairB = await coeurDeLImage("jeu-3", "bureau", "clair", "braise");
   assert.ok(ecartMoyen(clairA.pixels, clairB.pixels) < 20, `clair : le fond déteint encore (${ecartMoyen(clairA.pixels, clairB.pixels).toFixed(1)}/255)`);
   assert.ok(clairA.contraste >= 2.5, `clair : image délavée (contraste ${clairA.contraste}:1)`);
+  assert.deepEqual(page.erreurs, []);
+});
+
+// Photo de la vraie TV sur la 1.0.7 : l'image du mode s'arrêtait sur une arête verticale
+// franche, du haut en bas de l'écran, et le fond du motif occupait la bande du haut. La
+// WebKitGTK du HUB n'applique pas les `mask-image` en dégradé que Chromium applique — un
+// rendu qui ne se voit qu'une fois sur la TV. Deux garde-fous, pour que ça ne revienne pas
+// sans TV : le menu ne doit plus contenir un seul masque, et ses calques de fond ne doivent
+// s'écrire qu'en rgba() hérité, la syntaxe que tout moteur lit depuis quinze ans.
+test("WebKitGTK : le rendu ne dépend plus d'aucun masque CSS", async () => {
+  // La preuve par l'image : on rend l'accueil deux fois, une fois tel quel et une fois
+  // tous masques coupés — comme le fait la WebKitGTK du HUB. Les deux captures doivent
+  // être identiques au pixel près. Sur la 1.0.7, couper les masques faisait apparaître
+  // une arête de 35 points sur 255 au bord gauche de l'image.
+  await ouvrir(profil({ motif: "cinema", fond: "aurore", visuels: "jeu-2", dernier: "tv", animations: "reduites" }));
+  await page.waitForTimeout(400);
+  const avec = (await page.screenshot()).toString("base64");
+  const style = await page.addStyleTag({ content: "*, *::before, *::after { -webkit-mask-image: none !important; mask-image: none !important; -webkit-mask-box-image: none !important; }" });
+  await page.waitForTimeout(400);
+  const sans = (await page.screenshot()).toString("base64");
+  await style.evaluate(s => s.remove());
+  assert.equal(avec, sans, "couper les masques change le rendu : le menu en dépend encore");
+  assert.deepEqual(page.erreurs, []);
+});
+
+test("WebKitGTK : aucun masque dans la feuille, et les calques de fond en rgba() hérité", () => {
+  const css = readFileSync(path.join(MENU, "hub.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const masques = css.match(/[^\n]*mask[^\n]*/g) || [];
+  assert.deepEqual(masques, [], "un masque CSS est revenu dans hub.css");
+  // Les calques plein écran : s'ils ne se peignent pas, l'écran entier change de visage.
+  const calques = /(#fond|#fond-lignes|#filigrane|#visuel-mode|#photos|#ambiant|\.grain|\.vignette)(?![\w-])/;
+  const modernes = [];
+  for (const regle of css.split("}")) {
+    const [tete, corps] = [regle.slice(0, regle.indexOf("{")), regle.slice(regle.indexOf("{") + 1)];
+    if (!calques.test(tete)) continue;
+    // « rgb(1 2 3 / .5) » : la syntaxe à espaces et barre oblique.
+    for (const m of corps.match(/rgba?\([^)]*\/[^)]*\)/g) || []) modernes.push(`${tete.trim()} → ${m}`);
+  }
+  assert.deepEqual(modernes, [], "un calque de fond emploie la syntaxe de couleur moderne");
+});
+
+// L'arête, mesurée sans se laisser tromper par la photo elle-même (un écran, une bobine
+// ont leurs propres bords francs). On photographie deux fois la même vue, sur deux palettes
+// opposées, et on regarde colonne par colonne de combien les deux captures diffèrent : là où
+// la photo est pleine, elles sont identiques ; là où elle est éteinte, elles diffèrent de
+// toute la couleur du fond. Le profil de cet écart EST le fondu. S'il tombe d'un coup, c'est
+// une arête. Les calques de fond seuls : le héros et les onglets ont leurs propres bords.
+const SAUT_MAX = 3;
+async function fondSeul(jeu, mode, theme, fond) {
+  await page?.close();
+  await ouvrir(profil({ motif: "cinema", fond, theme, visuels: jeu, animations: "reduites" }));
+  await page.evaluate(m => definirFocus(document.querySelector(`.onglet[data-mode="${m}"]`), true), mode);
+  const style = await page.addStyleTag({ content: ".ecran { visibility: hidden !important; }" });
+  await page.waitForTimeout(450);
+  const png = (await page.screenshot()).toString("base64");
+  await style.evaluate(s => s.remove());
+  return png;
+}
+async function profilDuBord(jeu, mode, theme) {
+  const a = await fondSeul(jeu, mode, theme, "aurore");
+  const b = await fondSeul(jeu, mode, theme, "braise");
+  return page.evaluate(async ([x, y, zone]) => {
+    const lire = async b64 => { const i = new Image(); i.src = "data:image/png;base64," + b64; await i.decode(); const c = document.createElement("canvas"); c.width = i.width; c.height = i.height; const t = c.getContext("2d"); t.drawImage(i, 0, 0); return t; };
+    const [A, B] = [await lire(x), await lire(y)];
+    const h = zone.bas - zone.haut;
+    const colonne = cx => {
+      const u = A.getImageData(cx, zone.haut, 1, h).data, v = B.getImageData(cx, zone.haut, 1, h).data;
+      let s = 0;
+      for (let k = 0; k < u.length; k += 4) s += (Math.abs(u[k] - v[k]) + Math.abs(u[k + 1] - v[k + 1]) + Math.abs(u[k + 2] - v[k + 2])) / 3;
+      return s / h;
+    };
+    let pire = { saut: 0, x: 0 };
+    let avant = colonne(zone.gauche);
+    for (let cx = zone.gauche + 1; cx <= zone.droite; cx++) {
+      const c = colonne(cx);
+      if (Math.abs(c - avant) > pire.saut) pire = { saut: +Math.abs(c - avant).toFixed(2), x: cx };
+      avant = c;
+    }
+    return pire;
+  }, [a, b, { gauche: 800, droite: 1250, haut: 280, bas: 760 }]);
+}
+
+test("image du mode : aucune arête verticale là où elle entre, sur les trois jeux et les deux thèmes", async () => {
+  const releve = [];
+  for (const theme of ["sombre", "clair"]) {
+    for (const jeu of ["jeu-1", "jeu-2", "jeu-3"]) {
+      // Le mode TV du jeu 2 est le plus contrasté de ce côté-là : la bobine dorée sur le noir.
+      releve.push({ theme, jeu, ...await profilDuBord(jeu, "tv", theme) });
+    }
+  }
+  // Avec les masques ignorés, la photo entrait d'un coup : l'écart tombait de 30 à 0 en une
+  // colonne. Peinte dans la toile, elle avance de moins d'un point sur 255 par colonne.
+  const arêtes = releve.filter(r => r.saut > SAUT_MAX);
+  assert.deepEqual(arêtes, [], `arête verticale : ${JSON.stringify(releve)}`);
+  // Que la photo finisse par prendre toute la place, c'est l'affaire du test voisin (« sa
+  // couleur ne déteint pas ») : ici on ne juge que la douceur du passage.
+  assert.deepEqual(page.erreurs, []);
+});
+
+// Photo de la TV en mode ambiant : l'horloge, la date et la météo se retrouvaient posées en
+// plein sur la bobine de film. L'horloge y dérive à chaque minute pour ne pas marquer la
+// dalle : elle passera tôt ou tard sur le sujet, quel que soit le cadrage. L'image s'en va
+// donc en ambiant, comme avant les images — et le fond y redevient calme (agitation du fond
+// sous la date, thème clair : 22 avant, 2 aujourd'hui ; la date y tombait à 3,8:1).
+test("mode ambiant : l'image du mode s'efface, et revient en sortant", async () => {
+  await ouvrir(profil({ motif: "cinema", visuels: "jeu-2", dernier: "tv" }));
+  const etat = () => page.evaluate(() => {
+    const cs = getComputedStyle(document.getElementById("visuel-mode"));
+    return { opacite: +cs.opacity, visibilite: cs.visibility, ambiant: document.body.classList.contains("ambiant") };
+  });
+  assert.deepEqual(await etat(), { opacite: 1, visibilite: "visible", ambiant: false });
+  await touche("a");
+  await page.waitForTimeout(1600);
+  assert.deepEqual(await etat(), { opacite: 0, visibilite: "hidden", ambiant: true }, "l'image reste en ambiant");
+  await touche("Escape");
+  await page.waitForTimeout(1600);
+  assert.deepEqual(await etat(), { opacite: 1, visibilite: "visible", ambiant: false }, "l'image ne revient pas");
   assert.deepEqual(page.erreurs, []);
 });
 

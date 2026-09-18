@@ -57,7 +57,7 @@ la TV**) :
 | Motif | Toile floue | Toile des traits (960 px de large, transparente) | Calque en plus |
 |---|---|---|---|
 | nappes (celui d'avant) | 192×108, 5 remplissages | — | — |
-| cinéma (défaut d'un profil neuf) | 320×180, 4 remplissages | — (les 3 cercles sont partis le 18/09/2026) | image du mode : calque fixe, masque peint une fois |
+| cinéma (défaut d'un profil neuf) | 320×180, 4 remplissages | — (les 3 cercles sont partis le 18/09/2026) | image du mode : une toile par mode, peinte une fois |
 | aurore boréale | 320×180, ~320 bandes de 3 px | 150 étoiles (sombre) | — |
 | profondeur | 320×180, 3 remplissages | ~45 traits, 3 orbes | — |
 | faisceaux | 320×180, 9 coins | 90 grains de poussière | — |
@@ -76,7 +76,9 @@ recalculé : le cadrage, les deux dégradés de masque (un par élément : `mask
 pas éprouvé sur la WebKitGTK de la TV) et l'opacité sont fixes, le changement de mode ne
 croise que deux opacités (160 ms), et les trois images du jeu choisi sont décodées une fois
 pour toutes au chargement (de 74 à 177 Ko de WebP selon le jeu, 11 à 17 Mo décodés). Aucun
-`filter`, aucun masque animé.
+`filter`, aucun masque animé — et, depuis le 18/09/2026, aucun masque du tout : le cadrage,
+les fondus des bords et l'ombre de l'en-tête sont peints une fois dans une toile par mode,
+jamais plus large que la boîte ni que la photo (1123 × 950 px en 1080p, 3,2 Mo par mode).
 
 - [ ] motif cinéma, accueil immobile 30 s : ____ images/s, pire seconde ____
 - [ ] motif aurore boréale (le plus de dessin) : ____ images/s ; CPU WebKitWebProcess ____ %
@@ -230,6 +232,79 @@ dégradés et l'opacité d'avant la 1.0.3.
 - [ ] sur la TV : l'ombre de l'en-tête se voit-elle comme une bande, ou passe-t-elle inaperçue ?
 - [ ] sur la TV : toujours aucune arête à gauche de l'image, sur les trois jeux ?
 - [ ] sur la TV : l'heure et la date restent-elles nettes sur la bobine dorée du jeu 2 ?
+
+### Les masques CSS ne marchaient pas sur la TV (18/09/2026, après la 1.0.10)
+
+Photo de la vraie TV, 1.0.7 installée : l'image du mode s'arrêtait sur **une arête verticale
+franche**, du haut en bas de l'écran, et une **bande du fond coloré** occupait le haut de la
+zone de l'image. Les deux fondus de bord étaient des `mask-image` en dégradé : **la WebKitGTK
+du HUB ne les applique pas**. Tout ce qui avait été réglé au pixel depuis la 1.0.2 ne tenait
+qu'à une propriété que le moteur de la TV ignore — et Chromium, seul moteur des tests, les
+appliquait parfaitement.
+
+**Ce qui a été essayé pour le reproduire.** Le WebKit de Playwright (26.6) a été installé et
+sondé : il applique le masque préfixé, le masque standard, le masque d'un parent sur son
+enfant, le masque sur une `<img>` en `object-fit`, et il lit `rgb(var(--x) / .5)`. **Il ne
+reproduit donc pas la panne** : c'est un WebKit d'Apple récent, pas la WebKitGTK d'Ubuntu.
+On ne peut pas prouver la cause à distance — on peut seulement cesser d'en dépendre.
+
+**Ce qui remplace les masques.** Les fondus sont maintenant *peints dans la photo*. Au
+chargement, chaque image de mode est cadrée dans une toile aux dimensions de sa boîte, puis
+son ombre d'en-tête et ses deux fondus y sont composés (`hub.js`, « Les fondus de l'image du
+mode »). Trois primitives, et rien d'autre : `drawImage`, `createLinearGradient`,
+`globalCompositeOperation = "destination-out"`. Les fractions sont celles de la 1.0.7, à
+l'identique ; c'est la mécanique qui change, pas le dessin. `hub.css` ne contient plus un
+seul `mask-image`, et la toile est recuite quand l'écran, la palette ou le thème changent.
+
+Dans la foulée, les **calques plein écran** (`#ambiant`, `#photos::after`, le voile du motif
+cinéma) sont repassés en `rgba(r, g, b, a)` hérité : un calque qui ne se peint pas ne se voit
+qu'une fois sur la TV, et la syntaxe à barre oblique était le second suspect. La variable
+`--fond-base` porte donc ses trois nombres séparés par des virgules.
+
+Mesuré, en rendant deux fois la même vue sur deux palettes opposées et en regardant, colonne
+par colonne, de combien les deux captures diffèrent — ce profil *est* le fondu :
+
+| | plus grand saut d'une colonne à l'autre |
+|---|---|
+| 1.0.7, masques appliqués (Chromium, WebKit) | 0,40 sur 255 |
+| **1.0.7, masques ignorés (la TV)** | **35,02 sur 255, à x = 829** — le bord de la boîte |
+| 1.0.11, fondus cuits | 0,33 |
+| **1.0.11, masques ignorés** | **0,33** — le rendu n'en dépend plus |
+
+**Trois garde-fous** (`tests/menu/fonds.test.js`) : le rendu de l'accueil doit être identique
+au pixel près avec et sans masques ; `hub.css` ne doit contenir aucun `mask`, ni aucune
+couleur moderne dans un calque de fond ; et le passage de l'image doit rester doux (aucun
+saut de colonne au-dessus de 3 sur 255, sur les trois jeux et les deux thèmes). Enfin,
+`HUB_NAVIGATEUR=webkit npm test` rejoue toute la suite dans le WebKit de Playwright : deux
+tests de la pastille de retour y échouent (souris de synthèse), le reste passe.
+
+### Le mode ambiant garde l'écran, pas l'image (18/09/2026)
+
+Photo de la TV en écran permanent : l'heure, la date et la météo posées en plein sur la
+bobine de film. L'horloge ambiante **dérive de quelques centimètres à chaque minute** pour ne
+pas marquer la dalle : quel que soit le cadrage, elle finit sur le sujet. Un vrai papier
+peint aurait demandé une zone réservée que cette dérive interdit. **L'image s'efface donc en
+ambiant**, comme avant les images ; le cadre photo reste là pour qui veut un papier peint.
+
+Mesuré, horloge poussée au pire coin, sur les 3 jeux × 3 modes (pire valeur des neuf) :
+
+| | contraste au pire pixel du fond | agitation du fond |
+|---|---|---|
+| sombre, 1.0.10 | heure 5,19 · date 7,97 · météo 6,37 | jusqu'à 4,6 |
+| **sombre, 1.0.11** | heure 5,03 · date 5,24 · météo 8,73 | **≤ 3,9** |
+| clair, 1.0.10 | heure 5,39 · **date 3,81** · **météo 3,84** | jusqu'à **22,0** |
+| **clair, 1.0.11** | heure 14,46 · date 7,06 · météo 7,24 | **≤ 2,3** |
+
+En thème clair, l'image faisait tomber la date et la météo **sous les 4,5:1** — le thème
+clair, une fois de plus, était le parent pauvre. En sombre, la médiane baisse (la photo était
+plus sombre que la lueur du motif qu'elle recouvrait) mais le pire pixel est équivalent et le
+fond devient calme : l'agitation sous la date passe de 22 à 2. Les neuf lignes deviennent
+d'ailleurs identiques d'un jeu à l'autre — c'est la preuve que l'image n'est plus là.
+
+- [ ] sur la TV : plus aucune arête à gauche ni en haut de l'image, dans les deux thèmes ?
+- [ ] sur la TV : la bande du haut montre-t-elle bien la photo en retrait, et non le fond ?
+- [ ] sur la TV, écran permanent : l'heure, la date et la météo se lisent-elles d'un coup d'œil ?
+- [ ] sur la TV : la vignette des réglages montre-t-elle la même chose que l'accueil ?
 
 ### Mesure indicative, hors TV
 

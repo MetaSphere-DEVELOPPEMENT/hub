@@ -5,13 +5,20 @@
 //   cd tests/menu && node mesurer-rendu.mjs [racine d'une copie du dépôt]
 //   Avant/après : mkdir /tmp/avant && git archive <commit> installer/menu | tar -x -C /tmp/avant
 //                 node mesurer-rendu.mjs /tmp/avant ; node mesurer-rendu.mjs
-import { chromium } from "playwright-core";
+import { chromium, webkit } from "playwright-core";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 
+// Le moteur : « chrome » par défaut, « chromium » celui de Playwright, « webkit » celui de
+// la famille de la TV. Un rendu peut n'exister que dans l'un d'eux — la WebKitGTK du HUB
+// ignorait les `mask-image` en dégradé que Chromium applique, et ça ne s'est vu que sur une
+// photo du salon (18/09/2026). HUB_NAVIGATEUR=webkit rejoue toute la suite dans WebKit.
+const lancerNavigateur = () => process.env.HUB_NAVIGATEUR === "webkit" ? webkit.launch()
+  : chromium.launch(process.env.HUB_NAVIGATEUR === "chromium" ? {} : { channel: "chrome" });
+
 const racine = process.argv[2] || path.join(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const PAGE = pathToFileURL(path.join(racine, "installer/menu/index.html")).href;
-const navigateur = await chromium.launch(process.env.HUB_NAVIGATEUR === "chromium" ? {} : { channel: "chrome" });
+const navigateur = await lancerNavigateur();
 
 async function scenario(nom, preparer) {
   const page = await navigateur.newPage({ viewport: { width: 3840, height: 2160 }, deviceScaleFactor: 1 });

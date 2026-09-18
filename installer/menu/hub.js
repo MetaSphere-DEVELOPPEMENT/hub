@@ -827,41 +827,132 @@ const sourceVisuel = (jeu, mode) => `images/${jeu}/mode-${mode}.webp`;
 function jeuVisuels(p = profil()) { return CHOIX_VISUELS.includes(p.visuels) ? p.visuels : "jeu-1"; }
 let visuelChoisi = "tv";
 let jeuPose = null;
-// Poser le jeu choisi : les trois images entrent dans la page avec leur adresse définitive
-// et n'en changent plus. Changer de jeu dans les réglages les remplace — c'est le seul
+// Les photos posées et leur toile, pour les recuire quand l'écran ou la palette changent.
+let photosVisuels = [];
+let baseVisuel = rvbHex(PALETTES.aurore.sombre.base);
+
+// ── Les fondus de l'image du mode ─────────────────────────────────────────
+// Ils sont PEINTS DANS LA TOILE, pas posés par un masque CSS. Retour de la TV du
+// 18/09/2026, sur la 1.0.7 : la WebKitGTK du HUB n'applique pas les `mask-image` en
+// dégradé. L'image s'y arrêtait sur une arête verticale franche, du haut en bas de
+// l'écran, et le fond du motif occupait la bande du haut — exactement ce qu'on avait
+// écarté en maquette. Le menu ne tient donc plus qu'à trois primitives de toile vieilles
+// de quinze ans : drawImage, createLinearGradient et globalCompositeOperation
+// « destination-out ». Les fractions sont celles de la 1.0.7, à l'identique.
+// Le côté du héros : éteinte au bord de la boîte, à mi-voix à 8 %, entière à 30 %.
+const FONDU_COTE = [[0, 1], [.08, .65], [.3, 0]];
+// Le haut et le bas : entière dès 3 % de la hauteur, jusqu'à 88 %, éteinte à 98 %.
+const FONDU_HAUT_BAS = [[0, 1], [.03, 0], [.88, 0], [.98, 1], [1, 1]];
+// L'ombre de l'en-tête : la date, l'heure, le profil et le pictogramme Internet passent
+// au-dessus de l'image. À la couleur de base du fond et non à la teinte du motif — on voit
+// la photo, en retrait, pas une lueur colorée. Peinte avant les fondus : là où la photo
+// s'éteint, l'ombre s'éteint avec elle, et rien ne déborde sur le fond.
+const OMBRE_ENTETE = [[0, .72], [.25, .6], [1, 0]];
+const HAUTEUR_OMBRE = .105;
+// La boîte, en fractions de la hauteur de l'écran (les mêmes qu'en CSS, où elle est en vh).
+// Calculée plutôt que lue : la toile doit se peindre même quand le calque est encore caché.
+const BOITE_VISUEL = { largeur: 1.04, hauteur: .88 };
+
+// Une photo de mode, cadrée et fondue, dans « toile ». Pure hormis la toile.
+function cuireVisuel(toile, image, largeurBoite, hauteurBoite, base) {
+  if (!image.naturalWidth || !largeurBoite || !hauteurBoite) return false;
+  // Ni plus de pixels que la boîte n'en montre, ni plus que la photo n'en a : les trois
+  // toiles d'un jeu pèsent alors autant que les trois photos décodées qu'elles remplacent.
+  const w = Math.max(1, Math.round(Math.min(largeurBoite * Math.min(devicePixelRatio || 1, 2), image.naturalWidth)));
+  const h = Math.max(1, Math.round(w * hauteurBoite / largeurBoite));
+  if (toile.width !== w || toile.height !== h) { toile.width = w; toile.height = h; }
+  const c = toile.getContext("2d");
+  c.globalCompositeOperation = "source-over";
+  c.clearRect(0, 0, w, h);
+  // « object-fit: cover ; object-position: 100% 50% », à la main : les jeux vont du 3/2 au
+  // 16/9, sujet à droite et côté gauche vide — c'est ce côté-là que le cadrage mange.
+  const k = Math.max(w / image.naturalWidth, h / image.naturalHeight);
+  const dw = image.naturalWidth * k, dh = image.naturalHeight * k;
+  c.drawImage(image, w - dw, (h - dh) / 2, dw, dh);
+  const ombre = c.createLinearGradient(0, 0, 0, h * HAUTEUR_OMBRE);
+  for (const [p, a] of OMBRE_ENTETE) ombre.addColorStop(p, `rgba(${base[0]},${base[1]},${base[2]},${a})`);
+  c.fillStyle = ombre;
+  c.fillRect(0, 0, w, Math.ceil(h * HAUTEUR_OMBRE));
+  // Les deux fondus, multipliés l'un par l'autre comme l'étaient les deux masques emboîtés.
+  c.globalCompositeOperation = "destination-out";
+  for (const [x, y, arrets] of [[w, 0, FONDU_COTE], [0, h, FONDU_HAUT_BAS]]) {
+    const g = c.createLinearGradient(0, 0, x, y);
+    for (const [p, a] of arrets) g.addColorStop(p, `rgba(0,0,0,${a})`);
+    c.fillStyle = g;
+    c.fillRect(0, 0, w, h);
+  }
+  c.globalCompositeOperation = "source-over";
+  return true;
+}
+// Recuire ce qui doit l'être : une photo qui vient d'arriver, un écran redimensionné, une
+// palette ou un thème qui change (l'ombre de l'en-tête en prend la couleur).
+function cuireVisuels() {
+  const largeur = Math.round(innerHeight * BOITE_VISUEL.largeur);
+  const hauteur = Math.round(innerHeight * BOITE_VISUEL.hauteur);
+  const cle = [largeur, hauteur, baseVisuel.join()].join();
+  for (const { toile, image } of photosVisuels) {
+    if (toile.dataset.cuisson === cle) continue;
+    if (cuireVisuel(toile, image, largeur, hauteur, baseVisuel)) toile.dataset.cuisson = cle;
+  }
+}
+// Poser le jeu choisi : les trois photos sont chargées une fois pour toutes, et chacune
+// a sa toile dans la page. Changer de jeu dans les réglages les remplace — c'est le seul
 // moment où le menu relit des fichiers.
 function poserVisuels(jeu = jeuVisuels()) {
   if (jeu === jeuPose) return;
   jeuPose = jeu;
   visuelMode.innerHTML = "";
+  photosVisuels = [];
   // Le jeu posé est lisible dans le CSS (chaque jeu n'a pas la même vigueur) et par les tests.
   visuelMode.dataset.jeu = jeu;
   // Sans jeu d'images, aucun fichier n'est demandé : ni pour le pictogramme, ni pour rien.
   if (!JEUX_VISUELS.includes(jeu)) return;
   for (const mode of MODES_VISUELS) {
-    const image = el("img", { "data-visuel": mode, src: sourceVisuel(jeu, mode), alt: "", decoding: "async" });
-    // Image absente du dossier, ou illisible : elle quitte la page et le pictogramme en
+    const source = sourceVisuel(jeu, mode);
+    const toile = el("canvas", { "data-visuel": mode, "data-source": source });
+    const image = new Image();
+    image.decoding = "async";
+    photosVisuels.push({ toile, image });
+    image.addEventListener("load", cuireVisuels);
+    // Image absente du dossier, ou illisible : sa toile quitte la page et le pictogramme en
     // filigrane reprend sa place. Le menu ne doit jamais montrer un trou à droite.
-    image.addEventListener("error", () => { image.remove(); rafraichirVisuel(); });
-    visuelMode.append(image);
+    image.addEventListener("error", () => {
+      photosVisuels = photosVisuels.filter(v => v.toile !== toile);
+      toile.remove();
+      rafraichirVisuel();
+    });
+    image.src = source;
+    visuelMode.append(toile);
   }
 }
-// Le visuel du mode : l'image du mode choisi seule visible. Sans image — « aucun » choisi,
+// Le visuel du mode : la toile du mode choisi seule visible. Sans image — « aucun » choisi,
 // ou un fichier qui manque —, le pictogramme en filigrane reprend sa place, sauf si c'est
 // précisément le vide qui a été choisi.
 function rafraichirVisuel(motif = motifChoisi()) {
   poserVisuels();
+  cuireVisuels();
   const cinema = motif === "cinema";
-  const image = visuelMode.querySelector(`img[data-visuel="${visuelChoisi}"]`);
-  for (const img of visuelMode.children) img.classList.toggle("visible", cinema && img === image);
-  visuelMode.hidden = !cinema || !image;
-  filigrane.hidden = !cinema || !!image || jeuVisuels() === "aucun";
+  const vue = visuelMode.querySelector(`[data-visuel="${visuelChoisi}"]`);
+  for (const t of visuelMode.children) t.classList.toggle("visible", cinema && t === vue);
+  visuelMode.hidden = !cinema || !vue;
+  filigrane.hidden = !cinema || !!vue || jeuVisuels() === "aucun";
 }
-// La vignette du motif cinéma, dans les réglages, montre ce qu'on verra : l'image du mode
-// choisi (déjà chargée, la même adresse), ou le pictogramme en filigrane à défaut.
+// La vignette d'une image de mode, dans les réglages : la même cuisson qu'à l'écran, en
+// petit, aux mêmes proportions. Elle ne peut pas emprunter la toile de l'accueil — les
+// vignettes des autres jeux n'y sont pas posées —, alors elle redemande l'image, que le
+// navigateur sert de son cache, et se peint à son arrivée.
+function vignetteVisuel(source) {
+  const toile = el("canvas", { class: "apercu-visuel", "data-source": source });
+  const image = new Image();
+  image.addEventListener("load", () => cuireVisuel(toile, image, 280, Math.round(280 * BOITE_VISUEL.hauteur / BOITE_VISUEL.largeur), baseVisuel));
+  image.src = source;
+  return toile;
+}
+// La vignette du motif cinéma montre ce qu'on verra : l'image du mode choisi, ou le
+// pictogramme en filigrane à défaut.
 function apercuVisuel() {
-  const image = visuelMode.querySelector(`img[data-visuel="${visuelChoisi}"]`);
-  return image ? el("span", { class: "apercu-visuel" }, el("img", { src: image.getAttribute("src"), alt: "" }))
+  const vue = visuelMode.querySelector(`[data-visuel="${visuelChoisi}"]`);
+  return vue ? vignetteVisuel(vue.dataset.source)
     : el("span", { class: "apercu-filigrane", html: filigrane.innerHTML });
 }
 let accentCible = COULEURS_MODE.tv;
@@ -915,8 +1006,12 @@ function preparerToiles(motif, theme, couleur) {
   document.body.dataset.motif = motif;
   // La couleur de base du fond, pour le voile du haut et du bas (hub.css) : il calme le
   // motif sous l'en-tête et sous les rangées, et noie le filigrane. Il passe sous l'image
-  // du mode, qui s'éteint seule par son masque.
-  racine.style.setProperty("--fond-base", rvbHex((PALETTES[couleur] || PALETTES.aurore)[theme].base).join(" "));
+  // du mode, qui porte ses propres fondus. C'est aussi la couleur de l'ombre d'en-tête
+  // cuite dans les toiles des photos : changer de palette ou de thème les recuit.
+  baseVisuel = rvbHex((PALETTES[couleur] || PALETTES.aurore)[theme].base);
+  // En virgules : hub.css n'écrit les calques de fond qu'en rgba() hérité (voir --fond-base).
+  racine.style.setProperty("--fond-base", baseVisuel.join(", "));
+  cuireVisuels();
 }
 addEventListener("resize", () => { preparation = ""; relancerFond(); });
 
@@ -2395,7 +2490,7 @@ function rendreSection(garderFocus = true) {
         const apercu = el("span", { class: "apercu-cinema" }, apercuFond("cinema", couleur || "aurore", theme),
           j === "aucun" ? null
             : j === "pictogramme" ? el("span", { class: "apercu-filigrane", html: filigrane.innerHTML })
-              : el("span", { class: "apercu-visuel" }, el("img", { src: sourceVisuel(j, "tv"), alt: "" })));
+              : vignetteVisuel(sourceVisuel(j, "tv")));
         visuels.append(vignette(`visuels-${j}`, jeu === j, t(`visuels.${j}`), apercu, () => valider(() => { p.visuels = j; })));
       }
       zone.append(

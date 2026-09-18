@@ -7,6 +7,14 @@ lisibles depuis le canapé : le menu affiche cette première section sous « Ins
 **La première section doit porter le numéro du fichier `VERSION`.** Un test le vérifie
 (`tests/test_version.py`). Marche à suivre pour publier : `installer/mise-a-jour/README.md`.
 
+## 1.0.11 — 18 septembre 2026
+
+L'image du mode s'arrêtait net, sur un bord franc, avec une bande de fond coloré au-dessus :
+elle se fond de nouveau dans l'écran, sur la TV comme ailleurs.
+
+En écran permanent, l'image s'efface : l'heure, la date et la météo ne se posent plus sur la
+photo, et se relisent d'un coup d'œil.
+
 ## 1.0.10 — 18 septembre 2026
 
 Le bouton « retour » de la télécommande ouvre le menu « Que faire du HUB ? » depuis
