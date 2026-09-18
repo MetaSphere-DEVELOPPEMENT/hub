@@ -266,16 +266,17 @@
   </div>
 </div>
 
-<!-- Éteindre et Redémarrer ne se défont pas : un second écran, court, où Annuler garde
-     la sélection. Son titre, sa phrase et son bouton sont posés par hub.js. -->
-<div class="calque voile" id="arret-confirmer">
+<!-- La question qu'on pose avant ce qui ne se défait pas : éteindre, redémarrer, effacer
+     un profil. Un seul dialogue pour toutes — pictogramme, titre, phrase et libellé du
+     bouton sont posés par hub.js (confirmer()), et Annuler garde la sélection. -->
+<div class="calque voile" id="confirmer">
   <div class="dialogue">
-    <span class="pictogramme" style="--c: var(--arret)"><svg viewBox="0 0 24 24"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg></span>
-    <h2 id="arret-confirmer-titre"></h2>
-    <p id="arret-confirmer-detail"></p>
+    <span class="pictogramme" id="confirmer-picto"></span>
+    <h2 id="confirmer-titre"></h2>
+    <p id="confirmer-detail"></p>
     <div class="choix">
-      <button class="bouton" id="arret-confirmer-annuler" data-nav data-cle="arret-confirmer-annuler" data-action="fermer"><span data-t="annuler"></span></button>
-      <button class="bouton danger" id="arret-confirmer-oui" data-nav data-cle="arret-confirmer-oui" data-action="arret-confirme"><span></span></button>
+      <button class="bouton" id="confirmer-annuler" data-nav data-cle="confirmer-annuler" data-action="fermer"><span data-t="annuler"></span></button>
+      <button class="bouton danger" id="confirmer-oui" data-nav data-cle="confirmer-oui" data-action="confirmer-oui"><span></span></button>
     </div>
   </div>
 </div>

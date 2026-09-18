@@ -739,7 +739,10 @@ kbd.fleche { font-family: system-ui, sans-serif; font-size: var(--t-2); line-hei
 /* Deux dialogues empilés se disputaient la lecture : la confirmation venue du menu efface
    celui-ci derrière son voile. Sur un moteur sans :has, le menu reste simplement à demi
    visible, comme les autres calques recouverts. */
-body:has(#arret-confirmer.ouvert) #arret .dialogue { opacity: 0; }
+body:has(#confirmer.ouvert) #arret .dialogue { opacity: 0; }
+/* Ce dialogue ne sert qu'à ce qui ne se défait pas : son pictogramme porte la couleur
+   d'arrêt, comme le bouton qui l'accompagne. */
+#confirmer-picto { --c: var(--arret); }
 
 /* Feuille latérale : réglages, météo. */
 .feuille { background: var(--voile); }
