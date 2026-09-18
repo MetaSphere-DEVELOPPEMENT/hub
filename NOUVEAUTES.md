@@ -7,6 +7,16 @@ lisibles depuis le canapé : le menu affiche cette première section sous « Ins
 **La première section doit porter le numéro du fichier `VERSION`.** Un test le vérifie
 (`tests/test_version.py`). Marche à suivre pour publier : `installer/mise-a-jour/README.md`.
 
+## 1.0.10 — 18 septembre 2026
+
+Le bouton « retour » de la télécommande ouvre le menu « Que faire du HUB ? » depuis
+l'accueil, où il ne faisait rien : plus besoin de viser le bouton Éteindre du pied. Ailleurs,
+il ferme l'écran ouvert, comme avant.
+
+Supprimer un profil demande maintenant confirmation : la question et le bouton portent son
+nom (« Supprimer Annabel »), et c'est Annuler qui est sélectionné. C'était la seule action
+du menu qui effaçait des réglages sans retour, au premier OK.
+
 ## 1.0.9 — 18 septembre 2026
 
 Même cause, deuxième moitié : le test comparait aussi les nouveautés affichées à celles

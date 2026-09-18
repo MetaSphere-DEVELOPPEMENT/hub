@@ -1503,6 +1503,14 @@ function fermerCalque() {
   if (verrouAccueil && pile.length === 1 && id !== "code") setTimeout(exigerDeverrouillage, 0);
 }
 function fermerTout() { while (pile.length > 1) fermerCalque(); }
+// Le « retour » de la télécommande : il ferme le calque ouvert, et sur l'accueil, où il
+// n'avait rien à fermer, il ouvre le menu d'arrêt. C'est le seul bouton que la
+// télécommande ait en propre pour ça (constaté sur la TV le 18/09/2026 : il fallait viser
+// le bouton Éteindre du pied), et c'est le geste des box.
+function retour() {
+  if (pile.length === 1) return ACTIONS.arret();
+  fermerCalque();
+}
 
 // ── Accueil : le héros et les onglets des modes ───────────────────────────
 // Maquette C « Cinéma », choisie le 17/09/2026 : le mode choisi en grand à gauche, les
@@ -1615,15 +1623,31 @@ function sousCodeParent(suite) {
   demande.profils = parents.map(x => x.id);
 }
 
+// ── La question posée avant ce qui ne se défait pas ───────────────────────
+// Un seul dialogue (#confirmer) pour éteindre, redémarrer et effacer un profil : le titre
+// dit ce qui va se passer, le bouton le répète (« Supprimer Annabel », jamais « OK »), et
+// Annuler garde la sélection à chaque ouverture. Le pictogramme est écrit dans ce code,
+// jamais une donnée reçue. La suite ferme elle-même le dialogue : l'extinction, elle, le
+// garde à l'écran le temps de son fondu de départ.
+const ICONE_ARRET = '<svg viewBox="0 0 24 24"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg>';
+const ICONE_CORBEILLE = '<svg viewBox="0 0 24 24"><path d="M4 7h16M10 4h4M9.5 11v6M14.5 11v6"/><path d="M6.5 7 7.4 19a2 2 0 0 0 2 1.9h5.2a2 2 0 0 0 2-1.9L17.5 7"/></svg>';
+let confirmation = null;
+
+function confirmer({ titre, detail, bouton, picto = ICONE_ARRET, suite }) {
+  confirmation = suite;
+  $("confirmer-picto").innerHTML = picto;
+  $("confirmer-titre").textContent = titre;
+  $("confirmer-detail").textContent = detail || "";
+  $("confirmer-detail").hidden = !detail;
+  $("confirmer-oui").firstElementChild.textContent = bouton;
+  focusParCalque.confirmer = $("confirmer-annuler");
+  ouvrirCalque("confirmer");
+}
+
 function confirmerArret(nom) {
-  sousCodeParent(() => {
-    $("arret-confirmer-titre").textContent = t(ARRETS[nom].titre);
-    $("arret-confirmer-detail").textContent = t(ARRETS[nom].avant);
-    $("arret-confirmer-oui").firstElementChild.textContent = t(nom);
-    $("arret-confirmer-oui").dataset.arret = nom;
-    focusParCalque["arret-confirmer"] = $("arret-confirmer-annuler");
-    ouvrirCalque("arret-confirmer");
-  });
+  sousCodeParent(() => confirmer({
+    titre: t(ARRETS[nom].titre), detail: t(ARRETS[nom].avant), bouton: t(nom), suite: () => quitter(nom),
+  }));
 }
 
 // Éteindre et redémarrer suivent le même chemin qu'un mode : le mode est écrit sur la
@@ -1786,7 +1810,7 @@ const ACTIONS = {
   arret: () => { focusParCalque.arret = $("arret-annuler"); ouvrirCalque("arret"); },
   eteindre: () => confirmerArret("eteindre"),
   redemarrer: () => confirmerArret("redemarrer"),
-  "arret-confirme": () => quitter($("arret-confirmer-oui").dataset.arret),
+  "confirmer-oui": () => { const suite = confirmation; confirmation = null; suite?.(); },
   veille: mettreEnVeille,
   ambiant: entrerAmbiant,
   fermer: fermerCalque,
@@ -1905,10 +1929,25 @@ function enregistrerProfil() {
   appliquerTout();
   if (pile.includes("reglages")) rendreSection();
 }
+// Effacer un profil efface ses réglages, son temps d'écran et son code : c'est la seule
+// action du menu qui détruit quelque chose, et elle partait au premier OK. Le nom est dans
+// la question et sur le bouton — à la télécommande, deux dialogues se ressemblent trop
+// pour qu'un « OK » suffise à dire ce qu'on efface.
 function supprimerProfil() {
   if (reglages.profils.length <= 1) { son("erreur"); return annoncer(t("profils.supprimer.dernier")); }
-  reglages.profils = reglages.profils.filter(p => p.id !== brouillon.id);
-  if (reglages.profilActif === brouillon.id) reglages.profilActif = reglages.profils[0].id;
+  const cible = brouillon;
+  confirmer({
+    titre: t("profils.supprimer.titre", { nom: cible.nom }),
+    detail: t("profils.supprimer.detail"),
+    bouton: t("profils.supprimer.bouton", { nom: cible.nom }),
+    picto: ICONE_CORBEILLE,
+    suite: () => { fermerCalque(); effacerProfil(cible); },
+  });
+}
+
+function effacerProfil(cible) {
+  reglages.profils = reglages.profils.filter(p => p.id !== cible.id);
+  if (reglages.profilActif === cible.id) reglages.profilActif = reglages.profils[0].id;
   sauver();
   fermerCalque();
   rendreProfils();
@@ -2925,7 +2964,7 @@ function commande(nom) {
   const directions = { gauche: 1, droite: 1, haut: 1, bas: 1 };
   if (nom in directions) return deplacer(nom);
   if (nom === "ok") return courant?.click();
-  if (nom === "retour") return fermerCalque();
+  if (nom === "retour") return retour();
   if (nom === "eteindre") { fermerTout(); return ACTIONS.arret(); }
   if (nom === "reglages" || nom === "aide" || nom === "meteo" || nom === "profils") { fermerTout(); return ACTIONS[nom](); }
 }
@@ -2994,7 +3033,7 @@ addEventListener("keydown", e => {
 
   if (DIRECTIONS[e.key]) { e.preventDefault(); return deplacer(DIRECTIONS[e.key]); }
   if (e.key === "Enter" || e.key === " ") { e.preventDefault(); return courant?.click(); }
-  if (e.key === "Escape" || e.key === "Backspace" || e.key === "BrowserBack") { e.preventDefault(); return fermerCalque(); }
+  if (e.key === "Escape" || e.key === "Backspace" || e.key === "BrowserBack") { e.preventDefault(); return retour(); }
   if (e.key === "Home") { e.preventDefault(); return fermerTout(); }
   if (e.ctrlKey || e.altKey || e.metaKey) return;
 

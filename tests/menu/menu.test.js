@@ -221,9 +221,9 @@ test("arrêt : éteindre et redémarrer confirment avant d'envoyer leur mode", a
     await ouvrir();
     await touche("e");
     await page.click(`[data-cle="${cle}"]`);
-    assert.deepEqual(await calques(), ["arret", "arret-confirmer"], cle);
-    assert.match(await page.textContent("#arret-confirmer-titre"), titre);
-    assert.equal(await focus(), "arret-confirmer-annuler");
+    assert.deepEqual(await calques(), ["arret", "confirmer"], cle);
+    assert.match(await page.textContent("#confirmer-titre"), titre);
+    assert.equal(await focus(), "confirmer-annuler");
     await touche("Enter");
     assert.deepEqual(await calques(), ["arret"], "Annuler revient au menu, sans rien couper");
     assert.deepEqual(await messages("choix"), []);
@@ -284,8 +284,8 @@ test("arrêt : sur un profil restreint, éteindre demande le code d'un parent", 
   await page.waitForFunction(() => /incorrect/.test(document.querySelector("#code-detail").textContent));
   assert.deepEqual(await messages("choix"), []);
   await page.keyboard.type("1234");
-  await page.waitForFunction(() => document.querySelector("#arret-confirmer.ouvert"));
-  assert.equal(await focus(), "arret-confirmer-annuler", "même là, la confirmation repart d'Annuler");
+  await page.waitForFunction(() => document.querySelector("#confirmer.ouvert"));
+  assert.equal(await focus(), "confirmer-annuler", "même là, la confirmation repart d'Annuler");
   // Ce qui se défait d'un geste ne demande pas de code : la veille et l'écran permanent.
   await touche("Escape");
   await page.click('[data-cle="arret-veille"]');
@@ -299,7 +299,7 @@ test("arrêt : profil restreint sans parent protégé, la confirmation suffit", 
   await ouvrir({ retour: true, reglages: r });
   await touche("e");
   await page.click('[data-cle="arret-eteindre"]');
-  assert.deepEqual(await calques(), ["arret", "arret-confirmer"], "sans code parent, la restriction ne tient pas : on n'enferme personne");
+  assert.deepEqual(await calques(), ["arret", "confirmer"], "sans code parent, la restriction ne tient pas : on n'enferme personne");
 });
 
 test("anglais : le menu d'arrêt et sa confirmation sont traduits", async () => {
@@ -309,8 +309,67 @@ test("anglais : le menu d'arrêt et sa confirmation sont traduits", async () => 
   assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll("#arret .action-nom")].map(e => e.textContent)),
     ["Cancel", "Power off", "Restart", "Sleep", "Always-On Display", "Switch profile"]);
   await page.click('[data-cle="arret-redemarrer"]');
-  assert.equal(await page.textContent("#arret-confirmer-titre"), "Restart the HUB?");
-  assert.equal(await page.textContent("#arret-confirmer-oui"), "Restart");
+  assert.equal(await page.textContent("#confirmer-titre"), "Restart the HUB?");
+  assert.equal(await page.textContent("#confirmer-oui"), "Restart");
+});
+
+// Sur la TV, la télécommande n'a pas de bouton d'arrêt : c'est « retour » qui ouvre le
+// menu, comme sur une box. Il ne faisait rien sur l'accueil (constaté sur la TV le
+// 18/09/2026 : il fallait viser le bouton Éteindre du pied).
+test("accueil : Échap ouvre le menu d'arrêt ; dans un calque, il ferme comme avant", async () => {
+  await ouvrir();
+  await touche("Escape");
+  assert.deepEqual(await calques(), ["arret"]);
+  assert.equal(await focus(), "arret-annuler");
+  await touche("Escape");
+  assert.deepEqual(await calques(), [], "dans le menu, Échap referme");
+  await touche("r");
+  assert.deepEqual(await calques(), ["reglages"]);
+  await touche("Escape");
+  assert.deepEqual(await calques(), [], "depuis un calque, Échap ferme le calque, il n'ouvre rien");
+  await touche("Backspace");
+  assert.deepEqual(await calques(), ["arret"], "l'autre touche de retour fait la même chose");
+  await touche("Escape");
+  // « HUB, retour » (voix, télécommande) suit la même règle que la touche.
+  await page.evaluate(() => window.hub.recevoir({ type: "commande", nom: "retour" }));
+  await page.waitForTimeout(200);
+  assert.deepEqual(await calques(), ["arret"]);
+  assert.deepEqual(await messages("choix"), []);
+});
+
+// Effacer un profil est la seule action du menu qui détruit des réglages : elle passait
+// sans rien demander (constaté sur la TV le 18/09/2026).
+test("supprimer un profil demande confirmation, son nom dans la question et sur le bouton", async () => {
+  await ouvrir({ retour: true, reglages: deuxProfils() });
+  await touche("p");
+  await page.click('[data-action="gerer-profils"]');
+  await page.click('[data-cle="profil-alix"]');
+  await page.click('[data-action="supprimer-profil"]');
+  assert.ok((await calques()).includes("confirmer"), await calques());
+  assert.match(await page.textContent("#confirmer-titre"), /Supprimer Alix/);
+  assert.match(await page.textContent("#confirmer-oui"), /Supprimer Alix/, "le bouton dit ce qu'il fait, pas « OK »");
+  assert.equal(await focus(), "confirmer-annuler");
+  await touche("Enter");
+  assert.ok(!(await calques()).includes("confirmer"));
+  assert.equal(await page.locator("#liste-profils .tuile-profil").count(), 3, "annulé, le profil est toujours là");
+  await page.click('[data-action="supprimer-profil"]');
+  await page.click('[data-cle="confirmer-oui"]');
+  await attendreReglages(d => d.profils.length === 1);
+  assert.deepEqual(await calques(), ["profils"], "l'éditeur et la confirmation se referment");
+  assert.equal(await page.locator("#liste-profils .tuile-profil").count(), 2, "le profil restant et la tuile d'ajout");
+});
+
+test("anglais : la confirmation de suppression est traduite", async () => {
+  const r = deuxProfils();
+  r.profils[0].langue = "en";
+  await ouvrir({ retour: true, reglages: r });
+  await touche("p");
+  await page.click('[data-action="gerer-profils"]');
+  await page.click('[data-cle="profil-alix"]');
+  await page.click('[data-action="supprimer-profil"]');
+  assert.equal(await page.textContent("#confirmer-titre"), "Delete Alix?");
+  assert.equal(await page.textContent("#confirmer-oui"), "Delete Alix");
+  assert.equal(await page.textContent("#confirmer-annuler"), "Cancel");
 });
 
 test("réglages : parcourir le sommaire change la section, choisir un motif puis une couleur l'enregistre", async () => {

@@ -34,6 +34,12 @@ async function ouvrir(initial = {}, { largeur = 1920, hauteur = 1080 } = {}) {
   await page.waitForTimeout(300);
 }
 const reglages = (systeme = {}, profil = {}) => ({ reglages: { profilActif: "p", profils: [{ id: "p", nom: "Samuel", ...profil }], systeme } });
+// Un second profil au nom le plus long que le menu accepte (16 caractères) : c'est lui
+// qu'on efface dans les essais de la confirmation de suppression.
+const DEUX_PROFILS = (profil = {}) => ({
+  retour: true,
+  reglages: { profilActif: "p", profils: [{ id: "p", nom: "Samuel", ...profil }, { id: "q", nom: "Marie-Ségolène K" }], systeme: {} },
+});
 const REPRISES = [{ titre: "Le Bureau des légendes", sousTitre: "S02 E04", fichier: "/a.mkv", position: 1200, duree: 3000 }, { titre: "Dune", fichier: "/b.mkv", position: 3000, duree: 9000 }];
 
 // Tailles de tous les textes visibles sous « racine », en px ramenés à un écran de 1080 lignes.
@@ -280,12 +286,53 @@ test("contrastes : le menu d'arrêt et sa confirmation, sombre et clair", async 
     const menu = await contrastes(["#arret h2", "#arret .dialogue > p", ".action-nom", ".action-detail"]);
     await page.evaluate(() => ACTIONS.eteindre());
     await page.waitForTimeout(350);
-    const confirmation = await contrastes(["#arret-confirmer-titre", "#arret-confirmer-detail", "#arret-confirmer .bouton span"]);
+    const confirmation = await contrastes(["#confirmer-titre", "#confirmer-detail", "#confirmer .bouton span"]);
     mesures.push(...[...menu, ...confirmation].map(m => ({ theme, ...m })));
     faibles.push(...[...menu, ...confirmation].filter(m => m.ratio < 4.5).map(m => ({ theme, ...m })));
   }
   assert.deepEqual(faibles, [], JSON.stringify(mesures));
 });
+
+// La même question, posée avant d'effacer un profil : le nom du profil y est deux fois, et
+// la phrase qui dit ce qu'on perd s'enroule sur plusieurs lignes.
+test("contrastes : la confirmation de suppression d'un profil, sombre et clair", async () => {
+  const faibles = [], mesures = [];
+  for (const theme of ["sombre", "clair"]) {
+    await page?.close();
+    await ouvrir(DEUX_PROFILS({ theme, animations: "reduites", motif: "cinema" }));
+    await page.evaluate(() => { ouvrirEditeur(reglages.profils[1]); ACTIONS["supprimer-profil"](); });
+    await page.waitForTimeout(400);
+    const m = await contrastes(["#confirmer-titre", "#confirmer-detail", "#confirmer .bouton span"]);
+    mesures.push(...m.map(x => ({ theme, ...x })));
+    faibles.push(...m.filter(x => x.ratio < 4.5).map(x => ({ theme, ...x })));
+  }
+  assert.deepEqual(faibles, [], JSON.stringify(mesures));
+});
+
+// Le nom du profil (16 caractères au plus) passe dans le titre et sur le bouton : à la
+// taille XL et en anglais, rien ne doit sortir de l'écran ni du dialogue.
+for (const langue of ["fr", "en"]) {
+  test(`tenue : la confirmation de suppression tient de S à XL en ${langue}`, async () => {
+    await ouvrir(DEUX_PROFILS({ langue }), { largeur: 1280, hauteur: 720 });
+    await page.evaluate(() => { ouvrirEditeur(reglages.profils[1]); ACTIONS["supprimer-profil"](); });
+    await page.waitForTimeout(300);
+    for (const echelle of [.9, 1, 1.1, 1.2]) {
+      const bilan = await page.evaluate(e => {
+        reglages.systeme.echelle = e; appliquerTout();
+        const d = document.querySelector("#confirmer .dialogue").getBoundingClientRect();
+        const hors = [...document.querySelectorAll("#confirmer [data-nav]")].filter(x => {
+          const r = x.getBoundingClientRect();
+          return r.bottom > innerHeight || r.right > innerWidth || r.left < 0 || r.top < 0;
+        }).map(x => x.dataset.cle);
+        // Un nom trop long serait coupé par le bouton plutôt que de déborder.
+        const coupes = [...document.querySelectorAll("#confirmer .bouton span")]
+          .filter(x => x.scrollWidth > x.clientWidth + 1).map(x => x.textContent);
+        return { hors, coupes, dedans: d.top >= 0 && d.bottom <= innerHeight };
+      }, echelle);
+      assert.deepEqual(bilan, { hors: [], coupes: [], dedans: true }, `taille ${echelle}`);
+    }
+  });
+}
 
 // Six entrées de deux lignes dans un dialogue : c'est le calque le plus haut du menu. Chaque
 // explication tient sur UNE ligne, en français comme en anglais — deux lignes et la liste
