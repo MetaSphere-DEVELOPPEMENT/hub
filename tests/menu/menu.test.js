@@ -6,10 +6,17 @@
 
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { chromium } from "playwright-core";
+import { chromium, webkit } from "playwright-core";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 import { createHash } from "node:crypto";
+
+// Le moteur : « chrome » par défaut, « chromium » celui de Playwright, « webkit » celui de
+// la famille de la TV. Un rendu peut n'exister que dans l'un d'eux — la WebKitGTK du HUB
+// ignorait les `mask-image` en dégradé que Chromium applique, et ça ne s'est vu que sur une
+// photo du salon (18/09/2026). HUB_NAVIGATEUR=webkit rejoue toute la suite dans WebKit.
+const lancerNavigateur = () => process.env.HUB_NAVIGATEUR === "webkit" ? webkit.launch()
+  : chromium.launch(process.env.HUB_NAVIGATEUR === "chromium" ? {} : { channel: "chrome" });
 
 const ici = path.dirname(fileURLToPath(import.meta.url));
 const PAGE = pathToFileURL(path.join(ici, "../../installer/menu/index.html")).href;
@@ -45,7 +52,7 @@ function installerFauxPont(initial) {
 
 // Le Chrome du système suffit ; HUB_NAVIGATEUR=chromium prend celui de Playwright s'il est installé.
 before(async () => {
-  navigateur = await chromium.launch(process.env.HUB_NAVIGATEUR === "chromium" ? {} : { channel: "chrome" });
+  navigateur = await lancerNavigateur();
 });
 after(async () => { await navigateur?.close(); });
 

@@ -5,17 +5,24 @@
 
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { chromium } from "playwright-core";
+import { chromium, webkit } from "playwright-core";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+
+// Le moteur : « chrome » par défaut, « chromium » celui de Playwright, « webkit » celui de
+// la famille de la TV. Un rendu peut n'exister que dans l'un d'eux — la WebKitGTK du HUB
+// ignorait les `mask-image` en dégradé que Chromium applique, et ça ne s'est vu que sur une
+// photo du salon (18/09/2026). HUB_NAVIGATEUR=webkit rejoue toute la suite dans WebKit.
+const lancerNavigateur = () => process.env.HUB_NAVIGATEUR === "webkit" ? webkit.launch()
+  : chromium.launch(process.env.HUB_NAVIGATEUR === "chromium" ? {} : { channel: "chrome" });
 
 const ici = path.dirname(fileURLToPath(import.meta.url));
 const MENU = path.join(ici, "../../installer/menu");
 const PAGE = pathToFileURL(path.join(MENU, "index.html")).href;
 
 let navigateur, page;
-before(async () => { navigateur = await chromium.launch(process.env.HUB_NAVIGATEUR === "chromium" ? {} : { channel: "chrome" }); });
+before(async () => { navigateur = await lancerNavigateur(); });
 after(async () => { await navigateur?.close(); });
 beforeEach(async () => { await page?.close(); });
 
@@ -175,7 +182,7 @@ test("contrastes : le héros et l'en-tête au-dessus de chaque image, les trois 
         await page.waitForTimeout(250);
         assert.deepEqual(await page.evaluate(() => {
           const v = document.getElementById("visuel-mode");
-          return [v.dataset.jeu, ...[...v.querySelectorAll("img.visible")].map(i => i.dataset.visuel)];
+          return [v.dataset.jeu, ...[...v.querySelectorAll("canvas.visible")].map(i => i.dataset.visuel)];
         }), [jeu, image], `${theme} ${jeu} ${mode} : ce n'est pas l'image attendue`);
         const m = await contrastes(["#heros-titre", ".heure", "#nom-profil", ...TEXTES_ACCUEIL]);
         mesures.push(...m.map(x => ({ theme, jeu, image, ...x })));
