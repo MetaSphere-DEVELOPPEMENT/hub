@@ -66,6 +66,10 @@
      (départ d'un mode, dialogue qui s'ouvre). */
   --focus-duree: .18s;
   --sortie: cubic-bezier(.2, .7, .3, 1);
+  /* Le vol du logo de l'intro vers l'en-tête : il démarre doucement et ralentit en
+     arrivant, l'œil le suit. Avec --souple (tout le trajet dans les cent premières
+     millisecondes), il était déjà petit et presque arrivé sur la première image : un saut. */
+  --vol: cubic-bezier(.5, 0, .15, 1);
   --echelle: 1;
   --marge: 5;
   /* Lu à trois mètres : 1rem vaut 1/44 du petit côté (24,5 px en 1080p, 49 px en 2160p).
@@ -212,6 +216,10 @@ body:not([data-motif="nappes"]) #fond { filter: none; }
    ses hautes lumières, et rien n'est écrit dessus qui ne soit déjà protégé. En clair, où
    l'opacité sert à ne pas peser sur un fond pâle, il garde son cran en moins. */
 :root[data-theme="clair"] #visuel-mode[data-jeu="jeu-2"] canvas.visible { opacity: .46; }
+/* Une variante claire (images/LISEZ-MOI.md) est faite pour ce fond : elle se montre entière.
+   La retenue ci-dessus n'a de sens que pour une photo sombre, et c'est elle qui donnait aux
+   images leur air voilé. Après les deux règles de retenue, et aussi précise qu'elles. */
+:root[data-theme="clair"] #visuel-mode[data-jeu] canvas.visible[data-variante="claire"] { opacity: 1; }
 /* Mode ambiant : l'image s'en va. L'horloge y dérive de quelques centimètres à chaque
    minute pour ne pas marquer la dalle — elle passerait tôt ou tard en plein sur le sujet,
    et c'est ce qu'on a vu sur la TV (l'heure, la date et la météo sur la bobine de film).
@@ -561,23 +569,130 @@ body.depart .heros, body.depart .modes { opacity: 0; transform: scale(.96); tran
 .reprise.focus .lecture { opacity: 1; transform: none; }
 
 /* ── Intro à l'allumage ──────────────────────────────────────────────────── */
-#intro { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: var(--encre); transition: opacity .9s var(--souple); pointer-events: none; }
-#intro.fin { opacity: 0; }
-.intro-mot { display: flex; gap: 1.67rem; font-size: var(--t-affiche); font-weight: 800; letter-spacing: .02em; }
-.intro-mot span {
-  display: inline-block;
-  background: linear-gradient(120deg, #fff 30%, rgb(var(--tv)) 50%, #fff 70%);
-  background-size: 300% 100%;
-  -webkit-background-clip: text; background-clip: text; color: transparent;
-  animation: intro-lettre 1.1s var(--souple) both, intro-reflet 1.6s .5s ease-in-out both;
+/* Une ouverture de console, pas un écran de chargement : la pastille du logo s'allume au
+   centre, les trois lettres la rejoignent, puis le logo entier vient se poser à la place
+   exacte de celui de l'en-tête pendant que l'accueil apparaît (hub.js mesure l'en-tête et
+   pose la transformation : rien n'est deviné ici). L'ancienne intro était un mot sur un
+   panneau opaque, retiré par un fondu : le fond, la photo et l'accueil arrivaient tous d'un
+   bloc derrière lui, et le logo de l'en-tête n'avait aucun lien avec celui qu'on venait de
+   voir.
+   Tout ce qui bouge ici n'anime que `transform` et `opacity` : le compositeur déplace des
+   calques déjà peints, en 3840×2160 sur l'UHD 630. Aucun flou (les lettres arrivaient dans
+   un `blur(14px)` recalculé à chaque image), aucun reflet en `background-position`, aucun
+   masque (la WebKitGTK du HUB les ignore), et le voile s'écrit à la couleur du thème.
+   Le logo est écrit en GRAND (--k fois celui de l'en-tête) et réduit en se posant : agrandir
+   par `transform` un texte peint petit le montrait flou pendant toute l'intro. */
+#intro {
+  --k: 3;
+  position: fixed; inset: 0; z-index: 50;
+  display: grid; place-items: center;
+  pointer-events: none;
+  transition: opacity .4s linear;
 }
-.intro-mot span:nth-child(2) { animation-delay: .12s, .6s; }
-.intro-mot span:nth-child(3) { animation-delay: .24s, .7s; }
-.intro-ligne { position: absolute; top: calc(50% + 4.93rem); left: 50%; width: 16.69rem; height: 2px; translate: -50% 0; background: linear-gradient(90deg, transparent, rgb(var(--tv)), transparent); animation: intro-trait 1.4s .35s var(--souple) both; }
-:root[data-theme="clair"] .intro-mot span { background-image: linear-gradient(120deg, #0e1322 30%, rgb(var(--tv)) 50%, #0e1322 70%); }
-@keyframes intro-lettre { from { opacity: 0; transform: translateY(1.9rem) scale(.9); filter: blur(14px); } }
-@keyframes intro-reflet { from { background-position: 100% 0; } to { background-position: 0 0; } }
-@keyframes intro-trait { from { transform: scaleX(0); opacity: 0; } 60% { opacity: 1; } to { transform: scaleX(1); opacity: .7; } }
+/* Le repli : animations réduites, ou un calque déjà ouvert sous l'intro. Tout le calque
+   s'efface d'un fondu, rien ne se déplace. */
+#intro.fin { opacity: 0; }
+/* Opaque le temps que le fond se dessine une première fois (une toile vide, puis le motif
+   d'un coup), il se lève ensuite : le fond animé vit sous le logo bien avant l'accueil,
+   comme un écran qui s'allume. */
+.intro-voile {
+  position: absolute; inset: 0;
+  background: var(--encre);
+  transition: opacity .9s .25s var(--sortie);
+}
+#intro.allume .intro-voile { opacity: 0; }
+#intro.pose .intro-voile { transition: opacity .3s linear; }
+/* La lueur de l'allumage : un dégradé peint une fois, dont seules l'échelle et l'opacité
+   changent. Pas une ombre animée : `box-shadow` se repeint à chaque image. */
+.intro-halo {
+  position: absolute; left: 50%; top: 50%;
+  width: 46rem; height: 46rem;
+  margin: -23rem 0 0 -23rem;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, rgb(var(--accent)), transparent);
+  opacity: .16;
+  animation: intro-halo 1.5s var(--sortie) both;
+  transition: opacity .45s linear;
+}
+/* En clair, la lueur est une ombre colorée sur un fond pâle : à .22 elle faisait une tache
+   grise à droite de la pastille avant que le fond ne se lève (capture à 150 ms). */
+:root[data-theme="clair"] .intro-halo { opacity: .1; }
+#intro.pose .intro-halo { opacity: 0; }
+/* Le logo de l'en-tête, trait pour trait (.marque), à --k fois sa taille : mêmes
+   proportions, même interlettrage, même pastille. Origine en haut à gauche : hub.js y
+   applique « translate(…) scale(…) » vers la boîte mesurée de l'en-tête. */
+.intro-marque {
+  position: relative;
+  /* L'interlettrage suit aussi le B : la boîte dépasse l'encre d'un demi-cadratin à droite,
+     et le logo paraissait décentré au-dessus de son trait. On centre l'encre. */
+  left: calc(.25 * var(--t-4) * var(--k));
+  display: flex; align-items: center; gap: calc(.68rem * var(--k));
+  font-weight: 800;
+  font-size: calc(var(--t-4) * var(--k));
+  letter-spacing: .5em;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+/* L'enchaînement (hub.js, « poser ») : ce logo rétrécit vers l'en-tête pendant que le vrai
+   logo de l'en-tête, agrandi jusqu'au centre, fait le même trajet sous lui — même durée,
+   même courbe, même origine : ils restent l'un sur l'autre. En plein vol, celui-ci s'efface
+   et laisse le vrai, qui arrive à sa place sans transformation. */
+#intro.pose .intro-marque { transition: transform .7s var(--vol), opacity .14s linear; }
+#intro.relais .intro-marque { opacity: 0; }
+body.intro .entete .marque, body.intro-pose .entete .marque { transform-origin: 0 0; }
+body.intro-pose .entete .marque { transition: transform .7s var(--vol); }
+.intro-marque i {
+  position: relative;
+  width: calc(.83rem * var(--k)); height: calc(.83rem * var(--k));
+  border-radius: calc(.27rem * var(--k));
+  background: rgb(var(--accent));
+  box-shadow: 0 0 calc(1.06rem * var(--k)) rgb(var(--accent) / .9);
+  animation: intro-pastille .6s var(--ressort) both;
+}
+/* L'onde de l'allumage : le contour de la pastille, qui s'élargit et s'éteint. */
+.intro-marque i::after {
+  content: "";
+  position: absolute; inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 calc(.05rem * var(--k)) rgb(var(--accent));
+  opacity: 0;
+  animation: intro-onde .75s .12s var(--sortie) both;
+}
+/* Un bloc par lettre (un `transform` ne prend pas sur du texte en ligne). Chacun garde son
+   interlettrage : la largeur du mot reste celle du texte de l'en-tête. */
+.intro-marque b, .entete .marque b { display: block; font-weight: inherit; white-space: nowrap; }
+.intro-marque span { display: inline-block; animation: intro-lettre .6s var(--souple) both; }
+.intro-marque span:nth-child(1) { animation-delay: .42s; }
+.intro-marque span:nth-child(2) { animation-delay: .53s; }
+.intro-marque span:nth-child(3) { animation-delay: .64s; }
+/* Le trait : il souligne le logo le temps de la lecture, et s'efface quand il part. */
+.intro-ligne {
+  position: absolute; left: 50%; top: calc(50% + 1.5rem * var(--k));
+  width: calc(9rem * var(--k)); height: 2px;
+  margin-left: calc(-4.5rem * var(--k));
+  background: linear-gradient(90deg, transparent, rgb(var(--accent)), transparent);
+  opacity: .8;
+  animation: intro-trait 1s .7s var(--souple) both;
+  transition: opacity .2s linear;
+}
+#intro.pose .intro-ligne { opacity: 0; }
+/* L'accueil et la photo du mode attendent sous l'intro, puis paraissent pendant que le logo
+   se pose (leurs propres fondus : .5 s et 1,1 s). Le logo de l'en-tête, lui, reste caché
+   jusqu'à ce que celui de l'intro soit arrivé sur lui : jamais deux logos, jamais aucun. */
+/* Sans transition à l'aller : posée par hub.js après le premier calcul de style, la classe
+   faisait S'ÉTEINDRE l'accueil en .5 s sous le voile au lieu de le cacher. Au retour, c'est
+   la transition de la règle d'origine qui joue. */
+body.intro-avant .ecran, body.intro-avant #visuel-mode { opacity: 0; transition: none; }
+/* L'accueil et la photo laissent partir le logo : parus d'un coup sous lui, la bobine du
+   mode TV se collait au B, et le logo traversait le grand titre du mode déjà lisible
+   (captures figées tous les 50 ms, 21/09/2026). Quand ils sont à mi-fondu, il est arrivé. */
+body.intro-pose .ecran, body.intro-pose #visuel-mode { transition-delay: .36s; }
+body.intro .entete .marque { visibility: hidden; }
+@keyframes intro-pastille { from { opacity: 0; transform: scale(.2); } }
+@keyframes intro-onde { from { opacity: .85; transform: scale(1); } to { opacity: 0; transform: scale(3.2); } }
+@keyframes intro-lettre { from { opacity: 0; transform: translateX(-.35em); } }
+@keyframes intro-trait { from { opacity: 0; transform: scaleX(0); } }
+@keyframes intro-halo { from { opacity: 0; transform: scale(.35); } }
 
 .pictogramme {
   --c: var(--accent);
@@ -830,6 +945,7 @@ body:has(#confirmer.ouvert) #arret .dialogue { opacity: 0; }
   display: block;
 }
 :root[data-theme="clair"] .apercu-visuel { opacity: .55; }
+:root[data-theme="clair"] .apercu-visuel[data-variante="claire"] { opacity: 1; }
 /* Le nom sur un fond sombre : lisible sur n'importe quel aperçu, clair ou chargé. */
 .vignette-fond .libelle {
   position: absolute; left: .45rem; bottom: .4rem;
@@ -1109,6 +1225,12 @@ body.sans-animation *, body.sans-animation *::before, body.sans-animation *::aft
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition-duration: .01s !important; }
+}
+/* L'intro réduite est un fondu simple : c'est le seul fondu que ces deux règles laissent
+   vivre. À .01 s, le logo disparaissait d'un coup sur un accueil arrivé d'un coup. */
+body.sans-animation #intro.reduite { transition-duration: .4s !important; }
+@media (prefers-reduced-motion: reduce) {
+  #intro.reduite { transition-duration: .4s !important; }
 }
 
 /* ── Profils : portée, restrictions, code ────────────────────────────────── */

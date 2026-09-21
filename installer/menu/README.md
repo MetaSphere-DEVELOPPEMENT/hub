@@ -26,6 +26,38 @@ absente ou illisible n'est pas une panne : le pictogramme en filigrane reprend s
 noms et les chemins sont écrits une seule fois, dans `JEUX_VISUELS` et `sourceVisuel`
 (`hub.js`).
 
+**Variantes claires.** Ces photos sont sombres ; en thème clair le menu les retient à 55 %
+d'opacité (46 % pour le jeu 2) et elles paraissent voilées. Chaque photo peut avoir sa
+variante claire à côté d'elle, `mode-tv-clair.webp` : en thème clair, si le fichier existe,
+c'est lui qui est cuit et montré entier ; sinon rien ne change. Le menu le découvre en le
+demandant une fois comme une image (en `file://`, il n'y a pas d'autre moyen) : un fichier
+absent n'est qu'un événement `error`, retenu pour ne jamais être redemandé ; en thème sombre
+les variantes ne sont pas lues du tout, et passer d'un thème à l'autre ne relit rien. Quoi
+déposer, à quelles dimensions et comment cadrer : `images/LISEZ-MOI.md`.
+
+## L'intro à l'allumage
+
+À l'allumage seulement (ni au retour d'un mode, ni avec `?ecran=`, ni avec `?sans-intro`, que
+les tests emploient). Elle occupe le temps où le menu se prépare et n'en ajoute pas :
+
+| Instant | Ce qu'on voit |
+|---|---|
+| 0 s | le voile, à la couleur du thème ; la pastille du logo s'allume au centre, une onde s'en détache |
+| 0,25 → 1,15 s | le voile se lève : le fond animé vit déjà sous le logo |
+| 0,4 → 1,25 s | les lettres H, U, B rejoignent la pastille, puis le trait les souligne |
+| 1,4 s (au plus tard 1,5 s) | le menu est prêt (fond dessiné, photos cuites) : le logo part vers l'en-tête, 0,7 s |
+| + 0,36 s | l'accueil et la photo du mode paraissent pendant qu'il arrive |
+| + 0,54 s | le vrai logo de l'en-tête, qui faisait le même trajet sous lui, prend le relais |
+| ≈ 2,15 s | l'intro est rangée (l'ancienne : 2,7 s, toujours) |
+
+Deux logos font le trajet l'un sur l'autre : celui de l'intro, écrit en grand et donc net au
+centre, et le vrai logo de l'en-tête, qui arrive à sa place sans transformation — sa position
+finale est exacte par construction. Une touche pendant l'intro l'abrège et agit tout de
+suite. Animations réduites (profil ou système), réveil programmé, ou calque ouvert sous
+l'intro : le logo reste fixe 0,7 s puis tout le calque s'efface en 0,4 s, rien ne bouge. Le
+choix du profil et la demande de code attendent la fin de l'intro. Durées : `INTRO` (`hub.js`)
+et la section « Intro à l'allumage » de `hub.css` ; mesures : `tests/menu/intro.test.js`.
+
 ## Mesurer la fluidité
 
 ### D'où l'on part

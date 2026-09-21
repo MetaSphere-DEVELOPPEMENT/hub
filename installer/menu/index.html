@@ -18,6 +18,12 @@
 <link rel="stylesheet" href="extensions.css">
 </head>
 <body>
+<!-- L'intro cache l'accueil AVANT sa première image. hub.js est chargé en fin de page : le
+     temps qu'il tourne, le moteur rendait parfois une image de l'accueil à nu — textes vides,
+     horloge « --:-- » — juste avant le voile (2 ouvertures sur 8 dans WebKit, 8 sur 8 dans
+     Chromium, mesuré le 21/09/2026). Mêmes conditions que dans hub.js, qui retire ces
+     classes s'il ne joue pas l'intro. -->
+<script>if (!(window.HUB_INITIAL || {}).retour && !/[?&](sans-intro|ecran=)/.test(location.search)) document.body.classList.add("intro", "intro-avant");</script>
 <canvas id="fond" width="192" height="108"></canvas>
 <div id="photos" hidden></div>
 <!-- Les traits fins des motifs (sol, étoiles, poussière), plus nets que le fond. -->
@@ -34,12 +40,23 @@
      Les trois photos sont chargées une fois pour toutes. Le pictogramme en filigrane, qui
      pivote lentement et reste sous le voile, reprend si l'une manque ou ne se charge pas. -->
 <div id="visuel-mode" hidden></div>
-<div id="intro" hidden><div class="intro-mot"><span>H</span><span>U</span><span>B</span></div><div class="intro-ligne"></div></div>
+<!-- L'ouverture, à l'allumage seulement (hub.js, « Intro ») : le logo de l'en-tête, en grand,
+     qui s'allume au centre puis vient se poser à sa place pendant que l'accueil apparaît.
+     Le voile n'est opaque qu'un instant : il couvre le premier dessin du fond, puis le fond
+     animé vit déjà sous le logo. Les lettres sont collées (aucun blanc entre les balises) :
+     un blanc y prendrait l'interlettrage, et le logo ne tomberait plus sur celui de l'en-tête. -->
+<div id="intro" hidden>
+  <div class="intro-voile"></div>
+  <div class="intro-halo"></div>
+  <div class="intro-marque"><i></i><b><span>H</span><span>U</span><span>B</span></b></div>
+  <div class="intro-ligne"></div>
+</div>
 
 <main class="ecran" id="accueil">
   <header class="entete">
     <div class="gauche">
-      <div class="marque"><i></i>HUB</div>
+      <!-- Le mot dans son bloc : l'intro y mesure la ligne de base, pour poser la sienne dessus. -->
+      <div class="marque"><i></i><b>HUB</b></div>
       <div class="salut">
         <h1 id="salut">Bonsoir</h1>
         <!-- Une alerte (pluie à venir) seulement : vide, il est caché. -->

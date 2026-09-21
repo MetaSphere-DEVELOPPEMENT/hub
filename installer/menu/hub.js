@@ -847,12 +847,58 @@ const JEUX_VISUELS = ["jeu-1", "jeu-2", "jeu-3"];
 // images, ou rien du tout à droite — le fond animé et sa teinte de mode y suffisent.
 const CHOIX_VISUELS = [...JEUX_VISUELS, "pictogramme", "aucun"];
 const MODES_VISUELS = ["tv", "jeux", "bureau"];
-const sourceVisuel = (jeu, mode) => `images/${jeu}/mode-${mode}.webp`;
+// La variante claire d'une photo : le même nom suivi de « -clair » (images/LISEZ-MOI.md).
+const sourceVisuel = (jeu, mode, claire = false) => `images/${jeu}/mode-${mode}${claire ? "-clair" : ""}.webp`;
 function jeuVisuels(p = profil()) { return CHOIX_VISUELS.includes(p.visuels) ? p.visuels : "jeu-1"; }
 let visuelChoisi = "tv";
 let jeuPose = null;
-// Les photos posées et leur toile, pour les recuire quand l'écran ou la palette changent.
+// Les modes posés et leur toile, pour les recuire quand l'écran, la palette ou le thème
+// changent. « fichier » est celui que la toile doit montrer : undefined tant qu'on ne sait
+// pas, null quand il n'y en a aucun pour ce thème.
 let photosVisuels = [];
+// ── Les variantes claires ─────────────────────────────────────────────────
+// Les photos des trois jeux sont sombres. En thème clair on les retient à 55 % d'opacité
+// pour qu'elles ne fassent pas une tache noire, et elles paraissent voilées — c'est
+// inhérent, aucun réglage ne le rattrape (retour du propriétaire, 21/09/2026 : « je dois
+// trouver les mêmes images en thème clair »). Chaque photo peut donc avoir sa variante
+// claire à côté d'elle : en thème clair, si le fichier existe, c'est lui qu'on cuit, et on le
+// montre entier. S'il n'existe pas, rien ne change.
+// Savoir s'il existe : la page est servie en file://, il n'y a ni liste de dossier ni
+// requête HEAD. On le demande comme une image, une fois ; son absence n'est qu'un événement
+// « error », celui qui rend déjà la place au filigrane quand une photo manque. Les fichiers
+// lus restent en mémoire tant que le jeu ne change pas (repasser en sombre ne relit rien) ;
+// les ABSENTS sont retenus pour toute la vie de la page, sinon chaque changement de thème,
+// de jeu ou chaque ouverture des réglages les redemanderait.
+const fichiersVisuels = new Map();
+const visuelsAbsents = new Set();
+function fichierVisuel(source) {
+  let fichier = fichiersVisuels.get(source);
+  if (fichier) return fichier;
+  fichier = { source, image: null, etat: visuelsAbsents.has(source) ? "absent" : "attente" };
+  fichiersVisuels.set(source, fichier);
+  if (fichier.etat === "absent") return fichier;
+  fichier.image = new Image();
+  fichier.image.decoding = "async";
+  // Le jeu a pu changer pendant le chargement : un fichier qui n'est plus attendu ne
+  // réveille personne.
+  const suite = etat => () => { fichier.etat = etat; if (etat === "absent") visuelsAbsents.add(source); if (fichiersVisuels.get(source) === fichier) rafraichirVisuel(); };
+  fichier.image.addEventListener("load", suite("pret"));
+  fichier.image.addEventListener("error", suite("absent"));
+  fichier.image.src = source;
+  return fichier;
+}
+// Le fichier à montrer pour un mode, dans le thème du moment : la variante claire d'abord en
+// thème clair, la photo sombre sinon. La photo sombre n'est demandée que si elle sert : un
+// jeu qui a ses trois variantes ne lit que trois fichiers en thème clair, pas six.
+// Rend le fichier prêt, null s'il n'y en a aucun, undefined tant qu'on attend une réponse.
+function visuelDuTheme(jeu, mode, clair = racine.dataset.theme === "clair") {
+  for (const claire of clair ? [true, false] : [false]) {
+    const fichier = fichierVisuel(sourceVisuel(jeu, mode, claire));
+    if (fichier.etat === "attente") return undefined;
+    if (fichier.etat === "pret") return { ...fichier, claire };
+  }
+  return null;
+}
 let baseVisuel = rvbHex(PALETTES.aurore.sombre.base);
 
 // ── Les fondus de l'image du mode ─────────────────────────────────────────
@@ -921,44 +967,51 @@ function cuireVisuel(toile, image, largeurBoite, hauteurBoite, base) {
   return true;
 }
 // Recuire ce qui doit l'être : une photo qui vient d'arriver, un écran redimensionné, une
-// palette ou un thème qui change (l'ombre de l'en-tête en prend la couleur).
+// palette ou un thème qui change (l'ombre de l'en-tête en prend la couleur — claire en thème
+// clair : les fondus d'une variante claire vont vers le clair du fond —, et le thème choisit
+// entre la photo et sa variante).
 function cuireVisuels() {
   const largeur = Math.round(innerHeight * BOITE_VISUEL.largeur);
   const hauteur = Math.round(innerHeight * BOITE_VISUEL.hauteur);
-  const cle = [largeur, hauteur, baseVisuel.join()].join();
-  for (const { toile, image } of photosVisuels) {
+  for (const { toile, fichier } of photosVisuels) {
+    if (!fichier) continue;
+    const cle = [largeur, hauteur, baseVisuel.join(), fichier.source].join();
     if (toile.dataset.cuisson === cle) continue;
-    if (cuireVisuel(toile, image, largeur, hauteur, baseVisuel)) toile.dataset.cuisson = cle;
+    if (!cuireVisuel(toile, fichier.image, largeur, hauteur, baseVisuel)) continue;
+    toile.dataset.cuisson = cle;
+    // Lisibles par le CSS (une variante claire n'est pas retenue à .55) et par les tests.
+    toile.dataset.source = fichier.source;
+    toile.dataset.variante = fichier.claire ? "claire" : "sombre";
   }
 }
-// Poser le jeu choisi : les trois photos sont chargées une fois pour toutes, et chacune
-// a sa toile dans la page. Changer de jeu dans les réglages les remplace — c'est le seul
-// moment où le menu relit des fichiers.
+// Poser le jeu choisi : une toile par mode. Changer de jeu dans les réglages les remplace,
+// et oublie les fichiers du jeu d'avant — trois photos décodées de moins à garder.
 function poserVisuels(jeu = jeuVisuels()) {
   if (jeu === jeuPose) return;
   jeuPose = jeu;
   visuelMode.innerHTML = "";
   photosVisuels = [];
+  fichiersVisuels.clear();
   // Le jeu posé est lisible dans le CSS (chaque jeu n'a pas la même vigueur) et par les tests.
   visuelMode.dataset.jeu = jeu;
   // Sans jeu d'images, aucun fichier n'est demandé : ni pour le pictogramme, ni pour rien.
   if (!JEUX_VISUELS.includes(jeu)) return;
   for (const mode of MODES_VISUELS) {
-    const source = sourceVisuel(jeu, mode);
-    const toile = el("canvas", { "data-visuel": mode, "data-source": source });
-    const image = new Image();
-    image.decoding = "async";
-    photosVisuels.push({ toile, image });
-    image.addEventListener("load", cuireVisuels);
-    // Image absente du dossier, ou illisible : sa toile quitte la page et le pictogramme en
-    // filigrane reprend sa place. Le menu ne doit jamais montrer un trou à droite.
-    image.addEventListener("error", () => {
-      photosVisuels = photosVisuels.filter(v => v.toile !== toile);
-      toile.remove();
-      rafraichirVisuel();
-    });
-    image.src = source;
-    visuelMode.append(toile);
+    photosVisuels.push({ mode, fichier: undefined, toile: el("canvas", { "data-visuel": mode, "data-source": sourceVisuel(jeu, mode) }) });
+  }
+}
+// À chaque mode son fichier, selon le thème. Tant que la réponse n'est pas là, la toile
+// garde ce qu'elle montre (au passage en clair, la photo sombre reste une fraction de
+// seconde plutôt qu'un trou). Image absente du dossier, ou illisible, et pas de repli : la
+// toile quitte la page et le pictogramme en filigrane reprend sa place. Le menu ne doit
+// jamais montrer un trou à droite. Elle y revient si l'autre thème a de quoi la remplir.
+function choisirVisuels() {
+  for (const v of photosVisuels) {
+    const fichier = visuelDuTheme(jeuPose, v.mode);
+    if (fichier === undefined) { if (!v.toile.isConnected && !v.fichier) visuelMode.append(v.toile); continue; }
+    v.fichier = fichier;
+    if (fichier && !v.toile.isConnected) visuelMode.append(v.toile);
+    if (!fichier) v.toile.remove();
   }
 }
 // Le visuel du mode : la toile du mode choisi seule visible. Sans image — « aucun » choisi,
@@ -966,6 +1019,7 @@ function poserVisuels(jeu = jeuVisuels()) {
 // précisément le vide qui a été choisi.
 function rafraichirVisuel(motif = motifChoisi()) {
   poserVisuels();
+  choisirVisuels();
   cuireVisuels();
   const cinema = motif === "cinema";
   const vue = visuelMode.querySelector(`[data-visuel="${visuelChoisi}"]`);
@@ -977,18 +1031,30 @@ function rafraichirVisuel(motif = motifChoisi()) {
 // petit, aux mêmes proportions. Elle ne peut pas emprunter la toile de l'accueil — les
 // vignettes des autres jeux n'y sont pas posées —, alors elle redemande l'image, que le
 // navigateur sert de son cache, et se peint à son arrivée.
-function vignetteVisuel(source) {
-  const toile = el("canvas", { class: "apercu-visuel", "data-source": source });
-  const image = new Image();
-  image.addEventListener("load", () => cuireVisuel(toile, image, 280, Math.round(280 * BOITE_VISUEL.hauteur / BOITE_VISUEL.largeur), baseVisuel));
-  image.src = source;
+function vignetteVisuel(jeu, mode) {
+  const toile = el("canvas", { class: "apercu-visuel", "data-source": sourceVisuel(jeu, mode), "data-variante": "sombre" });
+  const peindre = (claire, repli) => {
+    const source = sourceVisuel(jeu, mode, claire);
+    const image = new Image();
+    image.addEventListener("load", () => {
+      cuireVisuel(toile, image, 280, Math.round(280 * BOITE_VISUEL.hauteur / BOITE_VISUEL.largeur), baseVisuel);
+      toile.dataset.source = source;
+      toile.dataset.variante = claire ? "claire" : "sombre";
+    });
+    image.addEventListener("error", () => { if (claire) visuelsAbsents.add(source); repli?.(); });
+    image.src = source;
+  };
+  // En thème clair, la variante claire si elle existe — comme à l'écran ; une variante déjà
+  // cherchée et absente n'est pas redemandée à chaque ouverture des réglages.
+  if (racine.dataset.theme === "clair" && !visuelsAbsents.has(sourceVisuel(jeu, mode, true))) peindre(true, () => peindre(false));
+  else peindre(false);
   return toile;
 }
 // La vignette du motif cinéma montre ce qu'on verra : l'image du mode choisi, ou le
 // pictogramme en filigrane à défaut.
 function apercuVisuel() {
   const vue = visuelMode.querySelector(`[data-visuel="${visuelChoisi}"]`);
-  return vue ? vignetteVisuel(vue.dataset.source)
+  return vue ? vignetteVisuel(jeuPose, visuelChoisi)
     : el("span", { class: "apercu-filigrane", html: filigrane.innerHTML });
 }
 let accentCible = COULEURS_MODE.tv;
@@ -2526,7 +2592,7 @@ function rendreSection(garderFocus = true) {
         const apercu = el("span", { class: "apercu-cinema" }, apercuFond("cinema", couleur || "aurore", theme),
           j === "aucun" ? null
             : j === "pictogramme" ? el("span", { class: "apercu-filigrane", html: filigrane.innerHTML })
-              : vignetteVisuel(sourceVisuel(j, "tv")));
+              : vignetteVisuel(j, "tv"));
         visuels.append(vignette(`visuels-${j}`, jeu === j, t(`visuels.${j}`), apercu, () => valider(() => { p.visuels = j; })));
       }
       zone.append(
@@ -3450,14 +3516,145 @@ rendreReprises();
 if (APERCU) document.body.append(el("div", { class: "bandeau-apercu" }, t("apercu.bandeau")));
 setInterval(() => { horloge(); majMinuteur(); }, 5000);
 
-// Intro à l'allumage seulement : revenir de Kodi doit être immédiat.
-if (!INITIAL.retour && !parametres.get("ecran") && !parametres.has("sans-intro") && profil().animations !== "reduites" && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+// ── Intro à l'allumage ────────────────────────────────────────────────────
+// À l'allumage seulement : revenir de Kodi doit être immédiat. L'intro n'ajoute aucune
+// attente : elle occupe le temps où le menu se prépare de toute façon (premier dessin du
+// fond, cuisson des trois photos du mode, dernier relevé météo), et s'en va dès qu'il est
+// prêt. L'ancienne durait 2,7 s quoi qu'il arrive — le voile partait à 1,7 s, le calque
+// était retiré une seconde plus tard. Celle-ci est bornée des deux côtés : pas moins que
+// le temps de lire le logo, jamais plus que le plafond, même si une photo ne vient pas.
+const INTRO = {
+  lecture: 1400,   // le logo est entier vers 1,1 s : on le laisse lire
+  plafond: 1500,   // le menu n'est pas prêt ? on enchaîne quand même : l'accueil ne doit pas se lire plus tard qu'avant (voile parti à 1700)
+  pose: 700,       // le logo va du centre à l'en-tête ; l'accueil paraît pendant ce temps (hub.css)
+  relais: 540,     // en fin de vol, encore en mouvement, le logo de l'en-tête prend la place de celui de l'intro
+  marge: 40,       // quelques images immobiles avant de ranger l'intro
+  reduite: 700,    // animations réduites : le logo fixe, puis un fondu
+  fondu: 400,      // le même que « transition » de #intro (hub.css)
+};
+let introEnCours = false;
+const suitesIntro = [];
+// Ce qui ouvre un calque à l'allumage (choix du profil, code) attend la fin de l'intro : le
+// voile n'étant plus opaque, le dialogue se serait vu sous le logo.
+function apresIntro(suite) { if (introEnCours) suitesIntro.push(suite); else suite(); }
+// Le menu est prêt : le fond a été dessiné, et chaque photo du jeu est cuite (ou absente).
+function menuPret() { return fondPret && photosVisuels.every(v => v.fichier === null || v.toile.dataset.cuisson); }
+function jouerIntro() {
   const intro = $("intro");
+  const logo = intro.querySelector(".intro-marque");
+  // (« .entete .marque » : les tuiles des services ont aussi une classe « marque ».)
+  const marque = document.querySelector(".entete .marque");
+  const corps = document.body.classList;
+  const reduit = profil().animations === "reduites" || matchMedia("(prefers-reduced-motion: reduce)").matches;
+  // Le réveil programmé passe en mode ambiant à 2 s : le logo se poserait sur un en-tête
+  // qui s'efface. Il garde le fondu simple, lui aussi.
+  const simple = reduit || !!INITIAL.reveilProgramme;
+  // Un calque déjà ouvert, un mode qui part, l'écran qui passe en ambiant : l'en-tête n'est
+  // plus à sa place (l'accueil recule à l'échelle .975) ou ne se voit plus.
+  const derange = () => ["calque-ouvert", "depart", "ambiant"].some(c => corps.contains(c));
+  const debut = performance.now();
+  let etape = "centre";
+  introEnCours = true;
+  intro.classList.toggle("reduite", reduit);
   intro.hidden = false;
+  corps.add("intro", "intro-avant");
   son("ok");
-  setTimeout(() => intro.classList.add("fin"), 1700);
-  setTimeout(() => { intro.hidden = true; }, 2700);
+
+  const finir = () => {
+    if (etape === "finie") return;
+    etape = "finie";
+    intro.hidden = true;
+    intro.classList.remove("allume", "pose", "relais", "fin");
+    corps.remove("intro", "intro-avant", "intro-pose");
+    logo.style.transform = "";
+    marque.style.transform = "";
+    removeEventListener("keydown", abreger, true);
+    introEnCours = false;
+    for (const suite of suitesIntro.splice(0)) suite();
+  };
+  // Le repli : tout le calque s'efface d'un fondu, et l'accueil — logo compris — est déjà
+  // entier dessous. Rien ne se déplace.
+  const fondre = () => {
+    if (etape !== "centre") return;
+    etape = "fondu";
+    corps.remove("intro", "intro-avant");
+    intro.classList.add("fin");
+    setTimeout(finir, INTRO.fondu + 40);
+  };
+  // L'enchaînement : DEUX logos font le même trajet, l'un sur l'autre, du centre à l'en-tête.
+  // Celui de l'intro, écrit en grand, qui rétrécit ; et le vrai logo de l'en-tête, agrandi
+  // jusqu'au centre, qui revient à sa place. On voit le premier au départ — net, il est
+  // peint à cette taille — et le second à l'arrivée : le relais se fait en plein vol, là où
+  // l'œil ne peut pas comparer. À l'arrivée, ce qui est à l'écran EST le logo de l'en-tête,
+  // sans transformation : sa place est exacte par construction.
+  // La première version posait le logo de l'intro sur l'en-tête et l'échangeait à l'arrêt.
+  // Les boîtes coïncidaient au tiers de pixel, mais pas l'encre : un texte peint à 37 px est
+  // calé sur la grille des pixels, le même réduit depuis 110 px ne l'est pas, et les lettres
+  // sautaient d'un pixel vers le haut au moment de l'échange (mesuré sur captures grossies,
+  // WebKit et Chromium, 21/09/2026). Aucun calcul ne rattrape un calage qui dépend du moteur.
+  const poser = () => {
+    if (etape !== "centre") return;
+    if (simple || derange()) return fondre();
+    // Mesurés maintenant : la marge, la taille du texte et l'écran déplacent l'en-tête.
+    const cible = marque.getBoundingClientRect();
+    const depart = logo.getBoundingClientRect();
+    if (!cible.width || !depart.width) return fondre();
+    // Une seule échelle, celle des largeurs mesurées — pas --k : l'avance des glyphes ne
+    // s'arrondit pas pareil aux deux tailles. En hauteur, ce sont les LIGNES DE BASE des
+    // deux mots qui coïncident, pas le milieu des boîtes : les hauteurs de ligne
+    // s'arrondissent elles aussi. Un repère vide en fin de ligne donne cette ligne ; arrondie
+    // au pixel, comme le fait le moteur en peignant un texte (sans l'arrondi, les lettres des
+    // deux logos étaient à un pixel l'une de l'autre sur deux tailles d'écran sur cinq au
+    // lieu d'une, captures du vol figé, WebKit, 21/09/2026).
+    const ligneDeBase = bloc => {
+      const repere = el("s", { style: "display:inline-block;width:0;height:0" });
+      bloc.append(repere);
+      const y = repere.getBoundingClientRect().bottom;
+      repere.remove();
+      return y;
+    };
+    const k = cible.width / depart.width;
+    const baseCible = Math.round(ligneDeBase(marque.querySelector("b"))), baseDepart = Math.round(ligneDeBase(logo.querySelector("b")));
+    const versEntete = `translate(${(cible.left - depart.left).toFixed(2)}px, ${(baseCible - depart.top - (baseDepart - depart.top) * k).toFixed(2)}px) scale(${k.toFixed(5)})`;
+    const depuisCentre = `translate(${(depart.left - cible.left).toFixed(2)}px, ${(baseDepart - cible.top - (baseCible - cible.top) / k).toFixed(2)}px) scale(${(1 / k).toFixed(5)})`;
+    etape = "pose";
+    // Le logo de l'en-tête part du centre : placé d'abord sans transition, et le style
+    // calculé une fois, sinon il n'y a rien d'où partir et il ne bouge pas.
+    marque.style.transform = depuisCentre;
+    marque.getBoundingClientRect();
+    intro.classList.add("pose");
+    corps.add("intro-pose");
+    corps.remove("intro-avant");
+    logo.style.transform = versEntete;
+    marque.style.transform = "translate(0px, 0px) scale(1)";
+    setTimeout(() => {
+      if (etape !== "pose") return;
+      // Le vrai logo paraît SOUS celui de l'intro, qui s'efface sur lui : jamais de trou.
+      corps.remove("intro");
+      intro.classList.add("relais");
+    }, INTRO.relais);
+    setTimeout(finir, INTRO.pose + INTRO.marge);
+  };
+  // Une touche, et l'intro s'efface devant elle : la touche agit (l'intro ne l'arrête
+  // pas), et ce qu'elle a fait doit se voir tout de suite.
+  const abreger = () => poser();
+  addEventListener("keydown", abreger, true);
+
+  if (simple) { setTimeout(fondre, INTRO.reduite); return; }
+  // Deux images plus tard : le voile part d'un état peint, sinon sa transition ne joue pas.
+  requestAnimationFrame(() => requestAnimationFrame(() => intro.classList.add("allume")));
+  const guetter = () => {
+    if (etape !== "centre") return;
+    const ecoule = performance.now() - debut;
+    if (derange() || ecoule >= INTRO.plafond || (ecoule >= INTRO.lecture && menuPret())) return poser();
+    setTimeout(guetter, 30);
+  };
+  guetter();
 }
+if (!INITIAL.retour && !parametres.get("ecran") && !parametres.has("sans-intro")) jouerIntro();
+// index.html pose ces classes avant la première image, sur les mêmes conditions ; si elles
+// divergeaient un jour (« ?ecran= » vide…), l'accueil resterait caché pour de bon.
+else document.body.classList.remove("intro", "intro-avant");
 setInterval(chargerMeteo, 20 * 60000);
 // L'état de la connexion est poussé à chaque changement ; celui d'avant l'ouverture de la page, on le redemande.
 if (PONT && !INITIAL.ambiantSeul) envoyer({ type: "internet" });
@@ -3473,8 +3670,10 @@ chargerMeteo();
 
 if (!INITIAL.retour) {
   if (profil().pin) verrouillerAccueil();
-  if (reglages.systeme.demanderProfil && reglages.profils.length > 1) ACTIONS.profils();
-  else if (verrouAccueil) setTimeout(exigerDeverrouillage, parametres.has("sans-intro") ? 0 : 1800);
+  // Sous l'ancienne intro, opaque, le choix du profil s'ouvrait tout de suite et le code
+  // attendait 1,8 s. Les deux attendent maintenant la fin réelle de l'intro.
+  if (reglages.systeme.demanderProfil && reglages.profils.length > 1) apresIntro(() => ACTIONS.profils());
+  else if (verrouAccueil) apresIntro(() => setTimeout(exigerDeverrouillage, 0));
 }
 
 // Mise au point : ?ecran=reglages&section=fond, ?ecran=meteo, ?theme=clair, ?motif=profondeur&fond=emeraude…

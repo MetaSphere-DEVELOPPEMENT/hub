@@ -7,6 +7,15 @@ lisibles depuis le canapé : le menu affiche cette première section sous « Ins
 **La première section doit porter le numéro du fichier `VERSION`.** Un test le vérifie
 (`tests/test_version.py`). Marche à suivre pour publier : `installer/mise-a-jour/README.md`.
 
+## 1.0.13 — 21 septembre 2026
+
+Le HUB s'allume comme une console : le logo s'éclaire au centre de l'écran, le fond s'anime
+déjà derrière lui, puis il vient se poser à sa place en haut à gauche pendant que l'accueil
+apparaît. Pas une seconde d'attente en plus — l'accueil arrive même un peu plus tôt.
+
+Le thème clair peut avoir ses propres images de mode, claires et non plus voilées : il suffit
+de les déposer à côté des autres (`installer/menu/images/LISEZ-MOI.md` dit lesquelles).
+
 ## 1.0.12 — 21 septembre 2026
 
 Il restait de la couleur autour de l'image du mode : une bande derrière l'heure et le profil,
