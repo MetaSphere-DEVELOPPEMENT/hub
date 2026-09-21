@@ -26,6 +26,15 @@ absente ou illisible n'est pas une panne : le pictogramme en filigrane reprend s
 noms et les chemins sont écrits une seule fois, dans `JEUX_VISUELS` et `sourceVisuel`
 (`hub.js`).
 
+**Variantes claires.** Ces photos sont sombres ; en thème clair le menu les retient à 55 %
+d'opacité (46 % pour le jeu 2) et elles paraissent voilées. Chaque photo peut avoir sa
+variante claire à côté d'elle, `mode-tv-clair.webp` : en thème clair, si le fichier existe,
+c'est lui qui est cuit et montré entier ; sinon rien ne change. Le menu le découvre en le
+demandant une fois comme une image (en `file://`, il n'y a pas d'autre moyen) : un fichier
+absent n'est qu'un événement `error`, retenu pour ne jamais être redemandé ; en thème sombre
+les variantes ne sont pas lues du tout, et passer d'un thème à l'autre ne relit rien. Quoi
+déposer, à quelles dimensions et comment cadrer : `images/LISEZ-MOI.md`.
+
 ## Mesurer la fluidité
 
 ### D'où l'on part

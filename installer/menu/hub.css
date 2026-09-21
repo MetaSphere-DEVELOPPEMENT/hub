@@ -212,6 +212,10 @@ body:not([data-motif="nappes"]) #fond { filter: none; }
    ses hautes lumières, et rien n'est écrit dessus qui ne soit déjà protégé. En clair, où
    l'opacité sert à ne pas peser sur un fond pâle, il garde son cran en moins. */
 :root[data-theme="clair"] #visuel-mode[data-jeu="jeu-2"] canvas.visible { opacity: .46; }
+/* Une variante claire (images/LISEZ-MOI.md) est faite pour ce fond : elle se montre entière.
+   La retenue ci-dessus n'a de sens que pour une photo sombre, et c'est elle qui donnait aux
+   images leur air voilé. Après les deux règles de retenue, et aussi précise qu'elles. */
+:root[data-theme="clair"] #visuel-mode[data-jeu] canvas.visible[data-variante="claire"] { opacity: 1; }
 /* Mode ambiant : l'image s'en va. L'horloge y dérive de quelques centimètres à chaque
    minute pour ne pas marquer la dalle — elle passerait tôt ou tard en plein sur le sujet,
    et c'est ce qu'on a vu sur la TV (l'heure, la date et la météo sur la bobine de film).
@@ -830,6 +834,7 @@ body:has(#confirmer.ouvert) #arret .dialogue { opacity: 0; }
   display: block;
 }
 :root[data-theme="clair"] .apercu-visuel { opacity: .55; }
+:root[data-theme="clair"] .apercu-visuel[data-variante="claire"] { opacity: 1; }
 /* Le nom sur un fond sombre : lisible sur n'importe quel aperçu, clair ou chargé. */
 .vignette-fond .libelle {
   position: absolute; left: .45rem; bottom: .4rem;

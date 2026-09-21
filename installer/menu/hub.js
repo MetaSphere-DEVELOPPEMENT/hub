@@ -847,12 +847,58 @@ const JEUX_VISUELS = ["jeu-1", "jeu-2", "jeu-3"];
 // images, ou rien du tout à droite — le fond animé et sa teinte de mode y suffisent.
 const CHOIX_VISUELS = [...JEUX_VISUELS, "pictogramme", "aucun"];
 const MODES_VISUELS = ["tv", "jeux", "bureau"];
-const sourceVisuel = (jeu, mode) => `images/${jeu}/mode-${mode}.webp`;
+// La variante claire d'une photo : le même nom suivi de « -clair » (images/LISEZ-MOI.md).
+const sourceVisuel = (jeu, mode, claire = false) => `images/${jeu}/mode-${mode}${claire ? "-clair" : ""}.webp`;
 function jeuVisuels(p = profil()) { return CHOIX_VISUELS.includes(p.visuels) ? p.visuels : "jeu-1"; }
 let visuelChoisi = "tv";
 let jeuPose = null;
-// Les photos posées et leur toile, pour les recuire quand l'écran ou la palette changent.
+// Les modes posés et leur toile, pour les recuire quand l'écran, la palette ou le thème
+// changent. « fichier » est celui que la toile doit montrer : undefined tant qu'on ne sait
+// pas, null quand il n'y en a aucun pour ce thème.
 let photosVisuels = [];
+// ── Les variantes claires ─────────────────────────────────────────────────
+// Les photos des trois jeux sont sombres. En thème clair on les retient à 55 % d'opacité
+// pour qu'elles ne fassent pas une tache noire, et elles paraissent voilées — c'est
+// inhérent, aucun réglage ne le rattrape (retour du propriétaire, 21/09/2026 : « je dois
+// trouver les mêmes images en thème clair »). Chaque photo peut donc avoir sa variante
+// claire à côté d'elle : en thème clair, si le fichier existe, c'est lui qu'on cuit, et on le
+// montre entier. S'il n'existe pas, rien ne change.
+// Savoir s'il existe : la page est servie en file://, il n'y a ni liste de dossier ni
+// requête HEAD. On le demande comme une image, une fois ; son absence n'est qu'un événement
+// « error », celui qui rend déjà la place au filigrane quand une photo manque. Les fichiers
+// lus restent en mémoire tant que le jeu ne change pas (repasser en sombre ne relit rien) ;
+// les ABSENTS sont retenus pour toute la vie de la page, sinon chaque changement de thème,
+// de jeu ou chaque ouverture des réglages les redemanderait.
+const fichiersVisuels = new Map();
+const visuelsAbsents = new Set();
+function fichierVisuel(source) {
+  let fichier = fichiersVisuels.get(source);
+  if (fichier) return fichier;
+  fichier = { source, image: null, etat: visuelsAbsents.has(source) ? "absent" : "attente" };
+  fichiersVisuels.set(source, fichier);
+  if (fichier.etat === "absent") return fichier;
+  fichier.image = new Image();
+  fichier.image.decoding = "async";
+  // Le jeu a pu changer pendant le chargement : un fichier qui n'est plus attendu ne
+  // réveille personne.
+  const suite = etat => () => { fichier.etat = etat; if (etat === "absent") visuelsAbsents.add(source); if (fichiersVisuels.get(source) === fichier) rafraichirVisuel(); };
+  fichier.image.addEventListener("load", suite("pret"));
+  fichier.image.addEventListener("error", suite("absent"));
+  fichier.image.src = source;
+  return fichier;
+}
+// Le fichier à montrer pour un mode, dans le thème du moment : la variante claire d'abord en
+// thème clair, la photo sombre sinon. La photo sombre n'est demandée que si elle sert : un
+// jeu qui a ses trois variantes ne lit que trois fichiers en thème clair, pas six.
+// Rend le fichier prêt, null s'il n'y en a aucun, undefined tant qu'on attend une réponse.
+function visuelDuTheme(jeu, mode, clair = racine.dataset.theme === "clair") {
+  for (const claire of clair ? [true, false] : [false]) {
+    const fichier = fichierVisuel(sourceVisuel(jeu, mode, claire));
+    if (fichier.etat === "attente") return undefined;
+    if (fichier.etat === "pret") return { ...fichier, claire };
+  }
+  return null;
+}
 let baseVisuel = rvbHex(PALETTES.aurore.sombre.base);
 
 // ── Les fondus de l'image du mode ─────────────────────────────────────────
@@ -921,44 +967,51 @@ function cuireVisuel(toile, image, largeurBoite, hauteurBoite, base) {
   return true;
 }
 // Recuire ce qui doit l'être : une photo qui vient d'arriver, un écran redimensionné, une
-// palette ou un thème qui change (l'ombre de l'en-tête en prend la couleur).
+// palette ou un thème qui change (l'ombre de l'en-tête en prend la couleur — claire en thème
+// clair : les fondus d'une variante claire vont vers le clair du fond —, et le thème choisit
+// entre la photo et sa variante).
 function cuireVisuels() {
   const largeur = Math.round(innerHeight * BOITE_VISUEL.largeur);
   const hauteur = Math.round(innerHeight * BOITE_VISUEL.hauteur);
-  const cle = [largeur, hauteur, baseVisuel.join()].join();
-  for (const { toile, image } of photosVisuels) {
+  for (const { toile, fichier } of photosVisuels) {
+    if (!fichier) continue;
+    const cle = [largeur, hauteur, baseVisuel.join(), fichier.source].join();
     if (toile.dataset.cuisson === cle) continue;
-    if (cuireVisuel(toile, image, largeur, hauteur, baseVisuel)) toile.dataset.cuisson = cle;
+    if (!cuireVisuel(toile, fichier.image, largeur, hauteur, baseVisuel)) continue;
+    toile.dataset.cuisson = cle;
+    // Lisibles par le CSS (une variante claire n'est pas retenue à .55) et par les tests.
+    toile.dataset.source = fichier.source;
+    toile.dataset.variante = fichier.claire ? "claire" : "sombre";
   }
 }
-// Poser le jeu choisi : les trois photos sont chargées une fois pour toutes, et chacune
-// a sa toile dans la page. Changer de jeu dans les réglages les remplace — c'est le seul
-// moment où le menu relit des fichiers.
+// Poser le jeu choisi : une toile par mode. Changer de jeu dans les réglages les remplace,
+// et oublie les fichiers du jeu d'avant — trois photos décodées de moins à garder.
 function poserVisuels(jeu = jeuVisuels()) {
   if (jeu === jeuPose) return;
   jeuPose = jeu;
   visuelMode.innerHTML = "";
   photosVisuels = [];
+  fichiersVisuels.clear();
   // Le jeu posé est lisible dans le CSS (chaque jeu n'a pas la même vigueur) et par les tests.
   visuelMode.dataset.jeu = jeu;
   // Sans jeu d'images, aucun fichier n'est demandé : ni pour le pictogramme, ni pour rien.
   if (!JEUX_VISUELS.includes(jeu)) return;
   for (const mode of MODES_VISUELS) {
-    const source = sourceVisuel(jeu, mode);
-    const toile = el("canvas", { "data-visuel": mode, "data-source": source });
-    const image = new Image();
-    image.decoding = "async";
-    photosVisuels.push({ toile, image });
-    image.addEventListener("load", cuireVisuels);
-    // Image absente du dossier, ou illisible : sa toile quitte la page et le pictogramme en
-    // filigrane reprend sa place. Le menu ne doit jamais montrer un trou à droite.
-    image.addEventListener("error", () => {
-      photosVisuels = photosVisuels.filter(v => v.toile !== toile);
-      toile.remove();
-      rafraichirVisuel();
-    });
-    image.src = source;
-    visuelMode.append(toile);
+    photosVisuels.push({ mode, fichier: undefined, toile: el("canvas", { "data-visuel": mode, "data-source": sourceVisuel(jeu, mode) }) });
+  }
+}
+// À chaque mode son fichier, selon le thème. Tant que la réponse n'est pas là, la toile
+// garde ce qu'elle montre (au passage en clair, la photo sombre reste une fraction de
+// seconde plutôt qu'un trou). Image absente du dossier, ou illisible, et pas de repli : la
+// toile quitte la page et le pictogramme en filigrane reprend sa place. Le menu ne doit
+// jamais montrer un trou à droite. Elle y revient si l'autre thème a de quoi la remplir.
+function choisirVisuels() {
+  for (const v of photosVisuels) {
+    const fichier = visuelDuTheme(jeuPose, v.mode);
+    if (fichier === undefined) { if (!v.toile.isConnected && !v.fichier) visuelMode.append(v.toile); continue; }
+    v.fichier = fichier;
+    if (fichier && !v.toile.isConnected) visuelMode.append(v.toile);
+    if (!fichier) v.toile.remove();
   }
 }
 // Le visuel du mode : la toile du mode choisi seule visible. Sans image — « aucun » choisi,
@@ -966,6 +1019,7 @@ function poserVisuels(jeu = jeuVisuels()) {
 // précisément le vide qui a été choisi.
 function rafraichirVisuel(motif = motifChoisi()) {
   poserVisuels();
+  choisirVisuels();
   cuireVisuels();
   const cinema = motif === "cinema";
   const vue = visuelMode.querySelector(`[data-visuel="${visuelChoisi}"]`);
@@ -977,18 +1031,30 @@ function rafraichirVisuel(motif = motifChoisi()) {
 // petit, aux mêmes proportions. Elle ne peut pas emprunter la toile de l'accueil — les
 // vignettes des autres jeux n'y sont pas posées —, alors elle redemande l'image, que le
 // navigateur sert de son cache, et se peint à son arrivée.
-function vignetteVisuel(source) {
-  const toile = el("canvas", { class: "apercu-visuel", "data-source": source });
-  const image = new Image();
-  image.addEventListener("load", () => cuireVisuel(toile, image, 280, Math.round(280 * BOITE_VISUEL.hauteur / BOITE_VISUEL.largeur), baseVisuel));
-  image.src = source;
+function vignetteVisuel(jeu, mode) {
+  const toile = el("canvas", { class: "apercu-visuel", "data-source": sourceVisuel(jeu, mode), "data-variante": "sombre" });
+  const peindre = (claire, repli) => {
+    const source = sourceVisuel(jeu, mode, claire);
+    const image = new Image();
+    image.addEventListener("load", () => {
+      cuireVisuel(toile, image, 280, Math.round(280 * BOITE_VISUEL.hauteur / BOITE_VISUEL.largeur), baseVisuel);
+      toile.dataset.source = source;
+      toile.dataset.variante = claire ? "claire" : "sombre";
+    });
+    image.addEventListener("error", () => { if (claire) visuelsAbsents.add(source); repli?.(); });
+    image.src = source;
+  };
+  // En thème clair, la variante claire si elle existe — comme à l'écran ; une variante déjà
+  // cherchée et absente n'est pas redemandée à chaque ouverture des réglages.
+  if (racine.dataset.theme === "clair" && !visuelsAbsents.has(sourceVisuel(jeu, mode, true))) peindre(true, () => peindre(false));
+  else peindre(false);
   return toile;
 }
 // La vignette du motif cinéma montre ce qu'on verra : l'image du mode choisi, ou le
 // pictogramme en filigrane à défaut.
 function apercuVisuel() {
   const vue = visuelMode.querySelector(`[data-visuel="${visuelChoisi}"]`);
-  return vue ? vignetteVisuel(vue.dataset.source)
+  return vue ? vignetteVisuel(jeuPose, visuelChoisi)
     : el("span", { class: "apercu-filigrane", html: filigrane.innerHTML });
 }
 let accentCible = COULEURS_MODE.tv;
@@ -2526,7 +2592,7 @@ function rendreSection(garderFocus = true) {
         const apercu = el("span", { class: "apercu-cinema" }, apercuFond("cinema", couleur || "aurore", theme),
           j === "aucun" ? null
             : j === "pictogramme" ? el("span", { class: "apercu-filigrane", html: filigrane.innerHTML })
-              : vignetteVisuel(sourceVisuel(j, "tv")));
+              : vignetteVisuel(j, "tv"));
         visuels.append(vignette(`visuels-${j}`, jeu === j, t(`visuels.${j}`), apercu, () => valider(() => { p.visuels = j; })));
       }
       zone.append(
