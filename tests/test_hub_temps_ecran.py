@@ -335,6 +335,62 @@ class Avertir(unittest.TestCase):
         self.assertIn("Plus que 3 min d'écran aujourd'hui", lances[0])
 
 
+class TempsDeVeille(unittest.TestCase):
+    """Bug rapporté 22/09/2026 : le temps du mode TV continuait à s'accumuler
+    pendant la veille (l'écran de veille de Kodi, faute de mieux — voir le
+    commentaire de kodi_en_veille)."""
+
+    def test_kodi_en_veille_lit_le_screensaver(self):
+        reponse = lambda *_: json.dumps({"result": {"System.ScreenSaverActive": True}})
+        self.assertTrue(te.kodi_en_veille(kodi=reponse))
+        reponse = lambda *_: json.dumps({"result": {"System.ScreenSaverActive": False}})
+        self.assertFalse(te.kodi_en_veille(kodi=reponse))
+
+    def test_kodi_en_veille_repli_si_injoignable(self):
+        def kodi(*_):
+            raise ConnectionRefusedError()
+        self.assertFalse(te.kodi_en_veille(kodi=kodi))
+
+    def test_kodi_en_veille_repli_si_reponse_abimee(self):
+        self.assertFalse(te.kodi_en_veille(kodi=lambda *_: b"pas du json"))
+        self.assertFalse(te.kodi_en_veille(kodi=lambda *_: json.dumps({"result": {}})))
+
+    def test_suivre_ne_compte_pas_pendant_la_veille(self):
+        # Même scène que test_compte_la_duree_du_mode (Compter.suivre), mais avec
+        # en_pause actif tout du long : rien ne doit s'ajouter à l'état.
+        d = Path(tempfile.mkdtemp())
+        c = {"etat": d / "temps-ecran.json", "reglages": d / "reglages.json"}
+        c["reglages"].write_text(json.dumps({"profilActif": "camille",
+                                              "profils": [{"id": "camille", "langue": "fr"}]}))
+        h = Horloge(f"{MARDI} 10:00")
+        p = FauxProcessus(600, h)
+        te.suivre("tv", c, horloge=h, pas=15, demarrer=lambda: p,
+                  avertir=lambda *a: None, terminer=lambda *a: None, en_pause=lambda: True)
+        self.assertEqual(te.lire_etat(c["etat"])["profils"]["camille"][MARDI]["secondes"], 0)
+
+    def test_suivre_reprend_le_compte_des_le_reveil(self):
+        # en_pause change d'avis en cours de route (le spectateur revient) : seul le
+        # temps pendant lequel il répondait True doit manquer à l'appel.
+        d = Path(tempfile.mkdtemp())
+        c = {"etat": d / "temps-ecran.json", "reglages": d / "reglages.json"}
+        c["reglages"].write_text(json.dumps({"profilActif": "camille",
+                                              "profils": [{"id": "camille", "langue": "fr"}]}))
+        h = Horloge(f"{MARDI} 10:00")
+        p = FauxProcessus(30, h)
+        en_veille = {"valeur": True}
+        te.suivre("tv", c, horloge=h, pas=15, demarrer=lambda: p,
+                  avertir=lambda *a: None, terminer=lambda *a: None, en_pause=lambda: en_veille["valeur"])
+        self.assertEqual(te.lire_etat(c["etat"])["profils"]["camille"][MARDI]["secondes"], 0)
+        en_veille["valeur"] = False
+        d2 = Path(tempfile.mkdtemp())
+        c2 = {"etat": d2 / "temps-ecran.json", "reglages": c["reglages"]}
+        h2 = Horloge(f"{MARDI} 10:00")
+        p2 = FauxProcessus(30, h2)
+        te.suivre("tv", c2, horloge=h2, pas=15, demarrer=lambda: p2,
+                  avertir=lambda *a: None, terminer=lambda *a: None, en_pause=lambda: en_veille["valeur"])
+        self.assertEqual(te.lire_etat(c2["etat"])["profils"]["camille"][MARDI]["secondes"], 30)
+
+
 class Commande(unittest.TestCase):
     def test_arguments(self):
         self.assertEqual(te.analyser(["lancer", "tv", "--", "kodi", "--windowing=wayland"]),
