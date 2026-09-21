@@ -484,8 +484,8 @@ test("image du mode : le jeu se choisit dans les réglages, s'enregistre, et « 
 // en sombre, les deux captures sont identiques au pixel près.
 const ZONE_IMAGE = { x: 1637, y: 350, largeur: 283, hauteur: 380 };
 // Toute la boîte de l'image, telle qu'elle tient dans l'écran : #visuel-mode fait 104vh de
-// large et déborde de 3vh à droite, de 6vh à 94vh en hauteur.
-const BOITE_IMAGE = { x: 829, y: 65, largeur: 1091, hauteur: 950 };
+// large, collée en haut et à droite, de 0 à 94vh en hauteur (1.0.12).
+const BOITE_IMAGE = { x: 797, y: 0, largeur: 1123, hauteur: 1015 };
 async function coeurDeLImage(jeu, mode, theme, fond) {
   await page?.close();
   await ouvrir(profil({ motif: "cinema", fond, theme, visuels: jeu, animations: "reduites" }));
@@ -655,6 +655,61 @@ test("image du mode : aucune arête verticale là où elle entre, sur les trois 
   assert.deepEqual(arêtes, [], `arête verticale : ${JSON.stringify(releve)}`);
   // Que la photo finisse par prendre toute la place, c'est l'affaire du test voisin (« sa
   // couleur ne déteint pas ») : ici on ne juge que la douceur du passage.
+  assert.deepEqual(page.erreurs, []);
+});
+
+// Retour de la TV sur la 1.0.11, capture à l'appui : « le dégradé n'est pas fou, et on a
+// toujours une zone de couleur sur le haut de mon image, derrière la barre d'en-tête ». Les
+// tests d'au-dessus jugent la DOUCEUR du fondu, aucun ne regardait VERS QUOI la photo se
+// fond. Or la plus grosse tache du motif était peinte pile sous elle : chaque fondu révélait
+// donc du turquoise — une colonne entre le titre et la photo, une bande au-dessus d'elle.
+// La photo doit s'éteindre dans le sombre du fond. La couleur du motif vit à gauche,
+// derrière le titre, là où rien ne la coupe.
+const CHROMA_MAX_AUTOUR = 14;
+async function chromaDesZones(png, zones) {
+  return page.evaluate(async ([b64, zones]) => {
+    const i = new Image(); i.src = "data:image/png;base64," + b64; await i.decode();
+    const c = document.createElement("canvas"); c.width = i.width; c.height = i.height;
+    const t = c.getContext("2d"); t.drawImage(i, 0, 0);
+    return Object.fromEntries(Object.entries(zones).map(([nom, [x, y, w, h]]) => {
+      const d = t.getImageData(x, y, w, h).data;
+      const m = [0, 0, 0];
+      for (let k = 0; k < d.length; k += 4) { m[0] += d[k]; m[1] += d[k + 1]; m[2] += d[k + 2]; }
+      const n = d.length / 4, moy = m.map(v => v / n);
+      return [nom, { chroma: +(Math.max(...moy) - Math.min(...moy)).toFixed(1), lumiere: +Math.max(...moy).toFixed(1) }];
+    }));
+  }, [png, zones]);
+}
+test("image du mode : elle s'éteint dans le sombre, pas dans la couleur du motif — ni bande au-dessus, ni colonne à côté", async () => {
+  const releve = [];
+  for (const fond of ["aurore", "braise", "nebuleuse"]) {
+    for (const jeu of ["jeu-1", "jeu-2"]) {
+      // La photo est rendue transparente, pas retirée : le peintre la sait toujours là, et
+      // c'est ce qu'il peint DERRIÈRE elle qu'on juge. Sinon on mesurerait la photo (le
+      // projecteur doré du jeu 2 occupe justement la bande du haut).
+      await fondSeul(jeu, "tv", "sombre", fond);
+      await page.addStyleTag({ content: ".ecran { visibility: hidden !important; } #visuel-mode canvas { opacity: 0 !important; }" });
+      await page.waitForTimeout(300);
+      assert.equal(await page.evaluate(() => document.getElementById("visuel-mode").hidden), false);
+      const png = (await page.screenshot()).toString("base64");
+      const z = await chromaDesZones(png, {
+        // Derrière l'en-tête, au-dessus de la photo et sur son bord haut.
+        bandeDuHaut: [900, 0, 1000, 70],
+        // Là où la photo entre, entre le titre et elle.
+        colonneDEntree: [830, 160, 200, 620],
+        // Le bord droit et le bas de la boîte, sous la rangée des services.
+        basDroit: [1100, 990, 800, 80],
+        // Témoin : la couleur du motif existe toujours, derrière le titre.
+        derriereLeTitre: [120, 180, 500, 420],
+      });
+      releve.push({ fond, jeu, ...z });
+    }
+  }
+  const fautes = releve.flatMap(r => ["bandeDuHaut", "colonneDEntree", "basDroit"]
+    .filter(n => r[n].chroma > CHROMA_MAX_AUTOUR).map(n => `${r.fond} ${r.jeu} ${n} : chroma ${r[n].chroma}/255`));
+  assert.deepEqual(fautes, [], `la couleur du motif entoure la photo : ${JSON.stringify(releve)}`);
+  // Le fond n'est pas devenu noir pour autant : le motif garde sa couleur, à gauche.
+  for (const r of releve) assert.ok(r.derriereLeTitre.chroma >= 25, `${r.fond} : plus de couleur derrière le titre (${r.derriereLeTitre.chroma})`);
   assert.deepEqual(page.erreurs, []);
 });
 

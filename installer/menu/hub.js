@@ -545,14 +545,36 @@ function peindreCinema(c, e) {
   c.fillStyle = rgba(e.base, 1);
   c.fillRect(0, 0, w, h);
   c.globalCompositeOperation = clair ? "source-over" : "lighter";
-  [
+  // Avec une photo, la couleur vit À GAUCHE, derrière le titre. Retour de la TV sur la
+  // 1.0.11 : « on a toujours une zone de couleur sur le haut de mon image, derrière la
+  // barre d'en-tête ». La grande tache était peinte pile sous la photo (80 % de la largeur) :
+  // tout ce que les fondus de la photo laissaient voir, c'était elle — une colonne de
+  // couleur là où la photo entre, une bande au-dessus d'elle (chroma mesurée : 46/255
+  // autour de la photo, 10 derrière le titre). Une photo doit s'éteindre dans le sombre.
+  // Sans photo (jeu « aucun », ou fichier manquant), le filigrane reprend et la tache
+  // retrouve sa place à droite, sous lui : rien ne change pour ces profils.
+  (e.photo ? [
+    // Plus large et deux fois plus douce que sous la photo : ici le titre et la phrase du
+    // mode sont écrits DESSUS. À .85, c'était un projecteur, et le blanc s'y noyait.
+    // Centrée SOUS le titre et la phrase du mode, pas dessus : le blanc du titre tombait à
+    // 4,3:1 quand elle était derrière lui. Et étroite : elle s'arrête avant l'entrée de la photo.
+    [.04, .62, .5, .8, principale, clair ? .28 : .5],
+    [.3, 1.04, .36, .5, sature(vive(1, .75), 1.3), clair ? .4 : .4],
+    // En clair, celle-ci passe juste derrière « MODE CHOISI », écrit dans la couleur d'accent :
+    // à .35 le libellé tombait à 4,3:1.
+    [-.03, .06, .34, .42, sature(vive(2, .2), 1.3), clair ? .12 : .34],
+  ] : [
     [.8, .36, .64, .9, principale, clair ? .55 : .9],
     [.97, .95, .42, .55, sature(vive(1, .75), 1.3), clair ? .45 : .42],
     [.06, 1.02, .5, .6, sature(vive(2, .2), 1.3), clair ? .4 : .36],
-  ].forEach(([x, y, rx, ry, couleur, a], i) => {
+  ]).forEach(([x, y, rx, ry, couleur, a], i) => {
     // Un dixième de l'écran d'amplitude : la maquette en faisait 5 %, invisible à trois mètres.
-    const souffle = 1 + .12 * onde(s, R.souffle[i], i);
-    tache(c, (x + .09 * onde(s, R.derive[2 * i], i * 1.7)) * w, (y + .07 * Math.cos(2 * Math.PI * s / R.derive[2 * i + 1] + i)) * h,
+    // Avec la photo, seule la moitié gauche de l'écran est animée : les taches y vont plus
+    // loin et respirent plus fort, sinon le fond redevient immobile à trois mètres — le
+    // tout premier reproche fait à cet accueil.
+    const ampleur = e.photo ? 1.9 : 1;
+    const souffle = 1 + .12 * ampleur * onde(s, R.souffle[i], i);
+    tache(c, (x + .09 * ampleur * onde(s, R.derive[2 * i], i * 1.7)) * w, (y + .07 * ampleur * Math.cos(2 * Math.PI * s / R.derive[2 * i + 1] + i)) * h,
       rx * souffle * w, ry * souffle * h, couleur, a, 1, [.45, .55]);
   });
   c.globalCompositeOperation = "source-over";
@@ -794,6 +816,8 @@ const TRACEURS = { rubans: lignesRubans, profondeur: lignesProfondeur, faisceaux
 // si « effacer »). Pure hormis les toiles : les aperçus et les tests l'appellent aussi.
 function peindreFond(motif, couleur, theme, s, accent, teinter, c, l, effacer = true) {
   const e = environnementFond(couleur, theme, s, accent, teinter);
+  // La vraie page sait si la photo du mode est là ; un aperçu des réglages suit le jeu choisi.
+  e.photo = motif === "cinema" && (c === ctx ? !visuelMode.hidden : jeuVisuels() !== "aucun");
   if (!PEINTRES[motif]) {
     peindreNappes(c, couleur, e, accent, teinter);
   } else {
@@ -839,19 +863,31 @@ let baseVisuel = rvbHex(PALETTES.aurore.sombre.base);
 // écarté en maquette. Le menu ne tient donc plus qu'à trois primitives de toile vieilles
 // de quinze ans : drawImage, createLinearGradient et globalCompositeOperation
 // « destination-out ». Les fractions sont celles de la 1.0.7, à l'identique.
-// Le côté du héros : éteinte au bord de la boîte, à mi-voix à 8 %, entière à 30 %.
-const FONDU_COTE = [[0, 1], [.08, .65], [.3, 0]];
-// Le haut et le bas : entière dès 3 % de la hauteur, jusqu'à 88 %, éteinte à 98 %.
-const FONDU_HAUT_BAS = [[0, 1], [.03, 0], [.88, 0], [.98, 1], [1, 1]];
+// Trois arrêts faisaient un fondu en deux segments de droite : l'œil voit la cassure de
+// pente comme une bande (même retour : « le dégradé n'est pas fou »). Une courbe en S,
+// échantillonnée en douze arrêts : pente nulle aux deux bouts, donc ni début ni fin visibles.
+const courbeDeFondu = (debut, fin, de, vers) => Array.from({ length: 13 }, (_, i) => {
+  const u = i / 12, d = u * u * (3 - 2 * u);
+  return [debut + (fin - debut) * u, +(de + (vers - de) * d).toFixed(4)];
+});
+// Le côté du héros : éteinte au bord de la boîte, entière à 36 % de sa largeur, au lieu de 30 %.
+const FONDU_COTE = courbeDeFondu(0, .36, 1, 0);
+// Le bas : entière jusqu'à 80 %, éteinte au bord. Plus AUCUN fondu en haut : la photo
+// touche le haut de l'écran. Elle commençait à 6 % de la hauteur, et la bande au-dessus
+// d'elle était au fond du motif ; c'est l'ombre de l'en-tête, cuite plus bas, qui garde
+// l'heure et le profil lisibles.
+const FONDU_HAUT_BAS = [[0, 0], ...courbeDeFondu(.8, 1, 0, 1)];
 // L'ombre de l'en-tête : la date, l'heure, le profil et le pictogramme Internet passent
 // au-dessus de l'image. À la couleur de base du fond et non à la teinte du motif — on voit
 // la photo, en retrait, pas une lueur colorée. Peinte avant les fondus : là où la photo
 // s'éteint, l'ombre s'éteint avec elle, et rien ne déborde sur le fond.
-const OMBRE_ENTETE = [[0, .72], [.25, .6], [1, 0]];
-const HAUTEUR_OMBRE = .105;
+// La photo monte maintenant jusqu'en haut : le nom du profil et la date sont écrits sur
+// ses hautes lumières (le projecteur du jeu 3 : 4,03:1). L'ombre est plus dense, en courbe.
+const OMBRE_ENTETE = courbeDeFondu(0, 1, .9, 0);
+const HAUTEUR_OMBRE = .2;
 // La boîte, en fractions de la hauteur de l'écran (les mêmes qu'en CSS, où elle est en vh).
 // Calculée plutôt que lue : la toile doit se peindre même quand le calque est encore caché.
-const BOITE_VISUEL = { largeur: 1.04, hauteur: .88 };
+const BOITE_VISUEL = { largeur: 1.04, hauteur: .94 };
 
 // Une photo de mode, cadrée et fondue, dans « toile ». Pure hormis la toile.
 function cuireVisuel(toile, image, largeurBoite, hauteurBoite, base) {

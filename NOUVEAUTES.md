@@ -7,6 +7,15 @@ lisibles depuis le canapé : le menu affiche cette première section sous « Ins
 **La première section doit porter le numéro du fichier `VERSION`.** Un test le vérifie
 (`tests/test_version.py`). Marche à suivre pour publier : `installer/mise-a-jour/README.md`.
 
+## 1.0.12 — 21 septembre 2026
+
+Il restait de la couleur autour de l'image du mode : une bande derrière l'heure et le profil,
+une colonne là où la photo commence. La lueur du fond était peinte juste sous la photo ; elle
+vit maintenant à gauche, sous le titre, et la photo s'éteint dans le noir.
+
+La photo monte jusqu'en haut de l'écran et jusqu'au bord droit, et son fondu suit une courbe
+au lieu de deux segments : on n'en voit plus ni le début ni la fin.
+
 ## 1.0.11 — 18 septembre 2026
 
 L'image du mode s'arrêtait net, sur un bord franc, avec une bande de fond coloré au-dessus :
