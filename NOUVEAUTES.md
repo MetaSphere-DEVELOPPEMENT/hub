@@ -7,6 +7,20 @@ lisibles depuis le canapé : le menu affiche cette première section sous « Ins
 **La première section doit porter le numéro du fichier `VERSION`.** Un test le vérifie
 (`tests/test_version.py`). Marche à suivre pour publier : `installer/mise-a-jour/README.md`.
 
+## 1.0.14 — 21 septembre 2026
+
+Le téléphone pilote enfin ce qui n'est ni le menu ni Kodi. Devant Netflix, YouTube ou un
+jeu en nuage, et sur le bureau, le pavé tactile devient une vraie souris (toucher pour
+cliquer, appui long pour le clic droit, deux doigts pour défiler) et le champ texte un
+vrai clavier : on se connecte à ses services depuis le canapé. La page bascule seule et
+l'écrit sur le pavé — « Navigation » ou « Souris ». « Accueil » ferme maintenant aussi un
+service web, comme le faisaient déjà la voix et la télécommande de la TV.
+
+C'est éteint tant qu'on ne l'allume pas sur la TV (Réglages → Télécommande → « Souris et
+clavier depuis le téléphone »), et réservé à un téléphone relié par la connexion
+sécurisée, en ayant tapé le code de la TV sur cette page-là. Jamais devant l'écran de
+connexion ni écran verrouillé. Redémarrer le HUB une fois après la mise à jour.
+
 ## 1.0.12 — 21 septembre 2026
 
 Il restait de la couleur autour de l'image du mode : une bande derrière l'heure et le profil,
