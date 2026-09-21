@@ -24,6 +24,12 @@ OÙ VONT LES COMMANDES. Menu ouvert : au socket du menu, exactement comme la voi
 Menu fermé : à Kodi (navigation, texte, quitter) s'il tourne, sinon à la session
 bureau (« Accueil » la ferme). « Éteindre » ne part jamais ailleurs qu'au menu, qui
 demande confirmation sur la TV.
+
+HORS DU MENU ET DE KODI (service web en plein écran, bureau), plus rien n'écoute : le
+téléphone devient alors un clavier et une souris (hub_pointeur.py, /dev/uinput). C'est
+le plus gros pouvoir que ce service donne, et il n'est donné qu'à toutes ces conditions
+réunies (classe Pointeur) : interrupteur allumé sur la TV, connexion https, jeton obtenu
+en tapant le code de la TV en https, session au premier plan et déverrouillée.
 """
 
 import argparse
@@ -125,6 +131,34 @@ TELEPHONES_MAX = 20
 # la place à un favori resté sur l'ancien nom, sans faire une liste de jetons morts.
 EMPREINTES_PAR_TELEPHONE = 4
 
+# ── Souris et clavier (hors du menu et de Kodi) ──
+# Le ticket qui ouvre le WebSocket : un navigateur ne peut pas joindre d'en-tête
+# Authorization à un WebSocket, et un jeton dans l'URL finirait dans les journaux.
+# La page échange donc son jeton contre un ticket à usage unique, qu'elle présente
+# aussitôt : trente secondes suffisent, même sur un wifi lent.
+DUREE_TICKET_POINTEUR_S = 30
+# Une page envoie au plus un déplacement par image (60 par seconde) : 120 laisse passer
+# un écran à 120 Hz, et la réserve absorbe une rafale après un à-coup du wifi. Au-delà,
+# ce n'est pas un doigt, et les déplacements en trop sont jetés (jamais mis en file :
+# une souris qui rattrape son retard est pire qu'une souris qui saute).
+MOUVEMENTS_PAR_S = 120
+MOUVEMENTS_RESERVE = 240
+# Frappes, clics et caractères d'un texte partagent ce seau : 30 par seconde, c'est
+# trois fois un très bon dactylo ; la réserve laisse passer d'un coup le plus long
+# texte permis (TAILLE_MAX_TEXTE) avec ses touches mortes.
+FRAPPES_PAR_S = 30
+FRAPPES_RESERVE = 400
+# Un déplacement par message : borné, pour qu'un message forgé ne fasse pas traverser
+# quatre écrans au pointeur (un glissement réel fait au plus ~150 points par image).
+DEPLACEMENT_MAX = 400
+DEFILEMENT_MAX = 1200
+# Le plus gros message légitime est un texte de 300 caractères (4 octets chacun au pire).
+TRAME_POINTEUR_MAX = 2048
+# Quelques messages mal formés, c'est une vieille page en cache ; davantage, ce n'est
+# pas la page.
+ERREURS_POINTEUR_MAX = 5
+SESSIONS_POINTEUR_MAX = 4
+
 OK, MAUVAIS, TROP, FERME = "ok", "mauvais", "trop", "ferme"
 
 # Les noms du protocole du socket du menu (hub-menu.py, COMMANDES), recopiés et non
@@ -175,6 +209,29 @@ def _charger_logique_voix():
 
 
 VOIX = _charger_logique_voix()
+
+
+def _charger_pointeur():
+    """hub_pointeur.py, posé à côté de ce fichier. Absent (installation à moitié mise à
+    jour) ou illisible : la télécommande vit sans souris, et la page dit pourquoi."""
+    if "hub_pointeur" in sys.modules:
+        # Déjà chargé (les tests l'importent avant) : le même module, sinon ses
+        # exceptions ne seraient pas celles qu'on attrape ici.
+        return sys.modules["hub_pointeur"]
+    fichier = ICI / "hub_pointeur.py"
+    try:
+        spec = importlib.util.spec_from_file_location("hub_pointeur", fichier)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["hub_pointeur"] = module
+        spec.loader.exec_module(module)
+        return module
+    except Exception as erreur:  # noqa: BLE001
+        sys.modules.pop("hub_pointeur", None)
+        journal.warning("hub_pointeur illisible (%s) : ni souris ni clavier", erreur)
+        return None
+
+
+POINTEUR = _charger_pointeur()
 
 
 def _envoyer_menu(chemin, texte):
@@ -442,8 +499,12 @@ def _entree_lue(t):
     empreintes = [e for e in empreintes if isinstance(e, str) and e][:EMPREINTES_PAR_TELEPHONE]
     if not empreintes:
         return None
+    # « sures » : les empreintes des jetons délivrés contre le code de la TV tapé EN
+    # HTTPS (voir Jetons.creer). Absent des fichiers d'avant : aucun jeton n'est sûr.
+    sures = t.get("sures") if isinstance(t.get("sures"), list) else []
     return {"id": t["id"], "nom": t.get("nom"), "appareil": appareil_propre(t.get("appareil")),
-            "cree": t.get("cree"), "vu": t.get("vu"), "empreintes": empreintes}
+            "cree": t.get("cree"), "vu": t.get("vu"), "empreintes": empreintes,
+            "sures": [e for e in sures if e in empreintes]}
 
 
 class Jetons:
@@ -519,7 +580,7 @@ class Jetons:
         return [t for t in liste if id(t) not in partent]
 
     def _copie(self):
-        return [dict(t, empreintes=list(t["empreintes"])) for t in self._lire()]
+        return [dict(t, empreintes=list(t["empreintes"]), sures=list(t["sures"])) for t in self._lire()]
 
     def menage(self):
         """Nombre de téléphones oubliés. Appelé au démarrage du service et à chaque
@@ -534,7 +595,7 @@ class Jetons:
             self._ecrire(reste)
             return len(liste) - len(reste)
 
-    def creer(self, nom, remplace=None, appareil=None, ajouter=False):
+    def creer(self, nom, remplace=None, appareil=None, ajouter=False, sure=False, presente=None):
         """(identifiant, jeton, appareil) du téléphone appairé.
 
         `remplace` : l'identifiant d'une entrée dont l'appelant a la preuve — le jeton
@@ -545,6 +606,16 @@ class Jetons:
         seulement sinon, une entrée de plus. `ajouter` garde les jetons déjà délivrés
         à cet appareil au lieu de les remplacer : c'est le passage http → https, où le
         téléphone garde les deux origines.
+
+        `sure` : le jeton est délivré contre le code de la TV, tapé en HTTPS. Lui seul
+        n'a jamais voyagé en clair, ni rien de ce qui a servi à l'obtenir : c'est la
+        condition du clavier et de la souris. Un jeton http se lit sur le wifi, et le
+        ticket de transfert est rendu en http à qui présente ce jeton-là — ni l'un ni
+        l'autre ne sont sûrs. `presente` : l'empreinte du jeton qui accompagne ce code ;
+        il est alors le SEUL remplacé. Sans cela, retaper le code sur la page https
+        (pour obtenir la souris) tuait le jeton du favori http du même téléphone, qui
+        redemandait un code, qui tuait le jeton https… un téléphone, deux origines,
+        jamais les deux à la fois.
         """
         jeton = secrets.token_urlsafe(32)
         maintenant = int(self.horloge() * 1000)
@@ -565,15 +636,26 @@ class Jetons:
                 entree["nom"] = nom
                 entree["vu"] = maintenant
                 entree["appareil"] = entree["appareil"] or appareil or secrets.token_hex(16)
-            gardees = entree["empreintes"] if ajouter else []
+            if ajouter:
+                gardees = entree["empreintes"]
+            elif presente in entree["empreintes"]:
+                gardees = [e for e in entree["empreintes"] if e != presente]
+            else:
+                gardees = []
             entree["empreintes"] = (gardees + [_empreinte(jeton)])[-EMPREINTES_PAR_TELEPHONE:]
+            entree["sures"] = [e for e in entree.get("sures", []) if e in entree["empreintes"]] \
+                + ([_empreinte(jeton)] if sure else [])
             self._ecrire(self._plafonnee(liste, entree))
         return entree["id"], jeton, entree["appareil"]
 
     def valide(self, jeton):
         """Identifiant du téléphone, ou None."""
+        return self.valide_detail(jeton)[0]
+
+    def valide_detail(self, jeton):
+        """(identifiant, sûr) — (None, False) si le jeton n'ouvre rien."""
         if not isinstance(jeton, str) or not 20 <= len(jeton) <= 200:
-            return None
+            return None, False
         empreinte = _empreinte(jeton)
         with self._verrou:
             trouve = None
@@ -581,7 +663,8 @@ class Jetons:
                 if any(hmac.compare_digest(e, empreinte) for e in t["empreintes"]):
                     trouve = t
             if trouve is None:
-                return None
+                return None, False
+            sure = empreinte in trouve["sures"]
             maintenant = int(self.horloge() * 1000)
             if maintenant - int(trouve.get("vu") or 0) > PRECISION_VU_S * 1000:
                 try:
@@ -593,11 +676,20 @@ class Jetons:
                             self._ecrire(liste)
                 except OSError:
                     pass  # ne pas refuser un appui parce que le disque est plein
-            return trouve["id"]
+            return trouve["id"], sure
 
     def lister(self):
         with self._verrou:
             return [{k: t.get(k) for k in ("id", "nom", "cree", "vu")} for t in self._lire()]
+
+    def identifiants(self):
+        with self._verrou:
+            return {t["id"] for t in self._lire()}
+
+    def avec_clavier(self):
+        """Les téléphones qui tiennent un jeton sûr (pour --lister)."""
+        with self._verrou:
+            return {t["id"] for t in self._lire() if t["sures"]}
 
     def revoquer(self, ident):
         with self._verrou, self._verrou_fichier():
@@ -807,6 +899,19 @@ def appeler_kodi(methode, params=None, hote="127.0.0.1", port=9090, http=None,
 
 
 # ── Routage ─────────────────────────────────────────────────────────────────
+def _web_en_cours(chemin_pid, racine="/proc"):
+    """Vrai si le fichier pid de hub-web désigne un hub-web vivant (même vérification
+    que la voix et que `hub-web --fermer` : un fichier resté après un arrêt brutal, ou
+    un pid repris par un autre programme, ne font pas croire à un service ouvert)."""
+    if VOIX and hasattr(VOIX, "web_en_cours"):
+        return VOIX.web_en_cours(chemin_pid)
+    try:
+        pid = int(Path(chemin_pid).read_text().strip())
+        return b"hub-web" in Path(racine, str(pid), "cmdline").read_bytes()
+    except (OSError, ValueError):
+        return False
+
+
 class Routeur:
     """Décide où va une commande validée, et l'y envoie."""
 
@@ -815,8 +920,10 @@ class Routeur:
                  kodi_http=os.environ.get("HUB_KODI_HTTP", "http://127.0.0.1:8080/jsonrpc"),
                  kodi_identifiants=(os.environ.get("HUB_KODI_UTILISATEUR"),
                                     os.environ.get("HUB_KODI_MOT_DE_PASSE")),
-                 tuer=os.kill):
+                 tuer=os.kill, web_en_cours=None):
         self.socket_menu = Path(socket_menu)
+        # hub-web écrit son pid à côté du socket du menu ($XDG_RUNTIME_DIR/hub/).
+        self.web = web_en_cours or (lambda: _web_en_cours(self.socket_menu.parent / "web.pid"))
         self._executer = executer
         self.processus = processus
         self.kodi = dict(hote=kodi_hote, port=kodi_port, http=kodi_http,
@@ -833,6 +940,10 @@ class Routeur:
     def contexte(self):
         if self.socket_menu.is_socket():
             return "menu"
+        # Même ordre que la voix (hub_voix_logique.cible) : un service web s'ouvre
+        # par-dessus la session du HUB, c'est lui qu'on regarde.
+        if self.web():
+            return "web"
         if self.processus(NOMS_KODI):
             return "kodi"
         if self.processus(NOMS_BUREAU):
@@ -885,6 +996,15 @@ class Routeur:
             # Éteindre sans l'écran de confirmation du menu : jamais.
             return {"ok": False, "cible": None, "raison": "eteindre-depuis-le-menu"}
 
+        if self.web():
+            if nom == "accueil":
+                # Avant, « Accueil » répondait « rien à piloter » devant Netflix : la voix
+                # et la télécommande CEC savaient fermer le service, pas le téléphone.
+                # hub-web ferme lui-même son navigateur : lui seul sait le faire proprement.
+                r = self.lancer([shutil.which("hub-web") or "/usr/local/bin/hub-web", "--fermer"])
+                return {"ok": r is not None and getattr(r, "returncode", 1) == 0, "cible": "web"}
+            return {"ok": False, "cible": "web", "raison": "sans-effet-dans-le-web"}
+
         if self.processus(NOMS_KODI):
             if nom in KODI_NAVIGATION:
                 ok = appeler_kodi(KODI_NAVIGATION[nom], **self.kodi)
@@ -909,6 +1029,319 @@ class Routeur:
             return {"ok": False, "cible": "bureau", "raison": "sans-effet-sur-le-bureau"}
 
         return {"ok": False, "cible": None, "raison": "rien-a-piloter"}
+
+
+# ── Souris et clavier ───────────────────────────────────────────────────────
+# Là où rien n'écoute la télécommande, et là seulement. Dans le menu et dans Kodi, les
+# flèches gardent leur chemin (socket, JSON-RPC) : il est plus sûr — aucune frappe ne
+# peut tomber à côté — et il marche sans rien de tout ceci.
+CONTEXTES_POINTEUR = ("web", "bureau")
+# Les commandes de la liste blanche qui deviennent des touches dans ces contextes. Les
+# autres (modes, réglages, thème…) n'ont de sens que pour le menu et restent sans effet.
+TOUCHES_COMMANDE = ("haut", "bas", "gauche", "droite", "ok", "retour")
+
+
+def _entier(valeur):
+    # bool est un int en Python : {"x": true} ne doit pas déplacer la souris d'un point.
+    return isinstance(valeur, int) and not isinstance(valeur, bool)
+
+
+def _borne(valeur, maximum):
+    return max(-maximum, min(maximum, valeur))
+
+
+class SessionPointeur:
+    """Un WebSocket ouvert par un téléphone autorisé."""
+
+    def __init__(self, ident):
+        self.ident = ident
+        self.raison_fin = None
+        self.erreurs = 0
+        self.jetes = 0
+        self.recus = 0
+
+    def arreter(self, raison):
+        # Seul le fil de la connexion écrit sur le socket : on lève un drapeau, qu'il
+        # lit à sa prochaine demi-seconde. Fermer le socket d'ici couperait le TLS sous
+        # ses pieds (et SSLSocket.shutdown repasse le socket EN CLAIR pour la suite).
+        if self.raison_fin is None:
+            self.raison_fin = raison
+
+
+class Pointeur:
+    """Qui a droit au clavier et à la souris, quand, et à quel rythme.
+
+    TOUTES ces conditions, à chaque ouverture, et revérifiées chaque seconde tant que
+    le périphérique existe (`_surveiller`) :
+      1. l'interrupteur « Souris et clavier » est allumé dans les réglages du HUB — il
+         est éteint par défaut, et tout ce qui n'est pas exactement `true` vaut éteint ;
+      2. la requête arrive en https : en http, le jeton se lit sur le wifi ;
+      3. le jeton est « sûr » (Jetons.creer) : obtenu en tapant le code de la TV en
+         https. Un jeton http volé, ou le transfert qu'il permet de demander, ne donnent
+         donc jamais le clavier ;
+      4. le contexte est un service web ou le bureau ;
+      5. /dev/uinput est accessible ;
+      6. la session est au premier plan et déverrouillée (logind) : ni GDM, ni écran
+         verrouillé — le périphérique parle à ce qui est devant, quoi que ce soit.
+    Le périphérique n'existe que pendant l'usage : fermé, il est DÉTRUIT, et plus rien
+    ne peut être injecté dans la session par ce service.
+    """
+
+    # Le gardien repasse deux fois par seconde et ne se fie jamais à une réponse de
+    # logind plus vieille que 0,4 s : entre le verrouillage de l'écran et la destruction
+    # du périphérique, il s'écoule au plus une seconde, appels à loginctl compris.
+    PERIODE_GARDIEN_S = 0.5
+    DUREE_GARDE_S = 0.4
+    # Sans session ouverte (téléphone en disposition « Boutons », qui passe par
+    # /api/commande), le périphérique reste une minute : le recréer à chaque flèche
+    # coûterait 0,4 s d'adoption par le compositeur à chaque appui.
+    INACTIVITE_S = 60
+    # La page envoie un battement toutes les 10 s : trois manqués, elle n'est plus là
+    # (téléphone en veille, wifi perdu) et la session ne doit pas rester armée.
+    DELAI_MUET_S = 30
+    PERIODE_NOTIFICATION_S = 60
+
+    def __init__(self, service, fabrique=None, lancer=None, acces=None, horloge=time.monotonic):
+        self.service = service
+        self.fabrique = fabrique or (lambda: POINTEUR.PeripheriqueVirtuel())
+        self.lancer = lancer or service.routeur.lancer
+        self.acces = acces or self._acces_uinput
+        self.horloge = horloge
+        self.disposition = None
+        self._verrou = threading.RLock()
+        self._peripherique = None
+        self._arret = threading.Event()
+        self._sessions = []
+        self._seaux = {}
+        self._garde = None
+        self._dernier_usage = 0.0
+        self._derniere_notification = None
+
+    @property
+    def ouvert(self):
+        return self._peripherique is not None
+
+    # ── Les conditions ──
+    def active(self):
+        """L'interrupteur des réglages du HUB. Relu à chaque fois : l'éteindre sur la
+        TV coupe la souris dans la seconde, sans redémarrer quoi que ce soit."""
+        try:
+            donnees = json.loads(Path(self.service.chemins["reglages"]).read_text(encoding="utf-8"))
+            return donnees["systeme"]["telecommandeSouris"] is True
+        except (OSError, ValueError, KeyError, TypeError):
+            return False
+
+    @staticmethod
+    def _acces_uinput(chemin="/dev/uinput"):
+        if not os.path.exists(chemin):
+            return "uinput-absent"
+        return None if os.access(chemin, os.W_OK) else "uinput-refuse"
+
+    def _session_refusee(self):
+        maintenant = self.horloge()
+        if self._garde is None or maintenant - self._garde[0] > self.DUREE_GARDE_S:
+            pilotable, raison = POINTEUR.session_pilotable(self.lancer)
+            self._garde = (maintenant, None if pilotable else raison)
+        return self._garde[1]
+
+    def _refus_systeme(self, contexte=None):
+        if not self.active():
+            return "desactive"
+        if (contexte or self.service.routeur.contexte()) not in CONTEXTES_POINTEUR:
+            return "contexte"
+        return self.acces() or self._session_refusee()
+
+    def refus(self, ident, sure, securise, contexte=None):
+        """None si ce téléphone, par cette connexion, a droit au clavier et à la souris
+        maintenant ; sinon la raison, que la page affiche."""
+        if POINTEUR is None:
+            return "module-absent"
+        if not self.active():
+            return "desactive"
+        if not securise:
+            return "connexion-non-securisee"
+        if not ident or not sure:
+            return "jeton-non-sur"
+        return self._refus_systeme(contexte)
+
+    # ── Le périphérique ──
+    def _ouvrir(self):
+        if self._peripherique is None:
+            peripherique = self.fabrique()
+            peripherique.ouvrir()
+            self._peripherique = peripherique
+            self.disposition = POINTEUR.lire_disposition(self.lancer)
+            self._arret = threading.Event()
+            threading.Thread(target=self._surveiller, args=(self._arret,), daemon=True).start()
+            journal.info("souris et clavier : périphérique virtuel créé (clavier %s)",
+                         "+".join(filter(None, self.disposition)) if self.disposition else "non reconnu : pas de texte")
+        return self._peripherique
+
+    def agir(self, ident, action, frappes=0, mouvements=0):
+        """None si l'action est partie, sinon la raison (« debit », « uinput-… »)."""
+        seaux = self._seaux.get(ident)
+        if seaux is None:
+            seaux = self._seaux[ident] = (POINTEUR.Seau(MOUVEMENTS_PAR_S, MOUVEMENTS_RESERVE),
+                                          POINTEUR.Seau(FRAPPES_PAR_S, FRAPPES_RESERVE))
+        if (mouvements and not seaux[0].prendre(mouvements)) or (frappes and not seaux[1].prendre(frappes)):
+            return "debit"
+        with self._verrou:
+            try:
+                action(self._ouvrir())
+            except POINTEUR.PointeurIndisponible as erreur:
+                return str(erreur)
+            self._dernier_usage = self.horloge()
+        return None
+
+    def taper(self, ident, texte):
+        if not isinstance(texte, str) or not texte.strip() or len(texte) > TAILLE_MAX_TEXTE:
+            return {"ok": False, "raison": "texte-invalide"}
+        with self._verrou:
+            try:
+                self._ouvrir()
+                frappes, approximations, ignores = POINTEUR.frappes_pour(texte, self.disposition)
+            except POINTEUR.PointeurIndisponible as erreur:
+                return {"ok": False, "raison": str(erreur)}
+            except ValueError:
+                return {"ok": False, "raison": "disposition-non-couverte"}
+        arret = self._arret
+        raison = self.agir(ident, lambda p: p.taper(frappes, continuer=lambda: not arret.is_set()),
+                           frappes=max(1, len(frappes)))
+        if raison:
+            return {"ok": False, "raison": raison}
+        return {"ok": True, "approximations": approximations, "ignores": ignores}
+
+    def fermer(self, raison):
+        self._arret.set()
+        for session in list(self._sessions):
+            session.arreter(raison)
+        with self._verrou:
+            peripherique, self._peripherique = self._peripherique, None
+            if peripherique is not None:
+                peripherique.fermer()
+                journal.info("souris et clavier : périphérique virtuel détruit (%s)", raison)
+
+    def _surveiller(self, arret):
+        while not arret.wait(self.PERIODE_GARDIEN_S):
+            try:
+                raison = self._refus_systeme()
+                if raison:
+                    return self.fermer(raison)
+                # Un téléphone retiré depuis la TV perd la main tout de suite, pas à sa
+                # prochaine requête : sa session est déjà ouverte, plus rien n'y passe
+                # par la vérification du jeton.
+                connus = self.service.jetons.identifiants()
+                for session in list(self._sessions):
+                    if session.ident not in connus:
+                        session.arreter("revoque")
+                if not self._sessions and self.horloge() - self._dernier_usage > self.INACTIVITE_S:
+                    return self.fermer("inactif")
+            except Exception:  # noqa: BLE001
+                # Un gardien mort laisserait un clavier sans surveillance : on ferme.
+                journal.exception("souris et clavier : surveillance en échec")
+                return self.fermer("erreur")
+
+    # ── Les sessions ──
+    def ouvrir_session(self, ident):
+        """(session, None) ou (None, raison). Ouvre le périphérique : s'il doit
+        échouer, c'est avant d'avoir dit oui à la page."""
+        if len(self._sessions) >= SESSIONS_POINTEUR_MAX:
+            return None, "trop-de-sessions"
+        raison = self.agir(ident, lambda p: None)
+        if raison:
+            return None, raison
+        for ancienne in list(self._sessions):
+            if ancienne.ident == ident:
+                ancienne.arreter("remplacee")
+        session = SessionPointeur(ident)
+        self._sessions.append(session)
+        journal.info("souris et clavier : session ouverte par le téléphone %s", ident)
+        self._notifier()
+        return session, None
+
+    def retirer_session(self, session):
+        if session in self._sessions:
+            self._sessions.remove(session)
+            # Ni le texte ni les touches : ce qui est tapé peut être un mot de passe.
+            journal.info("souris et clavier : session fermée (téléphone %s, %s, %d messages, %d jetés)",
+                         session.ident, session.raison_fin or "page fermée", session.recus, session.jetes)
+        if not self._sessions:
+            self.fermer("plus de session")
+
+    def _notifier(self):
+        """Le témoin côté TV : sur le bureau, une notification dit qu'un téléphone a
+        pris la souris. Rien dans la session kiosque (gnome-kiosk n'affiche pas de
+        notifications) : là, c'est le pointeur qui bouge qui le dit."""
+        maintenant = self.horloge()
+        if self._derniere_notification is not None and \
+                maintenant - self._derniere_notification < self.PERIODE_NOTIFICATION_S:
+            return
+        self._derniere_notification = maintenant
+        if self.service.routeur.contexte() == "bureau":
+            self.lancer(["notify-send", "--app-name=HUB", "--icon=input-mouse", "HUB",
+                         "Un téléphone pilote la souris et le clavier."])
+
+    def message(self, session, contenu):
+        """Traite un message de la page ; rend la réponse à lui envoyer, ou None."""
+        session.recus += 1
+        try:
+            m = json.loads(contenu.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            m = None
+        nature = m.get("t") if isinstance(m, dict) else None
+        raison = None
+        if nature == "p":
+            return {"t": "p", "n": m.get("n") if _entier(m.get("n")) else None}
+        if nature == "m" and _entier(m.get("x", 0)) and _entier(m.get("y", 0)):
+            dx, dy = _borne(m.get("x", 0), DEPLACEMENT_MAX), _borne(m.get("y", 0), DEPLACEMENT_MAX)
+            raison = self.agir(session.ident, lambda p: p.deplacer(dx, dy), mouvements=1)
+        elif nature == "d" and _entier(m.get("x", 0)) and _entier(m.get("y", 0)):
+            dx, dy = _borne(m.get("x", 0), DEFILEMENT_MAX), _borne(m.get("y", 0), DEFILEMENT_MAX)
+            raison = self.agir(session.ident, lambda p: p.defiler(dy, dx), mouvements=1)
+        elif nature == "c" and isinstance(m.get("b"), str) and m["b"] in POINTEUR.BOUTONS:
+            raison = self.agir(session.ident, lambda p: p.clic(m["b"]), frappes=1)
+        elif nature == "k" and isinstance(m.get("n"), str) and m["n"] in POINTEUR.TOUCHES_NOMMEES:
+            raison = self.agir(session.ident, lambda p: p.frapper(POINTEUR.TOUCHES_NOMMEES[m["n"]]), frappes=1)
+        elif nature == "x":
+            return {"t": "r", **self.taper(session.ident, m.get("s"))}
+        else:
+            session.erreurs += 1
+            return None
+        if raison == "debit":
+            session.jetes += 1
+        elif raison:
+            session.arreter(raison)
+        return None
+
+
+class _FluxPointeur:
+    """Lecture du WebSocket par demi-secondes : entre deux, on regarde si la session a
+    été arrêtée (verrouillage, révocation…) ou si la page se tait depuis trop longtemps.
+    Pas `rfile` : un délai dépassé au milieu d'une lecture le rend inutilisable."""
+
+    def __init__(self, connexion, session, pointeur, deja=b""):
+        self.connexion, self.session, self.pointeur = connexion, session, pointeur
+        self.tampon = deja
+        self.dernier = time.monotonic()
+
+    def read(self, n):
+        while len(self.tampon) < n:
+            if self.session.raison_fin:
+                raise EOFError
+            try:
+                morceau = self.connexion.recv(4096)
+            except socket.timeout:
+                if time.monotonic() - self.dernier > self.pointeur.DELAI_MUET_S:
+                    self.session.arreter("muet")
+                continue
+            except OSError:
+                raise EOFError from None
+            if not morceau:
+                raise EOFError
+            self.dernier = time.monotonic()
+            self.tampon += morceau
+        rendu, self.tampon = self.tampon[:n], self.tampon[n:]
+        return rendu
 
 
 # ── La page ─────────────────────────────────────────────────────────────────
@@ -1381,6 +1814,7 @@ class Service:
         self._verrou_tickets = threading.Lock()
         self.jetons = Jetons(chemins["jetons"], horloge=horloge)
         self.routeur = routeur or Routeur(chemins["socket"])
+        self.pointeur = Pointeur(self)
         self.page, self.csp = charger_page(page)
         self.ressources = Ressources()
         self.url = None
@@ -1420,28 +1854,53 @@ class Service:
         self.hotes_admis = frozenset(hotes)
         self.ecrire_etat()
 
-    def creer_ticket(self, ident=None):
+    def creer_ticket(self, ident=None, nature="transfert", duree=None):
         """Le ticket porte l'identifiant du téléphone qui l'a demandé : c'est lui qui
         prouve, sur l'origine https où le jeton http n'existe pas, que c'est le même
-        appareil — sans quoi le passage à la version sécurisée créerait un doublon."""
+        appareil — sans quoi le passage à la version sécurisée créerait un doublon.
+
+        `nature` : « transfert » ou « pointeur ». Un ticket ne vaut que pour ce pour quoi
+        il a été délivré : celui qui ouvre la souris ne doit pas pouvoir appairer, ni
+        l'inverse (le ticket de transfert s'obtient en http)."""
         ticket = secrets.token_urlsafe(32)
         maintenant = self.horloge()
         with self._verrou_tickets:
             self._tickets = {k: v for k, v in self._tickets.items() if v[0] > maintenant}
             if len(self._tickets) >= 20:
                 return None
-            self._tickets[_empreinte(ticket)] = (maintenant + DUREE_TICKET_S, ident)
+            self._tickets[_empreinte(ticket)] = (maintenant + (duree or DUREE_TICKET_S), ident, nature)
         return ticket
 
-    def consommer_ticket(self, ticket):
-        """{"id": identifiant du téléphone} si le ticket vaut encore, sinon None."""
+    def consommer_ticket(self, ticket, nature="transfert"):
+        """{"id": identifiant du téléphone} si le ticket vaut encore, sinon None. Présenté
+        au mauvais guichet, il est brûlé quand même."""
         if not isinstance(ticket, str) or not 20 <= len(ticket) <= 200:
             return None
         with self._verrou_tickets:
             trouve = self._tickets.pop(_empreinte(ticket), None)
-        if trouve is None or trouve[0] <= self.horloge():
+        if trouve is None or trouve[0] <= self.horloge() or trouve[2] != nature:
             return None
         return {"id": trouve[1]}
+
+    def executer_commande(self, nom, texte, ident, sure, securise):
+        """Une commande de la liste blanche. Hors du menu et de Kodi, les flèches, OK,
+        Retour et le texte deviennent des touches — aux conditions de Pointeur.refus,
+        les mêmes que pour la souris : la route des boutons n'est pas une porte de
+        derrière. Refusées, la réponse dit pourquoi (« pointeur-… »)."""
+        contexte = self.routeur.contexte()
+        if contexte not in CONTEXTES_POINTEUR or (nom not in TOUCHES_COMMANDE and nom != "texte"):
+            return self.routeur.executer(nom, texte)
+        raison = self.pointeur.refus(ident, sure, securise, contexte)
+        if raison is None and nom == "texte":
+            resultat = self.pointeur.taper(ident, texte)
+            if resultat["ok"]:
+                return {**resultat, "cible": contexte}
+            raison = resultat["raison"]
+        elif raison is None:
+            raison = self.pointeur.agir(ident, lambda p: p.frapper(POINTEUR.TOUCHES_NOMMEES[nom]), frappes=1)
+        if raison is None:
+            return {"ok": True, "cible": contexte}
+        return {"ok": False, "cible": contexte, "raison": f"pointeur-{raison}"}
 
     def ecrire_etat(self):
         """Ce que la TV affiche : URL (pour le QR code), code, expiration."""
@@ -1601,7 +2060,14 @@ def _gestionnaire(service):
         def _csp(self):
             # La page http peut sonder l'origine https (le certificat est-il installé ?) :
             # cette origine-là, et aucune autre, s'ajoute à connect-src.
-            origine = None if self.securise else self._origine_https()
+            if self.securise:
+                # Le WebSocket de la souris. « 'self' » devrait le couvrir (CSP 3), mais
+                # les Safari d'avant 15.4 ne l'étendaient pas à wss: — on nomme donc
+                # cette origine-ci, vérifiée contre la liste des hôtes admis.
+                hote = self._hote()
+                origine = f"wss://{hote}" if hote else None
+            else:
+                origine = self._origine_https()
             if not origine:
                 return service.csp
             return service.csp.replace("connect-src 'self'", f"connect-src 'self' {origine}", 1)
@@ -1644,10 +2110,14 @@ def _gestionnaire(service):
             return self.path.split("?", 1)[0]
 
         def _jeton(self):
+            return self._jeton_detail()[0]
+
+        def _jeton_detail(self):
+            """(identifiant du téléphone, jeton sûr ?) — voir Jetons.creer."""
             entete = self.headers.get("Authorization") or ""
             if not entete.startswith("Bearer "):
-                return None
-            return service.jetons.valide(entete[7:].strip())
+                return None, False
+            return service.jetons.valide_detail(entete[7:].strip())
 
         def do_GET(self):
             if self._chemin() == "/sonde" and self.securise and self._hote():
@@ -1684,10 +2154,93 @@ def _gestionnaire(service):
             if chemin in ICONES:
                 return self._repondre(200, service.ressources.icone(chemin), "image/png")
             if chemin == "/api/etat":
-                if not self._jeton():
+                ident, sure = self._jeton_detail()
+                if not ident:
                     return self._json(401, {"erreur": "jeton"})
-                return self._json(200, {"ok": True, "contexte": service.routeur.contexte()})
+                contexte = service.routeur.contexte()
+                # La page bascule seule entre « Navigation » et « Souris », et quand la
+                # souris manque là où elle servirait, elle dit pourquoi : pas de panne muette.
+                raison = service.pointeur.refus(ident, sure, self.securise, contexte)
+                return self._json(200, {"ok": True, "contexte": contexte,
+                                        "pointeur": {"permis": raison is None, "raison": raison}})
+            if chemin == "/api/pointeur":
+                return self._pointeur()
             self._json(404, {"erreur": "introuvable"})
+
+        def _pointeur(self):
+            """Le WebSocket de la souris et du clavier. Rien ne s'ouvre sans un ticket
+            délivré à l'instant, en https, à un téléphone qui y avait droit."""
+            protocoles = [p.strip() for p in (self.headers.get("Sec-WebSocket-Protocol") or "").split(",")]
+            ticket = next((p[7:] for p in protocoles if p.startswith("ticket.")), None)
+            porteur = service.consommer_ticket(ticket, "pointeur")
+            if porteur is None or porteur["id"] not in service.jetons.identifiants():
+                return self._json(401, {"erreur": "ticket"})
+            cle = self.headers.get("Sec-WebSocket-Key") or ""
+            if (self.command != "GET" or (self.headers.get("Upgrade") or "").lower() != "websocket"
+                    or "upgrade" not in (self.headers.get("Connection") or "").lower()
+                    or self.headers.get("Sec-WebSocket-Version") != "13"
+                    or not re.fullmatch(r"[A-Za-z0-9+/]{22}==", cle) or "hub-pointeur" not in protocoles):
+                return self._json(400, {"erreur": "websocket"})
+            # Un WebSocket échappe à CORS : n'importe quelle page peut en ouvrir un vers
+            # le HUB. L'origine doit donc être la nôtre, exactement — en plus du Host
+            # (rebinding) et de Sec-Fetch-Site, déjà vérifiés par _admis.
+            if not self.securise or self.headers.get("Origin") != f"https://{self._hote()}":
+                return self._json(403, {"erreur": "pointeur", "raison": "connexion-non-securisee"
+                                        if not self.securise else "origine"})
+            # Le ticket a trente secondes : ce qui était permis en le demandant peut ne
+            # plus l'être (écran verrouillé entre-temps). Il a été délivré à un jeton sûr.
+            raison = service.pointeur.refus(porteur["id"], True, True)
+            session = None
+            if raison is None:
+                session, raison = service.pointeur.ouvrir_session(porteur["id"])
+            if session is None:
+                return self._json(403, {"erreur": "pointeur", "raison": raison})
+            self.close_connection = True
+            # Écrit à la main : http.server répondrait « HTTP/1.0 101 », que les
+            # navigateurs refusent pour un WebSocket.
+            self.connection.sendall(("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
+                                     "Connection: Upgrade\r\nSec-WebSocket-Protocol: hub-pointeur\r\n"
+                                     f"Sec-WebSocket-Accept: {POINTEUR.cle_acceptee(cle)}\r\n\r\n").encode("ascii"))
+            self._servir_pointeur(session)
+
+        def _servir_pointeur(self, session):
+            def envoyer(message):
+                self.connection.sendall(POINTEUR.trame(POINTEUR.OP_TEXTE, json.dumps(
+                    message, ensure_ascii=False).encode("utf-8")))
+
+            code = 1000
+            try:
+                self.connection.settimeout(0.5)
+                flux = _FluxPointeur(self.connection, session, service.pointeur)
+                disposition = service.pointeur.disposition
+                envoyer({"t": "pret", "texte": bool(disposition and POINTEUR.table_de(disposition))})
+                while True:
+                    opcode, contenu = POINTEUR.lire_trame(flux, TRAME_POINTEUR_MAX)
+                    if opcode == POINTEUR.OP_FIN:
+                        break
+                    if opcode == POINTEUR.OP_PING:
+                        self.connection.sendall(POINTEUR.trame(POINTEUR.OP_PONG, contenu[:125]))
+                    elif opcode == POINTEUR.OP_TEXTE:
+                        reponse = service.pointeur.message(session, contenu)
+                        if reponse is not None:
+                            envoyer(reponse)
+                        if session.erreurs > ERREURS_POINTEUR_MAX:
+                            raise POINTEUR.TrameRefusee(1008)
+                    elif opcode != POINTEUR.OP_PONG:
+                        raise POINTEUR.TrameRefusee(1003)
+            except POINTEUR.TrameRefusee as refus:
+                code = refus.code
+                session.arreter(f"trame-{code}")
+            except (EOFError, OSError):
+                pass
+            finally:
+                try:
+                    if session.raison_fin and code == 1000:
+                        envoyer({"t": "fin", "raison": session.raison_fin})
+                    self.connection.sendall(POINTEUR.trame(POINTEUR.OP_FIN, struct.pack("!H", code)))
+                except OSError:
+                    pass
+                service.pointeur.retirer_session(session)
 
         def do_HEAD(self):
             self.do_GET()
@@ -1759,7 +2312,23 @@ def _gestionnaire(service):
                 return self._transfert()
             if chemin == "/api/dictee":
                 return self._dictee()
+            if chemin == "/api/pointeur/session":
+                return self._session_pointeur()
             self._json(404, {"erreur": "introuvable"})
+
+        def _session_pointeur(self):
+            ident, sure = self._jeton_detail()
+            if not ident:
+                return self._json(401, {"erreur": "jeton"})
+            if self._corps() is None:
+                return
+            raison = service.pointeur.refus(ident, sure, self.securise)
+            if raison:
+                return self._json(403, {"erreur": "pointeur", "raison": raison})
+            ticket = service.creer_ticket(ident, nature="pointeur", duree=DUREE_TICKET_POINTEUR_S)
+            if ticket is None:
+                return self._json(429, {"erreur": "trop"}, {"Retry-After": str(DUREE_TICKET_POINTEUR_S)})
+            self._json(200, {"ticket": ticket})
 
         def _appairer(self):
             corps = self._corps()
@@ -1790,14 +2359,19 @@ def _gestionnaire(service):
             # Le code de la TV vient d'être donné : ce qui suit ne sert plus qu'à savoir
             # QUELLE entrée renouveler. Le jeton précédent passe avant l'identifiant
             # d'appareil — un téléphone appairé ne renouvelle jamais que le sien.
+            # Code de la TV tapé en https : le jeton qui en sort n'aura jamais voyagé en
+            # clair, c'est le seul à qui le clavier et la souris seront ouverts.
+            entete = self.headers.get("Authorization") or ""
+            presente = _empreinte(entete[7:].strip()) if entete.startswith("Bearer ") else None
             return self._delivrer(corps, ip, remplace=self._jeton(),
-                                  appareil=appareil_propre(corps.get("appareil")))
+                                  appareil=appareil_propre(corps.get("appareil")),
+                                  sure=self.securise, presente=presente)
 
-        def _delivrer(self, corps, ip, remplace=None, appareil=None, ajouter=False):
+        def _delivrer(self, corps, ip, remplace=None, appareil=None, ajouter=False, sure=False, presente=None):
             nom = nom_du_telephone(corps.get("nom"), self.headers.get("User-Agent"))
             connus = {t["id"] for t in service.jetons.lister()}
-            ident, jeton, appareil = service.jetons.creer(nom, remplace=remplace,
-                                                          appareil=appareil, ajouter=ajouter)
+            ident, jeton, appareil = service.jetons.creer(nom, remplace=remplace, appareil=appareil,
+                                                          ajouter=ajouter, sure=sure, presente=presente)
             service.appairage_le = int(service.horloge() * 1000)
             service.ecrire_etat()
             journal.info("appairage : %s (%s) depuis %s%s", nom, ident, ip,
@@ -1891,7 +2465,8 @@ def _gestionnaire(service):
             self._json(200, {"ok": True, "fichier": nom})
 
         def _commande(self):
-            if not self._jeton():
+            ident, sure = self._jeton_detail()
+            if not ident:
                 return self._json(401, {"erreur": "jeton"})
             corps = self._corps()
             if corps is None:
@@ -1902,7 +2477,8 @@ def _gestionnaire(service):
             if nom == "texte" and not isinstance(texte, str):
                 return self._json(400, {"erreur": "texte"})
             try:
-                resultat = service.routeur.executer(nom, texte if nom == "texte" else None)
+                resultat = service.executer_commande(nom, texte if nom == "texte" else None,
+                                                     ident, sure, self.securise)
             except Exception:  # noqa: BLE001
                 journal.exception("commande %s", nom)
                 return self._json(500, {"erreur": "interne"})
@@ -2075,8 +2651,10 @@ def main(argv=None):
             liste = jetons.lister()
             if not liste:
                 print("aucun téléphone appairé")
+            clavier = jetons.avec_clavier()
             for t in liste:
-                print(f"{t['id']}  {t['nom'] or '?':<20}  appairé {_date(t['cree'])}  vu {_date(t['vu'])}")
+                print(f"{t['id']}  {t['nom'] or '?':<20}  appairé {_date(t['cree'])}  vu {_date(t['vu'])}"
+                      f"{'  [souris et clavier possibles]' if t['id'] in clavier else ''}")
         return 0
 
     if not VOIX:
@@ -2131,6 +2709,7 @@ def main(argv=None):
             if not args.adresse and adresse_locale() != adresse:
                 journal.info("l'adresse a changé : réouverture de l'écoute")
                 break
+        service.pointeur.fermer("arrêt de l'écoute")
         for serveur in serveurs:
             serveur.shutdown()
             serveur.server_close()

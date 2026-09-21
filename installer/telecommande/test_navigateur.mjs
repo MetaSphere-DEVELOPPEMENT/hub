@@ -32,7 +32,7 @@ const IPHONE = {
 
 export async function lancerBanc(options = []) {
   const dossier = mkdtempSync(path.join(tmpdir(), "hub-tel-"));
-  const banc = spawn("python3", [path.join(ici, "banc_essai.py"), dossier, ...options],
+  const banc = spawn(process.env.HUB_PYTHON || "python3", [path.join(ici, "banc_essai.py"), dossier, ...options],
     { stdio: ["pipe", "pipe", "inherit"], env: { ...process.env, ...(options.env || {}) } });
   const ports = await new Promise((ok, ko) => {
     let tampon = "";
@@ -47,6 +47,17 @@ export async function lancerBanc(options = []) {
     code: () => JSON.parse(readFileSync(path.join(dossier, "run/telecommande.json"), "utf8")).code,
     etat: () => JSON.parse(readFileSync(path.join(dossier, "run/telecommande.json"), "utf8")),
     menu: () => readFileSync(path.join(dossier, "menu.txt"), "utf8").split("\n").filter(Boolean),
+    // Ce que le faux /dev/uinput a reçu : un lot par ligne, [[type, code, valeur], …].
+    pointeur: () => {
+      try { return readFileSync(path.join(dossier, "pointeur.jsonl"), "utf8").split("\n").filter(Boolean).map(l => JSON.parse(l)); }
+      catch { return []; }
+    },
+    // Ce qui est « à l'écran » du HUB : menu, web, bureau.
+    contexte: c => writeFileSync(path.join(dossier, "contexte"), c),
+    souris: oui => {
+      mkdirSync(path.join(dossier, "config"), { recursive: true });
+      writeFileSync(path.join(dossier, "config/reglages.json"), JSON.stringify({ systeme: { telecommandeSouris: oui } }));
+    },
     arreter: () => { banc.stdin.end(); banc.kill(); rmSync(dossier, { recursive: true, force: true }); },
   };
 }
@@ -540,3 +551,166 @@ test("dictée : en http (non sécurisé), le micro ouvre la marche à suivre au 
 });
 
 export { PIXEL, IPHONE };
+
+// ── Souris et clavier : le pavé change de rôle avec ce qui est à l'écran ────
+// Le service est en https réel (la souris est refusée en http). Le certificat n'est pas
+// installé dans ce navigateur d'essai : `ignoreHTTPSErrors` le fait accepter, WebSocket
+// compris. La chaîne de confiance, elle, a ses propres tests plus haut.
+const EV_KEY = 1, EV_REL = 2, REL_X = 0, REL_Y = 1, REL_WHEEL_FIN = 11, BTN_GAUCHE = 0x110, BTN_DROIT = 0x111;
+const KEY_ESC = 1, KEY_2 = 3, KEY_Q = 16, KEY_ENTER = 28, KEY_BACKSPACE = 14;
+
+async function bancSouris() {
+  const b = await lancerBanc(["--https"]);
+  b.souris(true);
+  const page = await ouvrir(navigateur, `https://127.0.0.1:${b.ports.https}/`, PIXEL, { ignoreHTTPSErrors: true });
+  await appairer(page, b);
+  return { b, page };
+}
+const modeAffiche = (page, attendu) => attendre(async () => {
+  await page.evaluate(() => lireEtat());
+  return (await page.locator("#mode-pave").innerText()) === attendu;
+}, 8000);
+const lots = (b, depuis) => b.pointeur().slice(depuis);
+const evenements = (b, depuis, type, code) => lots(b, depuis).flat().filter(e => e[0] === type && e[1] === code);
+
+test("souris : « Navigation » dans le menu, « Souris » sur le bureau, et retour — la page bascule seule et le dit", async () => {
+  const { b, page } = await bancSouris();
+  try {
+    // Dans le menu : rien ne change. Des flèches, par le socket, et pas de témoin.
+    await modeAffiche(page, "Navigation");
+    assert.equal(await page.locator("#temoin").isVisible(), false);
+    const d = await doigts(page);
+    await d.glisser(90, 4);
+    await attendre(() => b.menu().includes("droite"));
+    assert.deepEqual(b.pointeur(), [], "dans le menu, le clavier virtuel n'est même pas créé");
+
+    // Le bureau s'ouvre : le même pavé devient une souris, et la page le dit.
+    b.contexte("bureau");
+    await modeAffiche(page, "Souris");
+    assert.equal(await page.locator("#temoin").isVisible(), true, "témoin visible tant que la souris est active");
+    assert.match(await page.locator("#temoin").innerText(), /Souris et clavier actifs/);
+    assert.equal(await page.locator("#contexte").innerText(), "Bureau");
+    assert.equal(await page.locator("#rangee-souris").isVisible(), true);
+    const flechesAvant = b.menu().length;
+
+    let depuis = b.pointeur().length;
+    const d2 = await doigts(page);
+    await d2.glisser(90, 0);
+    await attendre(() => evenements(b, depuis, EV_REL, REL_X).length > 0);
+    await d2.pause(150);
+    const dx = evenements(b, depuis, EV_REL, REL_X).reduce((s, e) => s + e[2], 0);
+    assert.ok(dx >= 90, `le pointeur suit le doigt, accéléré : ${dx} points pour 90`);
+    assert.equal(evenements(b, depuis, EV_KEY, BTN_GAUCHE).length, 0, "un glissement n'est pas un clic");
+    for (const lot of lots(b, depuis)) assert.deepEqual(lot.at(-1), [0, 0, 0], "chaque lot finit par EV_SYN");
+
+    depuis = b.pointeur().length;
+    await d2.toucher();
+    await attendre(() => evenements(b, depuis, EV_KEY, BTN_GAUCHE).length === 2);
+    depuis = b.pointeur().length;
+    await d2.appuiLong();
+    await attendre(() => evenements(b, depuis, EV_KEY, BTN_DROIT).length === 2);
+    await d2.pause(200);
+    assert.equal(evenements(b, depuis, EV_KEY, BTN_GAUCHE).length, 0, "l'appui long ne clique pas à gauche en se levant");
+
+    // Deux doigts qui descendent : défilement fin, dans le sens des doigts.
+    depuis = b.pointeur().length;
+    await d2.envoyer("touchStart", [[d2.cx - 40, d2.cy]]);
+    await d2.envoyer("touchStart", [[d2.cx - 40, d2.cy], [d2.cx + 40, d2.cy]]);
+    for (let i = 1; i <= 6; i++) { await d2.envoyer("touchMove", [[d2.cx - 40, d2.cy + 10 * i], [d2.cx + 40, d2.cy + 10 * i]]); await d2.pause(16); }
+    await d2.envoyer("touchEnd", []);
+    await attendre(() => evenements(b, depuis, EV_REL, REL_WHEEL_FIN).length > 0);
+    await d2.pause(150);
+    const molette = evenements(b, depuis, EV_REL, REL_WHEEL_FIN).reduce((s, e) => s + e[2], 0);
+    assert.ok(molette > 100 && molette <= 260, `60 points de doigts ≈ 240 unités de molette : ${molette}`);
+    assert.equal(evenements(b, depuis, EV_REL, REL_X).length + evenements(b, depuis, EV_REL, REL_Y).length, 0,
+      "deux doigts défilent, ils ne déplacent pas le pointeur");
+    assert.equal(evenements(b, depuis, EV_KEY, BTN_GAUCHE).length, 0);
+
+    // Texte : « a » part comme KEY_Q (clavier français du banc), « é » comme KEY_2.
+    depuis = b.pointeur().length;
+    await page.locator("#texte").fill("aé");
+    await page.locator("#form-texte button").tap();
+    await attendre(() => evenements(b, depuis, EV_KEY, KEY_2).length === 2);
+    assert.equal(evenements(b, depuis, EV_KEY, KEY_Q).length, 2);
+    await attendre(async () => /Texte tapé/.test(await page.locator("#message").innerText()));
+
+    // Retour = Échap, et les touches propres au mode souris.
+    depuis = b.pointeur().length;
+    await page.locator('#rangee-retour [data-cmd="retour"]').tap();
+    await page.locator('[data-touche="effacer"]').tap();
+    await attendre(() => evenements(b, depuis, EV_KEY, KEY_BACKSPACE).length === 2);
+    assert.equal(evenements(b, depuis, EV_KEY, KEY_ESC).length, 2);
+    assert.equal(b.menu().length, flechesAvant, "rien n'est parti au menu pendant le mode souris");
+
+    // Retour au menu : la session tombe côté HUB, la page revient seule à « Navigation ».
+    b.contexte("menu");
+    await modeAffiche(page, "Navigation");
+    assert.equal(await page.locator("#temoin").isVisible(), false);
+    depuis = b.pointeur().length;
+    const d3 = await doigts(page);
+    const avantMenu = b.menu().length;
+    await d3.glisser(0, 90);
+    await attendre(() => b.menu().slice(avantMenu).includes("bas"));
+    assert.deepEqual(lots(b, depuis), []);
+    assert.deepEqual(page.erreurs, [], "aucune violation CSP (wss: compris)");
+  } finally { await page.context().close(); b.arreter(); }
+});
+
+test("souris : un geste vif va plus loin qu'un geste lent de même longueur (accélération douce, bornée)", async () => {
+  const { b, page } = await bancSouris();
+  try {
+    b.contexte("web");
+    await modeAffiche(page, "Souris");
+    assert.equal(await page.locator("#contexte").innerText(), "Web");
+    const d = await doigts(page);
+    // 120 points de doigt dans les deux cas : douze petits pas espacés, ou trois grands d'affilée.
+    const parcourir = async (pas, pauseMs) => {
+      const depuis = b.pointeur().length;
+      await d.envoyer("touchStart", [[d.cx - 60, d.cy]]);
+      for (let i = 1; i <= 120 / pas; i++) { await d.envoyer("touchMove", [[d.cx - 60 + pas * i, d.cy]]); await d.pause(pauseMs); }
+      await d.envoyer("touchEnd", []);
+      await d.pause(200);
+      return evenements(b, depuis, EV_REL, REL_X).reduce((s, e) => s + e[2], 0);
+    };
+    const lent = await parcourir(10, 100), vif = await parcourir(40, 0);
+    assert.ok(lent >= 120 && lent <= 200, `120 points lents : entre ×1 et ×1,6 : ${lent}`);
+    assert.ok(vif >= lent * 1.5, `vif ${vif} contre lent ${lent}`);
+    assert.ok(vif <= 120 * 4 + 12, `borné à ×4 : ${vif}`);
+  } finally { await page.context().close(); b.arreter(); }
+});
+
+test("souris indisponible : la page reste en « Navigation » et dit pourquoi, avec le remède", async () => {
+  const { b, page } = await bancSouris();
+  try {
+    b.souris(false);
+    b.contexte("bureau");
+    await attendre(async () => { await page.evaluate(() => lireEtat()); return page.locator("#pourquoi").isVisible(); }, 8000);
+    assert.match(await page.locator("#pourquoi").innerText(), /allumez-les sur la TV/);
+    assert.equal(await page.locator("#mode-pave").innerText(), "Navigation");
+    assert.equal(await page.locator("#temoin").isVisible(), false);
+    // Une flèche dit la même chose, au lieu du vieux « seul Accueil agit ».
+    await page.locator('[data-action="disposition"][data-valeur="boutons"]').tap();
+    await page.locator('#zone-croix [data-cmd="ok"]').tap();
+    await attendre(async () => /allumez-les sur la TV/.test(await page.locator("#message").innerText()));
+    assert.deepEqual(b.pointeur(), []);
+
+    // Écran verrouillé : autre raison, autre phrase. Et dans le menu, plus de reproche.
+    b.souris(true);
+    writeFileSync(path.join(b.dossier, "verrou"), "");
+    await attendre(async () => { await page.evaluate(() => lireEtat()); return /verrouillé/.test(await page.locator("#pourquoi").innerText()); }, 8000);
+    b.contexte("menu");
+    await attendre(async () => { await page.evaluate(() => lireEtat()); return !(await page.locator("#pourquoi").isVisible()); }, 8000);
+
+    // La même télécommande en http : jamais de souris, et la page envoie vers la version sécurisée.
+    const http = await ouvrir(navigateur, `http://127.0.0.1:${b.ports.http}/`);
+    await appairer(http, b);
+    rmSync(path.join(b.dossier, "verrou"));
+    b.contexte("bureau");
+    await attendre(async () => { await http.evaluate(() => lireEtat()); return http.locator("#pourquoi").isVisible(); }, 8000);
+    assert.match(await http.locator("#pourquoi").innerText(), /connexion sécurisée/);
+    assert.equal(await http.locator("#mode-pave").innerText(), "Navigation");
+    assert.deepEqual(b.pointeur(), []);
+    assert.deepEqual([...page.erreurs, ...http.erreurs], []);
+    await http.context().close();
+  } finally { await page.context().close(); b.arreter(); }
+});

@@ -20,6 +20,12 @@
 # Restart=always et non on-failure : un service tombé pendant un film doit revenir
 # seul, même après une sortie propre imprévue (ligne de commande, signal).
 #
+# Souris et clavier (hub_pointeur.py) : le service ouvre /dev/uinput grâce au groupe
+# hub-uinput posé par l'installateur (règle udev 71-hub-uinput.rules), rien de plus.
+# PAS de PrivateDevices ni de DeviceAllow ici : dans une unité utilisateur ils sont sans
+# effet ou font échouer le démarrage — et cette unité est le seul moyen de piloter le
+# HUB depuis le canapé : aucune option qu'on n'a pas pu éprouver sur la TV n'y entre.
+#
 # Le réseau n'est pas une dépendance : les unités utilisateur ne voient pas
 # network-online.target. Le programme attend lui-même une adresse, et rouvre
 # l'écoute si elle change.

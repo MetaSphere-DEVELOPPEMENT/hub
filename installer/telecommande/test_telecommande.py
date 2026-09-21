@@ -1188,7 +1188,8 @@ class ServiceHTTPS(AvecDossier):
         _s, h, _ = self.requete("GET", "/")
         self.assertIn(f"connect-src 'self' https://127.0.0.1:{self.https};", h["content-security-policy"])
         _s, h, _ = self.requete("GET", "/", securise=True)
-        self.assertIn("connect-src 'self';", h["content-security-policy"])
+        # En https, la seule origine nommée en plus est le WebSocket de CETTE origine (souris).
+        self.assertIn(f"connect-src 'self' wss://127.0.0.1:{self.https};", h["content-security-policy"])
         statut, h, _ = self.requete("GET", "/sonde", securise=True, entetes={"Sec-Fetch-Site": "cross-site"})
         self.assertEqual((statut, h["cross-origin-resource-policy"]), (204, "cross-origin"))
         # Rien de tel en http, ni ailleurs en https pour une requête intersite.

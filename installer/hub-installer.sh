@@ -497,6 +497,47 @@ activer_unite_globale() { # nom
   fi
 }
 
+# Souris et clavier depuis le téléphone (hub_pointeur.py, /dev/uinput). Tout ce qui
+# demande root est ici, et la mise à jour depuis le menu le rejoue (elle relance cet
+# installateur entier) : un HUB déjà installé reçoit la règle et le groupe sans SSH.
+# Rien de ceci n'ALLUME la fonction : elle reste éteinte tant qu'on ne l'a pas activée
+# dans Réglages → Télécommande. Et rien n'est bloquant au-delà des fichiers posés : un
+# noyau sans uinput laisse une télécommande qui marche comme avant, et qui le dit.
+souris_telecommande() { # dossier-du-dépôt dossier-lib
+  local tel="$1" lib="$2" groupe=hub-uinput
+  [ -f "$tel/hub_pointeur.py" ] || return 0
+  poser "$tel/hub_pointeur.py"      "$lib/telecommande/hub_pointeur.py"    0644 || return 1
+  poser "$tel/71-hub-uinput.rules"  /etc/udev/rules.d/71-hub-uinput.rules   0644 || return 1
+  poser "$tel/hub-uinput.conf"      /etc/modules-load.d/hub-uinput.conf     0644 || return 1
+  # Un groupe à part, jamais « input » (qui laisserait lire tous les claviers : voir la
+  # règle udev). L'appartenance ne vaut qu'à la session suivante : d'ici là, la page du
+  # téléphone affiche « redémarrez le HUB une fois ».
+  if getent group "$groupe" >/dev/null; then
+    deja "groupe $groupe"
+  else
+    faire groupadd --system "$groupe" || return 1
+    ok "groupe $groupe"
+  fi
+  if id -nG "$UTILISATEUR" 2>/dev/null | tr ' ' '\n' | grep -qx "$groupe"; then
+    deja "$UTILISATEUR dans le groupe $groupe"
+  else
+    faire usermod -aG "$groupe" "$UTILISATEUR" || return 1
+    ok "$UTILISATEUR dans le groupe $groupe (effectif au prochain démarrage)"
+  fi
+  if [ "$POUR_DE_VRAI" = 1 ]; then
+    # Sans `faire` : un échec ici ne doit pas compter comme un échec d'installation
+    # (la mise à jour reviendrait à la version précédente pour une souris en moins).
+    modprobe uinput 2>/dev/null || alerte "module uinput indisponible : la souris du téléphone le sera aussi"
+    udevadm control --reload-rules 2>/dev/null
+    udevadm trigger --action=change --sysname-match=uinput 2>/dev/null
+    ok "droits de /dev/uinput : $(stat -c '%U:%G %a' /dev/uinput 2>/dev/null || echo 'nœud absent')"
+  else
+    faire modprobe uinput
+    faire udevadm control --reload-rules
+    faire udevadm trigger --action=change --sysname-match=uinput
+  fi
+}
+
 etape_telecommande() {
   etape "6. Télécommande téléphone"
   local tel="$DEPOT/telecommande" lib=/usr/local/lib/hub
@@ -509,6 +550,7 @@ etape_telecommande() {
   # page.html doit rester à côté du programme : il la lit là (lien résolu).
   poser "$tel/hub_telecommande.py" "$lib/telecommande/hub_telecommande.py" 0755 || return 1
   poser "$tel/page.html"           "$lib/telecommande/page.html"           0644 || return 1
+  souris_telecommande "$tel" "$lib" || return 1
   if [ -f "$tel/README.md" ]; then
     poser "$tel/README.md" "$lib/telecommande/README.md" 0644 || return 1
   fi

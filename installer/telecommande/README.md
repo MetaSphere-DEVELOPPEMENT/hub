@@ -6,6 +6,12 @@ directionnelle), OK, Retour, Accueil, les modes, le volume, la dictée d'une com
 l'envoi de texte (recherche dans Kodi) et l'envoi d'une photo de profil. Elle
 s'ajoute à l'écran d'accueil et s'ouvre alors comme une app.
 
+Hors du menu et de Kodi — devant un service web (Netflix, YouTube, jeu en nuage) ou sur
+le bureau — plus rien n'écoute des flèches : le pavé devient alors **une vraie souris**
+et le champ texte **un vrai clavier** (voir « Souris et clavier »). C'est éteint par
+défaut, et c'est le plus gros pouvoir que cette page puisse recevoir : lire la section
+Sécurité avant de l'allumer.
+
 **Pourquoi.** Le M720q n'a ni Bluetooth ni HDMI-CEC (ARCHITECTURE.md, contraintes 2
 et 3) : la télécommande de la TV ne pilote rien. Un téléphone sur le wifi de la
 maison n'a rien à installer.
@@ -16,17 +22,27 @@ maison n'a rien à installer.
 |---|---|
 | `hub_telecommande.py` | le service (bibliothèque standard seule) et la ligne de commande de révocation |
 | `page.html` | la page du téléphone, CSS et JS inclus, aucune ressource externe |
+| `hub_pointeur.py` | le clavier-souris virtuel (`/dev/uinput`), les tables de clavier, le WebSocket — bibliothèque standard seule |
+| `71-hub-uinput.rules` · `hub-uinput.conf` | règle udev (groupe `hub-uinput` sur `/dev/uinput`) et chargement du module au démarrage |
 | `hub-telecommande.service` | unité systemd **utilisateur** |
 | `qrcode.js` | générateur de QR code pour le menu (MIT, vendorisé, voir l'en-tête) |
 | `test_telecommande.py` | tests : `python3 -m unittest installer/telecommande/test_telecommande.py` |
 | `test_navigateur.mjs` | tests dans Chrome en vue téléphone (voir « Ce qui est prouvé ») |
-| `banc_essai.py` | le service sur 127.0.0.1 avec un faux menu, pour `test_navigateur.mjs` — **pas installé** |
+| `test_pointeur.py` | le périphérique virtuel octet par octet (faux `/dev/uinput`), les tables de clavier **vérifiées contre xkb**, logind, trames WebSocket |
+| `test_pointeur_service.py` | chaque garde-fou de la souris, route par route, en http et https réels |
+| `banc_essai.py` | le service sur 127.0.0.1 avec un faux menu, un faux `/dev/uinput` et un faux logind, pour `test_navigateur.mjs` — **pas installé** |
+| `mesure_transport.py` | latence et débit : une requête https par événement contre le WebSocket — **pas installé** |
 
 ## Installation — ce que `hub-installer.sh` doit faire
 
 ```bash
 install -D -m 0755 telecommande/hub_telecommande.py  /usr/local/lib/hub/telecommande/hub_telecommande.py
 install -D -m 0644 telecommande/page.html            /usr/local/lib/hub/telecommande/page.html
+install -D -m 0644 telecommande/hub_pointeur.py      /usr/local/lib/hub/telecommande/hub_pointeur.py
+install -D -m 0644 telecommande/71-hub-uinput.rules  /etc/udev/rules.d/71-hub-uinput.rules
+install -D -m 0644 telecommande/hub-uinput.conf      /etc/modules-load.d/hub-uinput.conf
+groupadd --system hub-uinput && usermod -aG hub-uinput <utilisateur du HUB>   # jamais le groupe « input »
+modprobe uinput && udevadm control --reload-rules && udevadm trigger --action=change --sysname-match=uinput
 install -D -m 0644 telecommande/README.md            /usr/local/lib/hub/telecommande/README.md
 install -D -m 0644 telecommande/hub-telecommande.service /usr/local/lib/systemd/user/hub-telecommande.service
 install -D -m 0644 telecommande/qrcode.js            /usr/local/share/hub/menu/qrcode.js
@@ -34,8 +50,13 @@ ln -sfn /usr/local/lib/hub/telecommande/hub_telecommande.py /usr/local/bin/hub-t
 systemctl --global enable hub-telecommande.service
 ```
 
-- `page.html` doit rester **à côté** de `hub_telecommande.py` : c'est là qu'il la lit
-  (le lien de `/usr/local/bin` est résolu).
+- `page.html` et `hub_pointeur.py` doivent rester **à côté** de `hub_telecommande.py` :
+  c'est là qu'il les lit (le lien de `/usr/local/bin` est résolu).
+- **Souris et clavier.** Le groupe `hub-uinput` ne vaut qu'**après un redémarrage** du
+  HUB (le gestionnaire de session de l'utilisateur garde ses anciens groupes) : d'ici
+  là, la page affiche « redémarrez le HUB une fois ». La mise à jour depuis le menu
+  **rejoue** ces étapes root (elle relance `hub-installer.sh` en entier) : rien à faire
+  par SSH sur un HUB déjà installé. Rien de ceci n'allume la fonction.
 - **Logique de la voix.** Le service réutilise `hub_voix_logique.py` (envoi au socket
   du menu, détection de Kodi et du bureau). Il le cherche dans `$HUB_VOIX_DOSSIER`,
   `../voix` (le dépôt), `/usr/local/lib/hub/voix/`, puis `/opt/hub-voix/`.
@@ -149,6 +170,109 @@ la télécommande n'est ouverte ni à un invité, ni à une page web étrangère
   sur l'origine https seulement ; il voyage dans le fragment de l'URL (jamais envoyé
   au serveur par le navigateur) et la page l'efface de l'adresse avant tout.
 
+### Souris et clavier : ce que ça ouvre, et à qui
+
+**Ce qu'un téléphone autorisé peut faire, une fois la fonction allumée : tout ce que
+ferait quelqu'un assis devant le HUB avec un clavier et une souris.** Déplacer le
+pointeur, cliquer, faire défiler, taper du texte — donc, sur le bureau, ouvrir un
+terminal et y taper des commandes avec les droits de l'utilisateur du HUB ; devant un
+service web, agir dans le compte connecté. Il n'existe pas de version « inoffensive »
+d'une souris : la sécurité tient à **qui** l'obtient, pas à ce qu'on lui filtre.
+
+Elle n'est donc donnée qu'à **toutes** ces conditions, vérifiées à chaque ouverture puis
+**chaque seconde** tant que le périphérique existe (`Pointeur`, `hub_telecommande.py`) :
+
+1. **L'interrupteur est allumé sur la TV** — Réglages → Télécommande → « Souris et
+   clavier depuis le téléphone ». Éteint par défaut ; tout ce qui n'est pas exactement
+   `true` dans `reglages.json` vaut éteint ; l'éteindre coupe les sessions en cours dans
+   la seconde. Un profil restreint ne voit pas l'interrupteur.
+2. **La connexion est en https** (port 8791). En http, le jeton se lit sur le wifi :
+   tenable pour des flèches, pas pour un clavier.
+3. **Le jeton est « sûr »** : obtenu en tapant le code de la TV **sur la page https**.
+   Un jeton obtenu en http ne l'est pas, ni celui d'un transfert http → https (le
+   ticket de transfert est rendu en http à qui présente le jeton http : qui a lu l'un a
+   pu demander l'autre). La page le dit et propose « Retaper le code » ; le jeton http du
+   même téléphone reste valable pour la télécommande d'avant. `hub-telecommande
+   --lister` marque les téléphones qui tiennent un tel jeton.
+4. **Le contexte est un service web ou le bureau.** Dans le menu et dans Kodi, les
+   flèches gardent leur chemin (socket, JSON-RPC), et le clavier virtuel n'est même pas
+   créé.
+5. **La session est au premier plan et déverrouillée** (logind : `Active=yes`,
+   `LockedHint=no`, classe `user`, type graphique, locale). Un périphérique noyau parle à
+   ce qui est devant, quoi que ce soit : sans cette garde, une frappe irait dans le champ
+   du mot de passe de GDM (passage du HUB au bureau) ou de l'écran verrouillé. logind
+   muet ou illisible : c'est non.
+6. `/dev/uinput` est accessible (groupe `hub-uinput`, voir Installation).
+
+Et autour :
+
+- **Aucune route nouvelle sans appairage.** `POST /api/pointeur/session` exige le jeton ;
+  le WebSocket `/api/pointeur` exige un **ticket** à usage unique (30 s, 256 bits) délivré
+  par cette route, présenté comme sous-protocole (jamais dans l'adresse, donc ni dans un
+  journal ni dans un historique). Un ticket de souris n'appaire pas, un ticket de
+  transfert n'ouvre pas la souris. `Origin` doit être exactement celle du HUB (un
+  WebSocket échappe à CORS), en plus du `Host` et de `Sec-Fetch-Site` déjà vérifiés.
+- **La route des boutons n'est pas une porte de derrière** : `POST /api/commande` ne
+  transforme flèches, OK, Retour et texte en touches qu'aux mêmes six conditions, et
+  partage la même limite de débit.
+- **Le périphérique n'existe que pendant l'usage.** Créé à l'ouverture d'une session,
+  **détruit** à la fermeture de la dernière (page fermée ou cachée, téléphone en veille,
+  30 s sans battement, verrouillage, retour au menu, interrupteur éteint, téléphone
+  retiré). Entre-temps, rien ne peut injecter quoi que ce soit par ce service.
+- **Limites de débit**, par téléphone : 120 déplacements/s (réserve 240, le surplus est
+  jeté, jamais mis en file), 30 frappes-clics-caractères/s (réserve 400), déplacement
+  borné à 400 points par message, trames de 2 Kio au plus, 5 messages mal formés puis
+  fermeture, 4 sessions à la fois.
+- **Témoins.** Sur le téléphone : bandeau ambre « Souris et clavier actifs sur la TV »
+  et « Souris » écrit sur le pavé, tant que la session est ouverte. Sur le bureau : une
+  notification « Un téléphone pilote la souris et le clavier » (au plus une par minute ;
+  la session kiosque n'affiche pas de notifications — là, c'est le pointeur qui bouge).
+- **Journal** : ouverture et fermeture de chaque session (téléphone, raison, nombre de
+  messages). **Jamais ce qui est tapé** : ce peut être un mot de passe.
+- **Révocation** : « Retirer » sur la TV, `--revoquer`, « Oublier ce téléphone » — la
+  session ouverte tombe dans la seconde (elle ne repasse plus par la vérification du
+  jeton, le gardien s'en charge).
+- **Aucune exécution de commande, aucun raccourci.** La page ne peut demander que :
+  un déplacement, un défilement, un clic gauche ou droit, une touche **nommée** d'une
+  liste fermée (haut, bas, gauche, droite, OK=Entrée, Retour=Échap, effacer, tab,
+  lecture/pause, recul, avance) ou du **texte**. Le texte est tapé caractère par
+  caractère ; Maj et AltGr ne servent qu'à produire ces caractères. Le périphérique ne
+  **déclare** au noyau ni Ctrl, ni Alt, ni Super, ni F1–F12, ni Suppr, ni Impr écran :
+  le noyau jette tout événement d'une touche non déclarée, donc Ctrl+Alt+F3 ou SysRq ne
+  peuvent pas sortir d'ici, même par un défaut du programme. **Ce n'est pas une barrière
+  contre un téléphone malveillant** (la souris ouvre un terminal, le texte y tape ce
+  qu'il veut) : c'est une garde contre les accidents. La barrière, ce sont les points 1
+  à 3.
+
+**Ce qui reste vrai, et qu'il faut savoir avant d'allumer :**
+
+- Un téléphone appairé pilote déjà le menu : il peut donc **aller lui-même allumer
+  l'interrupteur** (Réglages → Télécommande). Ce qui l'arrête ensuite est le point 3 :
+  il lui faut le code affiché sur la TV, tapé en https — être dans la pièce, certificat
+  installé. Un jeton http volé sur le wifi ne va pas plus loin que la télécommande
+  d'avant. Un invité ou un enfant **dans la pièce**, téléphone appairé, peut en revanche
+  tout faire : l'interrupteur n'est pas un contrôle parental (le profil restreint, lui,
+  ne le voit pas). Pistes non faites : un droit accordé téléphone par téléphone sur la TV.
+- `reglages.json`, `/dev/uinput` (groupe `hub-uinput`) et la clé du certificat sont à la
+  portée de **tout programme de la session** (Kodi et ses extensions, Chrome) : ils
+  tournent déjà avec les droits de l'utilisateur, la souris ne leur donne rien de plus.
+- Le délai de garde est d'**une seconde** : un verrouillage d'écran coupe la souris au
+  plus une seconde après (un texte en cours s'arrête au caractère suivant).
+
+**Écarté, et pourquoi.** `xdotool`/XTEST : n'atteignent pas Wayland. Le portail
+RemoteDesktop (libei) : consentement à l'écran à chaque session, impossible sans clavier.
+Le groupe `input` : il donne la lecture de tous les claviers (enregistreur de frappe).
+`TAG+="uaccess"` : droits immédiats, mais aussi pour l'écran de connexion quand il est
+devant. Un service root intermédiaire : tout programme de la session pourrait lui parler
+comme le fait la télécommande, pour une couche de plus à réparer. Le presse-papiers
+(coller le texte) : `wl-clipboard` n'est pas installé, et il faudrait envoyer Ctrl+V.
+Des raccourcis « utiles » (Alt+Tab, Super, Alt+F4) : aucun n'est indispensable avec une
+souris, chacun est une combinaison de plus à justifier — la liste est vide. Le glisser-
+déposer (bouton tenu) : pas fait, un bouton resté enfoncé après une coupure de wifi est
+un défaut pire que son absence. Durcir l'unité systemd (`PrivateDevices`, filtres
+d'appels) : rien qu'on n'ait pu éprouver sur la TV n'entre dans l'unité du seul moyen de
+piloter le HUB.
+
 ### Autorité locale (HTTPS)
 
 Créée au premier démarrage dans `~/.config/hub/telecommande-tls/` (dossier 0700) :
@@ -257,8 +381,10 @@ mode. Trois choses l'en empêchent :
   jeton pour si peu était justement ce qui faisait retaper un code et compter un
   téléphone de plus.
 
-Ce qui reste vrai : pendant les modes **Jeux** et **Web**, rien ne se pilote (ni menu ni
-Kodi) — la page l'affiche (« En veille », « Rien à piloter ») mais reste reliée.
+Pendant un service **Web**, « Accueil » ferme le service (`hub-web --fermer`, comme la
+voix et la télécommande CEC) et le volume marche ; le reste passe par la souris et le
+clavier s'ils sont allumés. Pendant le mode **Jeux** sans client lancé, rien ne se
+pilote : la page l'affiche (« En veille », « Rien à piloter ») mais reste reliée.
 
 ## Où vont les commandes
 
@@ -266,7 +392,8 @@ Kodi) — la page l'affiche (« En veille », « Rien à piloter ») mais reste 
 |---|---|
 | socket du menu présent et joignable | datagramme au menu (`accueil` y devient `retour`) ; `texte` refusé (le menu n'a pas ce message) |
 | menu fermé, Kodi lancé | JSON-RPC : `Input.Left/Right/Up/Down/Select/Back`, `Input.SendText` (avec `done: true`), `accueil` = `Application.Quit` puis SIGTERM en dernier recours |
-| menu fermé, bureau GNOME | `accueil` = `gnome-session-quit --logout --no-prompt` ; le reste est sans effet |
+| menu fermé, service web (`hub-web` vivant, lu dans `web.pid`) | `accueil` = `hub-web --fermer` ; flèches, OK, Retour, texte = **touches** (voir « Souris et clavier ») si les six conditions sont réunies, sinon sans effet et la réponse dit laquelle manque (`pointeur-…`) |
+| menu fermé, bureau GNOME | `accueil` = `gnome-session-quit --logout --no-prompt` ; flèches, OK, Retour, texte = **touches**, aux mêmes conditions ; le reste est sans effet |
 | n'importe où | `volume:+` / `volume:-` = `wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%±` (plafonné à 100 %) |
 
 Kodi est joint en **TCP 9090** (actif si « Autoriser le contrôle à distance par des
@@ -282,7 +409,9 @@ que `hub-voix`). `Input.SendText` n'a d'effet que si un clavier est ouvert dans 
 | `GET /` | non | la page |
 | `POST /api/appairer` `{"code":"123456","nom":"Pixel 8","appareil":"…32 hex…"}` | facultatif | 200 `{"jeton","id","nom","appareil"}` · 403 `{"erreur":"code"}` code faux · 403 `{"erreur":"appairage-ferme"}` écran d'appairage fermé · 429 `{"attente"}` trop d'essais. `appareil` est facultatif, et ignoré s'il est mal formé ; le jeton présenté en `Authorization`, s'il est encore valide, prime sur lui (voir « Un téléphone, une entrée ») |
 | `POST /api/commande` `{"nom":"gauche"}` ou `{"nom":"texte","texte":"Dune"}` | oui | 200 `{"ok","cible","raison"?,"volume"?}` · 400 hors liste · 401 |
-| `GET /api/etat` | oui | `{"ok":true,"contexte":"menu"\|"kodi"\|"bureau"\|null}` |
+| `GET /api/etat` | oui | `{"ok":true,"contexte":"menu"\|"web"\|"kodi"\|"bureau"\|null,"pointeur":{"permis":bool,"raison":null\|"desactive"\|"connexion-non-securisee"\|"jeton-non-sur"\|"contexte"\|"uinput-absent"\|"uinput-refuse"\|"session-verrouillee"\|"session-en-arriere-plan"\|"session-inconnue"\|"module-absent"}}` |
+| `POST /api/pointeur/session` `{}` (https) | oui, **sûr** | 200 `{"ticket"}` (usage unique, 30 s) · 401 · 403 `{"erreur":"pointeur","raison":…}` |
+| `GET /api/pointeur` (WebSocket, https, `Sec-WebSocket-Protocol: hub-pointeur, ticket.<ticket>`) | ticket | 101 puis messages JSON · 401 ticket absent, faux, usé, expiré · 400 poignée de main · 403 http, origine étrangère ou condition manquante |
 | `POST /api/oublier` `{}` | oui | révoque le jeton présenté |
 | `POST /photo-profil` (corps JPEG brut, `Content-Type: image/jpeg`) | oui | 200 `{"ok":true,"fichier":"telephone-AAAAMMJJ-HHMMSS.jpg"}` · 400 pas un JPEG · 413 > 2 Mio · 415 · 507 `{"erreur":"quota"\|"espace"}` |
 | `GET /manifest.webmanifest`, `/icone-32.png`, `/icone-192.png`, `/icone-512.png`, `/apple-touch-icon.png` | non | manifeste, icônes |
@@ -413,11 +542,76 @@ Par défaut ; « Boutons » (bascule au-dessus, ou ⋯) rend la croix directionn
 | appui long (480 ms, immobile) | Retour |
 | deux doigts | Accueil |
 
+C'est le mode **Navigation** (menu et Kodi), inchangé ; devant un service web ou sur le
+bureau, voir « Souris et clavier ».
+
 Pointer events, `touch-action: none` sur le pavé (ni défilement, ni zoom, ni délai de
 300 ms), `pointercancel` n'envoie rien. **Main** (⋯ → Main : droitier/gaucher) : le
 volume et « Retour » passent du côté du pouce. **Haptique** : `navigator.vibrate` sur
 Android ; sur iPhone, qui n'a pas cette API, le « tic » que Safari (iOS 18+) donne
 quand un `<input type="checkbox" switch>` change d'état, déclenché par son label.
+
+## Souris et clavier
+
+La page lit `contexte` et `pointeur` dans `/api/etat` (toutes les 6 s, et tout de suite
+après une commande qui change de contexte) et **bascule seule** : « Navigation » est
+écrit sur le pavé dans le menu et dans Kodi, « Souris » devant un service web ou sur le
+bureau. Si la souris manque là où elle servirait, une ligne dit pourquoi et quoi faire.
+Le mode d'un geste est décidé au poser du doigt.
+
+| Geste (mode Souris) | Effet |
+|---|---|
+| glisser | déplacement relatif du pointeur, accéléré en douceur : ×1,2 lentement, jusqu'à ×4 pour un geste vif (`gain = 1,2 + 1,6 × points/ms`) |
+| toucher | clic gauche (deux touchers = double clic) |
+| appui long (480 ms, immobile) | clic droit |
+| deux doigts | défilement vertical et horizontal, sens des doigts, en haute résolution (`REL_WHEEL_HI_RES`, un cran tous les 30 points) |
+| OK · Retour · flèches (boutons) | Entrée · Échap · flèches |
+| ⌫ « ⏯ » | effacer, recul, lecture/pause, avance (touches multimédia) |
+| champ texte | tapé caractère par caractère sur la TV, avec compte rendu |
+
+**Retour = Échap**, et pas Alt+Gauche : c'est la touche que `hub-web` donne déjà au
+bouton B de la manette, celle que YouTube TV, Netflix et les lecteurs prennent pour
+« revenir » ou quitter le plein écran, celle qui ferme un menu du bureau — et ce n'est pas
+une combinaison. Échap **maintenue** deux secondes ramène au HUB dans `hub-web` : la
+télécommande envoie appui et relâcher d'un coup, donc jamais par accident. **Accueil**
+garde son sens partout (fermer le service web, quitter Kodi, fermer le bureau).
+
+**Transport.** Un WebSocket sur le port https, écrit avec la bibliothèque standard
+(`hub_pointeur.py`), et un envoi **par image** (`requestAnimationFrame`) : la page
+additionne les `pointermove` et envoie la somme ; si le wifi cale (`bufferedAmount`), la
+somme attend l'image suivante au lieu de s'empiler. Pourquoi pas une requête par
+déplacement : le service répond en HTTP/1.0 et ferme, donc **une poignée de main TLS par
+événement**. Mesuré le 21 septembre 2026 sur la machine de développement (boucle locale,
+Python 3.12.14, OpenSSL 3.6.4, `python3 installer/telecommande/mesure_transport.py`,
+deux passes) : POST https médiane 2,6–3,1 ms (p95 4–6 ms), au plus ~300–350 événements/s ;
+WebSocket à 60 messages/s, de l'envoi à l'écriture dans le périphérique : médiane
+0,24 ms, p95 1,0–1,3 ms ; aller-retour d'un battement 0,06–0,09 ms ; sans retenue,
+35 000–52 000 événements/s. **Ce sont des planchers du protocole, pas la latence du
+salon** : ni wifi, ni téléphone, ni compositeur. Sur un vrai wifi, l'écart se creuse
+(une poignée de main TLS coûte un à deux allers-retours réseau de plus par événement,
+le WebSocket aucun) ; ce chiffre-là reste à relever sur place.
+
+### Clavier : ce qui est couvert
+
+uinput envoie des **touches**, pas des caractères : `KEY_A` écrit « q » sur un HUB en
+AZERTY. La disposition **de la session** est lue à chaque création du périphérique
+(`gsettings org.gnome.desktop.input-sources` : première de `mru-sources` présente dans
+`sources`, sinon première de `sources` ; liste vide → `/etc/default/keyboard`), et le
+texte passe par sa table. Les tables sont recopiées de xkeyboard-config et **vérifiées
+contre ses fichiers** par `test_pointeur.py` (781 positions de touches relues, sept tables ; sur le HUB :
+`python3 -m unittest installer/telecommande/test_pointeur.py`, qui lit
+`/usr/share/X11/xkb/symbols`).
+
+| | Couvert | Pas couvert |
+|---|---|---|
+| **fr** (de base), **fr+oss** (« Français (variante) »), **fr+latin9**, et leurs variantes `nodeadkeys` | minuscules, majuscules, chiffres (Maj), tout l'ASCII imprimable (`@ # { [ \ ] } ~ ^` et la barre verticale par AltGr), `é è ç à ù € £ § ° µ « »`, `â ê î ô û ä ë ï ö ü ÿ` et leurs majuscules par **touche morte** (^ puis lettre), `É È Ç À Ù` en oss et latin9, `œ Œ` en oss et latin9, `æ Æ` en fr et oss | `É È Ç À Ù` en fr de base → tapés `E E C A U` **et signalés** ; l'accent grave seul en latin9 ; en `nodeadkeys`, les lettres à circonflexe ou tréma → sans accent, signalé |
+| **us** | tout l'ASCII imprimable | toute lettre accentuée → sans accent, signalé |
+| toute autre disposition (bépo, AFNOR, be, ch, de…) ou une source `ibus` | flèches, OK, Retour, souris | **le texte est refusé** (« Clavier de la TV non reconnu ») : rien n'est deviné |
+
+La typographie du téléphone est ramenée au clavier (`’` → `'`, `“ ”` → `"`, `– —` → `-`,
+`…` → `...`, espaces insécables → espace). Émojis et autres écritures : laissés de côté,
+et la page dit lesquels. **Jamais un caractère faux tapé en silence.** À vérifier sur la
+TV : que Chrome et GTK composent bien la touche morte venue d'un clavier virtuel.
 
 ## Dictée depuis le téléphone
 
@@ -533,6 +727,63 @@ Homebrew en ligne de commande) — correctifs de l'audit de sécurité du même 
   refusée pour `autre.local` et `127.0.0.2`.
 - `test_navigateur.mjs` mis à jour (l'empreinte absente de la page) mais **pas relancé**
   (ni Chrome ni playwright sur cette machine).
+
+Le 21 septembre 2026 (Mac de développement, Python 3.12.14 lié à OpenSSL 3.6.4, Chromium
+de Playwright, Node 26) — souris et clavier hors du menu et de Kodi :
+
+- `python3 -m unittest installer/telecommande/test_pointeur.py` : 55 tests. Le
+  périphérique reçoit de fausses fonctions `open`/`ioctl`/`write` : ordre des ioctl
+  (bits, puis `UI_DEV_SETUP`, puis `UI_DEV_CREATE`), numéros d'ioctl **recalculés** depuis
+  `_IOW`, structures `input_event` relues **octet par octet**, un `EV_SYN` et un seul à la
+  fin de chaque lot, aucune touche tenue après un texte, défilement fin et crans entiers,
+  pannes nommées (`ENOENT` → module absent, `EACCES` → droits), aucune touche hors de la
+  liste. Tables de clavier : AZERTY (`a` = `KEY_Q`), chiffres, AltGr, touches mortes,
+  majuscules accentuées selon la variante, typographie du téléphone, et **les sept tables
+  relues contre les fichiers de xkeyboard-config** (781 positions ; fichiers pris sur
+  gitlab.freedesktop.org le jour même, `HUB_XKB_SYMBOLES=dossier` ; contre-épreuve : une
+  table faussée fait échouer le test). logind : verrouillé, écran de connexion, console,
+  session distante, réponse illisible → non. Trames WebSocket : exemple de la RFC 6455,
+  trame non masquée, fragmentée ou trop grosse refusée.
+- `python3 -m unittest installer/telecommande/test_pointeur_service.py` : 47 tests, par
+  de vraies requêtes http et https et un vrai client WebSocket écrit dans le banc.
+  **Route par route** (`/api/commande`, `/api/pointeur/session`, `/api/pointeur`) : sans
+  jeton, avec un faux, en http avec un jeton sûr, avec un jeton obtenu en http ou par
+  transfert, interrupteur absent, éteint ou abîmé, menu ouvert, écran verrouillé, écran
+  de connexion, uinput absent ou refusé, module absent — chaque fois **rien n'est écrit**
+  et le périphérique n'est pas créé. Ticket à usage unique, expiré, présenté au mauvais
+  guichet, origine étrangère, poignée de main incomplète, téléphone révoqué entre-temps.
+  En session : verrouillage, écran de connexion, interrupteur éteint, retour au menu,
+  téléphone retiré, silence → la session tombe et le périphérique est **détruit**.
+  Débit borné (mouvements, frappes, et la route HTTP partage le seau), déplacement borné,
+  messages hors liste (« ctrl+alt+t », code de touche brut, « exec »…) sans effet, journal
+  sans le texte tapé.
+- `tests/test_telecommande_souris.py` : 20 tests, **dans `tests/`** — donc rejoués par le
+  HUB avant toute mise à jour : les six conditions, les jetons sûrs, les touches
+  interdites, la règle udev (groupe dédié, jamais `input`), l'étape de l'installateur en
+  simulation sous `set -u`, l'interrupteur éteint par défaut dans le menu.
+- `node --test installer/telecommande/test_navigateur.mjs` : 3 tests de plus, en **https
+  réel** (certificat accepté par `ignoreHTTPSErrors`, WebSocket compris) : la page
+  affiche « Navigation » dans le menu (flèches au socket, périphérique jamais créé), passe
+  seule à « Souris » quand le bureau s'ouvre (témoin visible), vrais touchers → `REL_X`,
+  clic gauche, clic droit à l'appui long, défilement à deux doigts, « aé » → `KEY_Q` puis
+  `KEY_2`, Retour → Échap, puis revient seule à « Navigation » ; geste vif > geste lent,
+  borné à ×4 ; souris indisponible → la raison et le remède à l'écran (interrupteur,
+  écran verrouillé, http) ; aucune violation CSP. Les 4 tests HTTPS et dictée échouent
+  **sur ce Mac seulement**, avant comme après (ni Chrome ni `certutil`).
+- `cd tests/menu && HUB_NAVIGATEUR=chromium npm test` : 4 tests de plus
+  (`telecommande-souris.test.js`) — interrupteur éteint par défaut, phrase affichée,
+  booléen strict enregistré, anglais, invisible pour un profil restreint.
+- **Rien de tout cela n'a touché un vrai `/dev/uinput`, un vrai logind, un vrai
+  compositeur ni un vrai téléphone.** À vérifier sur le HUB, dans cet ordre : que
+  `/dev/uinput` appartient bien à `root:hub-uinput` en 0660 après un redémarrage
+  (`stat -c '%U:%G %a' /dev/uinput`) ; que Mutter (session kiosque et bureau) adopte le
+  périphérique — il déclare des touches sans Ctrl, donc udev le marque `ID_INPUT_KEY` et
+  non `ID_INPUT_KEYBOARD`, ce que libinput accepte d'après son code mais que rien ici n'a
+  éprouvé ; que `LockedHint` passe bien à `yes` au verrouillage
+  (`loginctl show-session $(loginctl show-user $USER -p Display --value) -p LockedHint`) ;
+  que `gsettings` rend la bonne disposition depuis le service (sinon : « Clavier de la TV
+  non reconnu ») ; que Chrome compose la touche morte (« ê ») ; la sensation de la souris
+  (gain, défilement) ; la latence sur le vrai wifi.
 
 **Pas prouvé :** un vrai téléphone sur le vrai réseau du HUB — ni l'installation de
 la racine sur Android ou iPhone (écrans de réglages décrits d'après la documentation),

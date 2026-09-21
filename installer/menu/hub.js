@@ -93,6 +93,10 @@ const DEFAUTS = {
     // hub-menu cherche seul les mises à jour (au démarrage, puis toutes les 45 min) ; il n'en
     // installe jamais aucune sans qu'on appuie sur Installer.
     miseAJourAuto: true,
+    // Souris et clavier depuis le téléphone (installer/telecommande, classe Pointeur) :
+    // éteint tant que personne ne l'a allumé ici, devant la TV. hub-telecommande relit
+    // ce réglage à chaque seconde d'usage ; tout ce qui n'est pas `true` vaut éteint.
+    telecommandeSouris: false,
   },
 };
 
@@ -2698,6 +2702,12 @@ function rendreSection(garderFocus = true) {
 
     case "telecommande":
       zone.append(contenuTelecommande());
+      // Un profil restreint ne s'offre pas un clavier sur le bureau qu'on lui a fermé.
+      if (!estRestreint()) {
+        zone.append(rangee(t("telecommande.souris"), t("telecommande.souris.detail"),
+          options("telecommande-souris", [[true, t("oui")], [false, t("non")]], s.telecommandeSouris === true,
+            v => { s.telecommandeSouris = v === true || v === "true"; }), false, true));
+      }
       break;
 
     case "raccourcis":

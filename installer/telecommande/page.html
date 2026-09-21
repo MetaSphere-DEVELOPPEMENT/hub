@@ -191,7 +191,7 @@ header .marque { margin-right: auto; }
   background: var(--texte-pale);
 }
 .pastille.menu::before, .pastille.kodi::before { background: rgb(var(--tv)); box-shadow: 0 0 10px rgb(var(--tv)); }
-.pastille.bureau::before { background: rgb(var(--bureau)); box-shadow: 0 0 10px rgb(var(--bureau)); }
+.pastille.bureau::before, .pastille.web::before { background: rgb(var(--bureau)); box-shadow: 0 0 10px rgb(var(--bureau)); }
 .pastille.hors-ligne { color: color-mix(in srgb, rgb(var(--arret)) var(--part-accent), var(--ton-accent)); }
 .pastille.hors-ligne::before { background: rgb(var(--arret)); }
 /* Le HUB n'a pas répondu, mais la page réessaie toute seule : ambre et non rouge,
@@ -287,6 +287,36 @@ header .marque { margin-right: auto; }
   transition: opacity .4s;
 }
 .pave-tactile.utilise .aide { opacity: 0; }
+/* Ce que fait le pavé en ce moment, écrit dessus : « Navigation » (des flèches) ou
+   « Souris » (un pointeur sur la TV). Il change tout seul avec ce qui est à l'écran. */
+.mode-pave {
+  position: absolute; inset: 12px auto auto 50%; transform: translateX(-50%);
+  padding: 4px 12px; border-radius: 999px; pointer-events: none;
+  font-size: 13px; font-weight: 700; letter-spacing: .04em; color: var(--texte-doux);
+  background: rgb(var(--accent) / .14);
+}
+.mode-souris .mode-pave { color: var(--texte); background: rgb(var(--bureau) / .3); }
+.aide.souris, .mode-souris .aide.navigation { display: none; }
+.mode-souris .aide.souris { display: block; }
+/* Le témoin : tant qu'il est là, ce téléphone est un clavier et une souris branchés
+   sur la TV. Ambre et battant : ce n'est pas un état neutre. */
+.temoin {
+  display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-radius: 14px;
+  font-size: 14px; font-weight: 600; color: var(--texte);
+  background: rgb(var(--bureau) / .18); box-shadow: inset 0 0 0 1px rgb(var(--bureau) / .55);
+}
+.temoin::before {
+  content: ""; flex: none; width: 10px; height: 10px; border-radius: 50%;
+  background: rgb(var(--bureau)); box-shadow: 0 0 10px rgb(var(--bureau));
+  animation: battement 1.4s var(--souple) infinite;
+}
+.pourquoi { margin: 0; font-size: 14px; line-height: 1.45; color: var(--texte-doux); }
+.pourquoi button {
+  margin-left: 6px; padding: 4px 10px; border-radius: 999px; border: 0;
+  background: rgb(var(--accent) / .22); color: var(--texte); font: inherit; font-weight: 600;
+}
+.temoin[hidden], .pourquoi[hidden], #rangee-souris[hidden] { display: none; }
+#rangee-souris { grid-template-columns: repeat(4, 1fr); }
 .pave-tactile .reperes {
   position: absolute; inset: 0; pointer-events: none;
   background: radial-gradient(circle at 50% 50%, var(--lisere) 0 2px, transparent 3px) 0 0 / 28px 28px;
@@ -487,6 +517,7 @@ details.plateforme ol { margin: 8px 0 0; padding-left: 20px; }
       placeholder="······" aria-label="Code à 6 chiffres" enterkeyhint="go">
   </form>
   <button class="principal" id="relier" type="submit" form="form-code" disabled>Relier</button>
+  <button class="touche" id="annuler-code" data-action="annuler-code" hidden>Annuler</button>
   <p class="erreur" id="erreur-code" role="alert"></p>
 </main>
 
@@ -542,13 +573,18 @@ details.plateforme ol { margin: 8px 0 0; padding-left: 20px; }
     <button data-action="disposition" data-valeur="boutons" aria-pressed="false">Boutons</button>
   </div>
 
+  <div class="temoin" id="temoin" role="status" hidden>Souris et clavier actifs sur la TV</div>
+  <p class="pourquoi" id="pourquoi" role="status" hidden><span id="pourquoi-texte"></span><button id="pourquoi-code" data-action="retaper-code" hidden>Retaper le code</button></p>
+
   <div class="zone-tactile" id="zone-tactile">
     <div class="pave-tactile" id="pave-tactile" role="application"
       aria-label="Pavé tactile : glisser pour se déplacer, toucher pour valider, appui long pour revenir, deux doigts pour l'accueil">
+      <div class="mode-pave" id="mode-pave" aria-live="polite">Navigation</div>
       <div class="reperes"></div>
       <div class="impact" id="impact"></div>
       <svg class="fleche" id="fleche" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 14l6-6 6 6"/></svg>
-      <div class="aide">Glisser : se déplacer · maintenir : répéter<br>Toucher : OK · appui long : Retour<br>Deux doigts : Accueil</div>
+      <div class="aide navigation">Glisser : se déplacer · maintenir : répéter<br>Toucher : OK · appui long : Retour<br>Deux doigts : Accueil</div>
+      <div class="aide souris">Glisser : déplacer le pointeur<br>Toucher : clic · appui long : clic droit<br>Deux doigts : faire défiler</div>
     </div>
     <div class="colonne-volume" role="group" aria-label="Volume">
       <button class="touche" data-cmd="volume:+" data-repete aria-label="Monter le volume">+</button>
@@ -584,6 +620,13 @@ details.plateforme ol { margin: 8px 0 0; padding-left: 20px; }
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V20h14V9.5"/></svg>
       Accueil
     </button>
+  </div>
+
+  <div class="rangee" id="rangee-souris" hidden>
+    <button class="touche" data-touche="effacer" data-repete aria-label="Effacer le dernier caractère">⌫</button>
+    <button class="touche" data-touche="recul" aria-label="Reculer">«</button>
+    <button class="touche" data-touche="lecture" aria-label="Lecture ou pause">⏯</button>
+    <button class="touche" data-touche="avance" aria-label="Avancer">»</button>
   </div>
 
   <button class="touche micro" id="micro" aria-label="Maintenir pour dicter une commande">
@@ -816,6 +859,29 @@ const RAISONS = {
   "kodi-injoignable": "Kodi ne répond pas (contrôle à distance désactivé ?)",
   "eteindre-depuis-le-menu": "Revenez au menu du HUB pour éteindre",
   "volume-indisponible": "Volume indisponible",
+  "sans-effet-dans-le-web": "Ici, seuls Accueil et le volume agissent",
+};
+// Pourquoi la souris et le clavier manquent là où ils serviraient (service web, bureau).
+// Chaque raison a son remède : une panne muette ferait croire à une télécommande cassée.
+const RAISONS_POINTEUR = {
+  "desactive": "Souris et clavier éteints : allumez-les sur la TV, Réglages → Télécommande.",
+  "connexion-non-securisee": "Souris et clavier : seulement par la connexion sécurisée (⋯ → Dictée et connexion sécurisée).",
+  "jeton-non-sur": "Souris et clavier : retapez une fois le code de la TV sur cette page sécurisée.",
+  "uinput-absent": "Souris indisponible : le HUB n'a pas encore ce qu'il faut (relancez sa mise à jour).",
+  "uinput-refuse": "Souris indisponible : redémarrez le HUB une fois, ses nouveaux droits ne valent qu'après.",
+  "uinput-erreur": "Souris indisponible : le HUB n'a pas pu créer le clavier virtuel.",
+  "module-absent": "Souris indisponible : installation du HUB incomplète.",
+  "session-verrouillee": "L'écran de la TV est verrouillé : la souris attend.",
+  "session-en-arriere-plan": "La TV affiche l'écran de connexion : la souris attend.",
+  "session-inconnue": "Souris indisponible : le HUB ne retrouve pas sa session.",
+  "trop-de-sessions": "Trop de téléphones pilotent déjà la souris.",
+  "remplacee": "La souris a été reprise depuis une autre page de ce téléphone.",
+  "revoque": "Ce téléphone a été retiré sur la TV.",
+  "muet": "Souris mise en veille (page inactive).",
+  "debit": "Trop vite : le HUB a ignoré des appuis.",
+  "disposition-non-couverte": "Clavier de la TV non reconnu : le texte n'est pas tapé (les flèches et la souris marchent).",
+  "texte-invalide": "Texte vide ou trop long",
+  "interrompu": "Frappe interrompue (écran verrouillé ?)",
 };
 
 class JetonRefuse extends Error {}
@@ -903,6 +969,7 @@ async function relier() {
     if (statut === 200 && donnees?.jeton) {
       garderJeton(donnees.jeton);
       garderAppareil(donnees.appareil);
+      $("annuler-code").hidden = true;
       vibrer([15, 60, 25]);
       $("code").blur();
       afficher("telecommande");
@@ -936,6 +1003,9 @@ async function relier() {
 let file = Promise.resolve();
 let enAttente = 0;
 function envoyer(nom, extra = {}) {
+  // Souris ouverte : flèches, OK et Retour partent par le même canal qu'elle (une
+  // requête https par appui coûte une poignée de main TLS, le WebSocket rien).
+  if (sourisPrete() && TOUCHES_SOURIS.has(nom)) { envoyerSouris({ t: "k", n: nom }); return Promise.resolve({ ok: true }); }
   if (enAttente >= 4) return Promise.resolve(null);
   enAttente++;
   const tache = file.then(async () => {
@@ -944,7 +1014,13 @@ function envoyer(nom, extra = {}) {
       marquerEnLigne(true);
       if (statut !== 200 || !donnees) { message("Commande refusée"); return null; }
       if (typeof donnees.volume === "number") afficherVolume(donnees.volume, donnees.muet);
-      if (!donnees.ok && donnees.raison) message(RAISONS[donnees.raison] || "Sans effet");
+      if (!donnees.ok && donnees.raison) {
+        message(RAISONS[donnees.raison] || RAISONS_POINTEUR[donnees.raison.replace(/^pointeur-/, "")] || "Sans effet");
+      }
+      if (donnees.ok && nom === "texte") direTexte(donnees);
+      // La commande a touché autre chose que ce qu'on croyait à l'écran (un mode vient
+      // de s'ouvrir ou de se fermer) : on n'attend pas le prochain sondage pour basculer.
+      if (donnees.cible && donnees.cible !== contexteCourant) setTimeout(lireEtat, 400);
       if (donnees.ok && nom === "eteindre") message("Confirmez sur la TV");
       return donnees;
     } catch (e) {
@@ -983,16 +1059,18 @@ function appuyer(bouton) {
 }
 
 document.addEventListener("pointerdown", e => {
-  const bouton = e.target.closest("[data-cmd]");
+  const bouton = e.target.closest("[data-cmd], [data-touche]");
   if (!bouton || bouton.disabled || !e.isPrimary) return;
   arreter();
   boutonTenu = bouton;
   bouton.classList.add("appui");
-  appuyer(bouton);
+  // data-touche : les touches qui n'existent qu'en mode souris (effacer, lecture…).
+  const agir = bouton.dataset.cmd ? () => envoyer(bouton.dataset.cmd) : () => envoyerSouris({ t: "k", n: bouton.dataset.touche });
+  if (bouton.dataset.cmd) appuyer(bouton); else { vibrer(); agir(); }
   if (bouton.hasAttribute("data-repete")) {
     // Maintenu : on défile une liste sans marteler l'écran.
     repetition = setTimeout(() => {
-      repetition = setInterval(() => { vibrer(6); envoyer(bouton.dataset.cmd); }, 130);
+      repetition = setInterval(() => { vibrer(6); agir(); }, 130);
     }, 420);
   }
 });
@@ -1015,9 +1093,25 @@ $("form-texte").addEventListener("submit", async e => {
   const texte = champ.value.trim();
   if (!texte) return;
   vibrer();
+  if (sourisPrete()) {
+    // Le compte rendu (« r ») dira ce qui a été tapé, approché ou laissé de côté.
+    envoyerSouris({ t: "x", s: texte });
+    champ.value = "";
+    return;
+  }
   const r = await envoyer("texte", { texte });
-  if (r?.ok) { champ.value = ""; champ.blur(); message("Texte envoyé"); }
+  if (r?.ok) { champ.value = ""; champ.blur(); if (!("ignores" in r)) message("Texte envoyé"); }
 });
+
+// Le clavier de la TV n'a pas forcément tous les caractères du téléphone : ce qui a été
+// approché (É → E) ou laissé de côté (émojis) est dit, jamais tapé de travers en silence.
+function direTexte(r) {
+  if (!r.ok) return message(RAISONS_POINTEUR[r.raison] || "Texte refusé");
+  const notes = [];
+  if (r.ignores?.length) notes.push(`non tapés : ${[...new Set(r.ignores)].join(" ")}`);
+  if (r.approximations?.length) notes.push(`approchés : ${[...new Set(r.approximations)].join(" ")}`);
+  message(notes.length ? `Texte tapé — ${notes.join(" ; ")}` : "Texte tapé", notes.length ? 5000 : 2600);
+}
 
 // ── État et reconnexion ────────────────────────────────────────────────────
 // POURQUOI UNE RECONNEXION. Entrer dans un mode peut couper la télécommande quelques
@@ -1026,7 +1120,7 @@ $("form-texte").addEventListener("submit", async e => {
 // l'appairage — le jeton reste valable. La page doit donc revenir toute seule au lieu
 // de rester sur « HUB injoignable », qui donnait l'impression d'être délié et faisait
 // retaper un code (et compter un téléphone de plus).
-const LIBELLES = { menu: "Menu", kodi: "Kodi", bureau: "Bureau" };
+const LIBELLES = { menu: "Menu", kodi: "Kodi", bureau: "Bureau", web: "Web" };
 // Relances espacées : tout de suite, puis 1, 2, 4, 8 s… jusqu'à 15 s. Assez vif pour
 // que le retour d'un mode soit invisible, assez calme pour ne pas vider la batterie
 // si le HUB est éteint pour la nuit.
@@ -1067,6 +1161,7 @@ async function lireEtat(malgreCache = false) {
     const p = $("contexte");
     p.className = `pastille ${donnees.contexte || ""}`;
     p.textContent = LIBELLES[donnees.contexte] || "En veille";
+    appliquerMode(donnees);
   } catch (e) {
     if (!(e instanceof JetonRefuse)) marquerEnLigne(false);
   }
@@ -1083,6 +1178,204 @@ function reprendre() {
 document.addEventListener("visibilitychange", reprendre);
 addEventListener("online", reprendre);
 addEventListener("pageshow", reprendre);
+
+// ── Souris et clavier ──────────────────────────────────────────────────────
+// Dans le menu et dans Kodi, le pavé envoie des flèches (« Navigation »). Devant un
+// service web ou sur le bureau, rien n'écoute ces flèches : le pavé devient une vraie
+// souris (« Souris »). La page ne choisit pas : elle suit ce que dit /api/etat, et
+// l'écrit sur le pavé.
+//
+// POURQUOI UN WEBSOCKET. Le HUB ferme la connexion après chaque réponse (http.server,
+// HTTP/1.0) : en https, chaque requête refait une poignée de main TLS. Tenable pour un
+// appui, pas pour soixante déplacements par seconde. Un WebSocket, c'est une seule
+// connexion TLS gardée ouverte, et quelques octets par message.
+//
+// POURQUOI UN ENVOI PAR IMAGE. pointermove arrive jusqu'à 120 fois par seconde et par
+// paquets irréguliers : on additionne, et on envoie la somme une fois par image
+// (requestAnimationFrame). La TV n'affiche pas plus vite, et si le wifi cale
+// (bufferedAmount), les déplacements s'additionnent au lieu de s'empiler en retard.
+const TOUCHES_SOURIS = new Set(["haut", "bas", "gauche", "droite", "ok", "retour"]);
+const SOURIS = {
+  // Accélération douce : un geste lent vise (1,2 point de TV par point de doigt), un
+  // geste vif traverse l'écran. Bornée, pour que le pointeur ne parte jamais hors de vue.
+  gainLent: 1.2, pente: 1.6, gainMax: 4,
+  // Défilement : 120 unités = un cran de molette ; 4 par point, soit un cran tous les
+  // 30 points de doigt, fractions comprises (le HUB défile en haute résolution).
+  defilement: 4,
+  battement: 10000,
+};
+let contexteCourant = null;
+let souris = null;          // le WebSocket
+let sourisOuverte = false;  // « pret » reçu : le clavier virtuel existe sur le HUB
+let ouvertureSouris = false;
+// Une autre page de ce téléphone a repris la souris : on ne la lui reprend pas toute
+// seule six secondes plus tard (deux onglets se la voleraient sans fin). Toucher le
+// pavé la redemande.
+let sourisSuspendue = false;
+let battementSouris = null;
+let cumul = { x: 0, y: 0, dx: 0, dy: 0 };
+let imageDemandee = false;
+
+const sourisPrete = () => sourisOuverte && souris?.readyState === WebSocket.OPEN;
+
+function envoyerSouris(m) {
+  if (!sourisPrete()) return false;
+  souris.send(JSON.stringify(m));
+  return true;
+}
+
+function appliquerMode(etat) {
+  contexteCourant = etat.contexte || null;
+  const hors = contexteCourant === "web" || contexteCourant === "bureau";
+  const permis = hors && etat.pointeur?.permis === true;
+  if (permis && !souris && !sourisSuspendue) ouvrirSouris();
+  if (!permis && souris) fermerSouris();
+  const raison = hors && !permis ? etat.pointeur?.raison : null;
+  $("pourquoi").hidden = !raison;
+  $("pourquoi-texte").textContent = raison ? (RAISONS_POINTEUR[raison] || "Souris indisponible.") : "";
+  $("pourquoi-code").hidden = raison !== "jeton-non-sur";
+  afficherMode();
+}
+
+function afficherMode() {
+  const active = sourisPrete();
+  document.body.classList.toggle("mode-souris", active);
+  $("mode-pave").textContent = active ? "Souris" : "Navigation";
+  $("temoin").hidden = !active;
+  $("rangee-souris").hidden = !active;
+  $("texte").placeholder = active ? "Texte à taper sur la TV" : "Texte pour Kodi (ou micro du clavier)";
+  pave.setAttribute("aria-label", active
+    ? "Pavé tactile, souris : glisser pour déplacer le pointeur, toucher pour cliquer, appui long pour le clic droit, deux doigts pour défiler"
+    : "Pavé tactile : glisser pour se déplacer, toucher pour valider, appui long pour revenir, deux doigts pour l'accueil");
+  ajusterPave();
+}
+
+async function ouvrirSouris() {
+  if (ouvertureSouris || souris) return;
+  ouvertureSouris = true;
+  try {
+    // Un navigateur ne peut pas joindre le jeton à un WebSocket : on l'échange contre un
+    // ticket à usage unique, présenté comme « sous-protocole » (jamais dans l'adresse).
+    const { statut, donnees } = await api("/api/pointeur/session", {});
+    if (statut !== 200 || !donnees?.ticket) return;
+    const s = new WebSocket(`wss://${location.host}/api/pointeur`, ["hub-pointeur", `ticket.${donnees.ticket}`]);
+    souris = s;
+    s.onmessage = e => {
+      let m = null;
+      try { m = JSON.parse(e.data); } catch { return; }
+      if (m.t === "pret") {
+        sourisOuverte = true;
+        clearInterval(battementSouris);
+        battementSouris = setInterval(() => envoyerSouris({ t: "p" }), SOURIS.battement);
+        vibrer([10, 40, 10]);
+        afficherMode();
+      } else if (m.t === "fin") {
+        if (m.raison === "remplacee") sourisSuspendue = true;
+        if (RAISONS_POINTEUR[m.raison]) message(RAISONS_POINTEUR[m.raison], 4000);
+      } else if (m.t === "r") {
+        direTexte(m);
+      }
+    };
+    s.onclose = () => {
+      if (souris !== s) return;
+      souris = null;
+      sourisOuverte = false;
+      clearInterval(battementSouris);
+      afficherMode();
+      // La raison (écran verrouillé, retour au menu…) est dans l'état : on le relit.
+      setTimeout(lireEtat, 800);
+    };
+  } catch (e) {
+    if (!(e instanceof JetonRefuse)) marquerEnLigne(false);
+  } finally {
+    ouvertureSouris = false;
+  }
+}
+
+function fermerSouris() {
+  const s = souris;
+  souris = null;
+  sourisOuverte = false;
+  clearInterval(battementSouris);
+  try { s?.close(); } catch { /* déjà fermé */ }
+  afficherMode();
+}
+// Page cachée (téléphone posé, autre app) : la souris se ferme, et le clavier virtuel
+// disparaît du HUB. Elle revient avec la page (reprendre → lireEtat).
+document.addEventListener("visibilitychange", () => { if (document.hidden && souris) fermerSouris(); });
+addEventListener("pagehide", () => { if (souris) fermerSouris(); });
+
+function vidanger() {
+  imageDemandee = false;
+  if (!sourisPrete()) { cumul = { x: 0, y: 0, dx: 0, dy: 0 }; return; }
+  // Le wifi cale : on garde la somme pour l'image suivante plutôt que d'empiler.
+  if (souris.bufferedAmount > 2048) { demanderImage(); return; }
+  const x = Math.trunc(cumul.x), y = Math.trunc(cumul.y);
+  if (x || y) { envoyerSouris({ t: "m", x, y }); cumul.x -= x; cumul.y -= y; }
+  const dx = Math.trunc(cumul.dx), dy = Math.trunc(cumul.dy);
+  if (dx || dy) { envoyerSouris({ t: "d", x: dx, y: dy }); cumul.dx -= dx; cumul.dy -= dy; }
+}
+function demanderImage() {
+  if (imageDemandee) return;
+  imageDemandee = true;
+  requestAnimationFrame(vidanger);
+}
+
+let gesteSouris = null;
+function sourisPose(e) {
+  pointeurs.set(e.pointerId, { x: e.clientX, y: e.clientY, t: e.timeStamp });
+  if (pointeurs.size === 2 && gesteSouris) {
+    clearTimeout(gesteSouris.minuterieLong);
+    gesteSouris.deux = true;
+    return;
+  }
+  if (pointeurs.size > 1) return;
+  const g = gesteSouris = { id: e.pointerId, x0: e.clientX, y0: e.clientY, bouge: false, long: false, deux: false };
+  placerImpact(e.clientX, e.clientY);
+  pave.classList.add("touche", "utilise");
+  g.minuterieLong = setTimeout(() => {
+    if (gesteSouris !== g || g.bouge || g.deux) return;
+    g.long = true;
+    pave.classList.add("long");
+    vibrer(35);
+    envoyerSouris({ t: "c", b: "droite" });
+  }, GESTE.appuiLong);
+}
+function sourisBouge(e) {
+  const avant = pointeurs.get(e.pointerId);
+  const g = gesteSouris;
+  if (!avant || !g) return;
+  const dx = e.clientX - avant.x, dy = e.clientY - avant.y;
+  const dt = Math.max(1, e.timeStamp - avant.t);
+  pointeurs.set(e.pointerId, { x: e.clientX, y: e.clientY, t: e.timeStamp });
+  if (g.deux || pointeurs.size > 1) {
+    // Deux doigts : chacun apporte la moitié du défilement. Sens « naturel » des écrans
+    // tactiles : le contenu suit les doigts.
+    cumul.dx -= dx * SOURIS.defilement / 2;
+    cumul.dy += dy * SOURIS.defilement / 2;
+    return demanderImage();
+  }
+  if (e.pointerId !== g.id) return;
+  if (Math.hypot(e.clientX - g.x0, e.clientY - g.y0) > GESTE.toucher) { g.bouge = true; clearTimeout(g.minuterieLong); }
+  if (g.long) return;
+  placerImpact(e.clientX, e.clientY);
+  const gain = Math.min(SOURIS.gainMax, SOURIS.gainLent + SOURIS.pente * Math.hypot(dx, dy) / dt);
+  cumul.x += dx * gain;
+  cumul.y += dy * gain;
+  demanderImage();
+}
+function sourisLeve(e) {
+  if (!pointeurs.delete(e.pointerId)) return;
+  const g = gesteSouris;
+  if (g && e.pointerId === g.id) {
+    clearTimeout(g.minuterieLong);
+    if (e.type === "pointerup" && !g.bouge && !g.long && !g.deux) { vibrer(12); envoyerSouris({ t: "c", b: "gauche" }); }
+  }
+  if (pointeurs.size === 0) {
+    gesteSouris = null;
+    pave.classList.remove("touche", "long");
+  }
+}
 
 // ── Pavé tactile ───────────────────────────────────────────────────────────
 // Glisser = une flèche ; rester posé après le glissement = la flèche se répète ;
@@ -1143,6 +1436,10 @@ function placerImpact(x, y) {
 pave.addEventListener("pointerdown", e => {
   e.preventDefault();
   try { pave.setPointerCapture(e.pointerId); } catch { /* pointeur déjà relâché */ }
+  // Le mode est décidé AU POSER du doigt et vaut pour tout le geste : une bascule au
+  // milieu d'un glissement ne transforme pas une flèche en clic.
+  if (sourisPrete() || gesteSouris) return sourisPose(e);
+  if (sourisSuspendue) { sourisSuspendue = false; lireEtat(); }
   pointeurs.set(e.pointerId, true);
   if (pointeurs.size === 2 && geste && !geste.fini) {
     // Deux doigts : Accueil, sauf si le premier a déjà fait quelque chose.
@@ -1168,6 +1465,7 @@ pave.addEventListener("pointerdown", e => {
 });
 
 pave.addEventListener("pointermove", e => {
+  if (gesteSouris) return sourisBouge(e);
   const g = geste;
   if (!g || e.pointerId !== g.id || g.fini || g.long) return;
   if (Math.hypot(e.clientX - g.x0, e.clientY - g.y0) > GESTE.toucher) g.bouge = true;
@@ -1195,6 +1493,7 @@ pave.addEventListener("pointermove", e => {
 });
 
 function relacher(e) {
+  if (gesteSouris) return sourisLeve(e);
   if (!pointeurs.delete(e.pointerId)) return;
   const g = geste;
   if (g && e.pointerId === g.id && !g.fini) {
@@ -1566,6 +1865,10 @@ async function arriverParTransfert() {
 
 // ── Options et photo ───────────────────────────────────────────────────────
 const actions = {
+  // Le code de la TV, retapé sur la page https, rend le jeton « sûr » (souris et
+  // clavier). Le jeton actuel reste en place : « Annuler » revient sans rien perdre.
+  "retaper-code": () => { $("annuler-code").hidden = false; afficher("appairage"); },
+  "annuler-code": () => { $("annuler-code").hidden = true; afficher("telecommande"); },
   options: () => $("options").showModal(),
   securite: () => ouvrirSecurite(),
   allumer: () => { $("options").close(); $("allumer").showModal(); },
