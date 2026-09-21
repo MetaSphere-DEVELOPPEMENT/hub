@@ -327,6 +327,47 @@ class Jetons(AvecDossier):
         self.assertEqual(j.menage(), 1)
         self.assertEqual(j.lister(), [])
 
+    def test_pointeur_refuse_par_defaut_puis_autorise_par_telephone(self):
+        j = T.Jetons(self.chemins["jetons"], horloge=self.horloge)
+        ident, _jeton, _a = j.creer("Pixel")
+        self.assertFalse(j.pointeur_autorise(ident), "un appairage seul ne donne pas le clavier")
+        self.assertFalse(j.lister()[0]["pointeurAutorise"])
+        self.assertTrue(j.autoriser_pointeur(ident, True))
+        self.assertTrue(j.pointeur_autorise(ident))
+        self.assertTrue(j.lister()[0]["pointeurAutorise"])
+        # Une autre instance (la ligne de commande) voit le même fichier tout de suite.
+        ligne_de_commande = T.Jetons(self.chemins["jetons"], horloge=self.horloge)
+        self.assertTrue(ligne_de_commande.pointeur_autorise(ident))
+        self.assertTrue(ligne_de_commande.autoriser_pointeur(ident, False))
+        self.assertFalse(j.pointeur_autorise(ident), "le retrait se voit sans redémarrage")
+
+    def test_autoriser_pointeur_telephone_inconnu_ne_cree_rien(self):
+        j = T.Jetons(self.chemins["jetons"], horloge=self.horloge)
+        j.creer("Pixel")
+        self.assertFalse(j.autoriser_pointeur("000000", True))
+        self.assertEqual(len(j.lister()), 1)
+        self.assertFalse(j.pointeur_autorise("000000"))
+
+    def test_reappairage_garde_le_droit_deja_accorde(self):
+        j = T.Jetons(self.chemins["jetons"], horloge=self.horloge)
+        ident, _jeton, appareil = j.creer("Pixel")
+        j.autoriser_pointeur(ident, True)
+        # Le téléphone perd son jeton et retape le code : même entrée, le droit reste.
+        ident2, _jeton2, _a = j.creer("Pixel", appareil=appareil)
+        self.assertEqual(ident2, ident)
+        self.assertTrue(j.pointeur_autorise(ident))
+
+    def test_fichier_d_avant_le_droit_par_telephone_refuse(self):
+        """Une entrée écrite avant cette version (aucun champ `pointeurAutorise`)
+        n'ouvre pas le clavier : mettre à jour le HUB ne doit pas l'accorder tout seul."""
+        self.chemins["jetons"].parent.mkdir(parents=True)
+        jeton = "u" * 43
+        self.chemins["jetons"].write_text(json.dumps({"telephones": [
+            {"id": "2ab063", "nom": "Pixel", "empreintes": [T._empreinte(jeton)], "sures": [T._empreinte(jeton)],
+             "cree": 1_700_000_000_000, "vu": 1_700_000_000_000}]}))
+        j = T.Jetons(self.chemins["jetons"], horloge=self.horloge)
+        self.assertFalse(j.pointeur_autorise("2ab063"))
+
     def test_plafond_le_moins_recemment_vu_part(self):
         j = T.Jetons(self.chemins["jetons"], horloge=self.horloge)
         idents = []
@@ -626,7 +667,8 @@ class AppairageHTTP(AvecServeur):
         etat = json.loads(self.chemins["etat"].read_text())
         self.assertEqual(len(etat["listeTelephones"]), 1)
         entree = etat["listeTelephones"][0]
-        self.assertEqual(sorted(entree), ["cree", "id", "nom", "vu"])
+        self.assertEqual(sorted(entree), ["cree", "id", "nom", "pointeurAutorise", "vu"])
+        self.assertFalse(entree["pointeurAutorise"], "refusé par défaut à l'appairage")
         self.assertEqual(entree["nom"], "Test")
         # Ni jeton, ni empreinte, ni identifiant d'appareil : la TV affiche cette liste.
         self.assertNotIn("appareil", json.dumps(etat))

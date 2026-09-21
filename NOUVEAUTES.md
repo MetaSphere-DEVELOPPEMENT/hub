@@ -7,6 +7,16 @@ lisibles depuis le canapé : le menu affiche cette première section sous « Ins
 **La première section doit porter le numéro du fichier `VERSION`.** Un test le vérifie
 (`tests/test_version.py`). Marche à suivre pour publier : `installer/mise-a-jour/README.md`.
 
+## 1.0.15 — 21 septembre 2026
+
+La souris et le clavier depuis le téléphone se méritent maintenant téléphone par
+téléphone. Avant, lire le code de la TV une seule fois ouvrait le clavier pour
+toujours à ce téléphone — même celui d'un invité de passage. Désormais, Réglages
+→ Télécommande liste chaque téléphone relié avec son propre bouton « Autoriser
+la souris », et c'est refusé tant qu'on n'a pas appuyé dessus. **Si un téléphone
+qui pilotait déjà la souris ne le peut plus après cette mise à jour, ce n'est pas
+un bug** : il suffit d'aller l'autoriser à nouveau depuis Réglages → Télécommande.
+
 ## 1.0.14 — 21 septembre 2026
 
 Le téléphone pilote enfin ce qui n'est ni le menu ni Kodi. Devant Netflix, YouTube ou un

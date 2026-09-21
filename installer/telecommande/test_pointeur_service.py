@@ -101,12 +101,18 @@ class AvecPointeur(AvecDossier):
             valeur = brut
         return r.status, {k.lower(): v for k, v in r.getheaders()}, valeur
 
-    def appairer(self, securise=True, **corps):
+    def appairer(self, securise=True, autoriser=True, **corps):
+        """Un téléphone appairé — et, par défaut, déjà autorisé à la souris et au
+        clavier, comme si on avait fait le second geste devant la TV : la plupart des
+        tests d'ici portent sur une AUTRE condition, pas sur celle-ci (voir la classe
+        `DroitParTelephone`, qui la teste seule). `autoriser=False` la laisse fermée."""
         self.service.fenetre.ouvrir()
         statut, _h, rep = self.requete("POST", "/api/appairer",
                                        {"code": self.service.appairage.code, "nom": "Test", **corps},
                                        securise=securise)
         self.assertEqual(statut, 200, rep)
+        if securise and autoriser:
+            self.service.jetons.autoriser_pointeur(rep["id"], True)
         return rep["jeton"]
 
     def ticket(self, jeton):
@@ -225,6 +231,12 @@ class Conditions(AvecPointeur):
                                        jeton=jeton_https)
         self.assertEqual(statut, 200)
         self.assertEqual(len(self.service.jetons.lister()), 1, "toujours une seule entrée")
+        # Le jeton est sûr, mais retaper le code ne suffit plus, à lui seul, à ouvrir le
+        # clavier : il faut le second geste, devant la TV, pour ce téléphone (condition
+        # 4, voir DroitParTelephone). Avant ce geste, la raison affichée le dit.
+        self.assertEqual(self.requete("GET", "/api/etat", jeton=rep["jeton"])[2]["pointeur"],
+                         {"permis": False, "raison": "non-autorise"})
+        self.service.jetons.autoriser_pointeur(rep["id"], True)
         self.assertEqual(self.requete("GET", "/api/etat", jeton=rep["jeton"])[2]["pointeur"]["permis"], True)
         self.assertEqual(self.requete("GET", "/api/etat", jeton=jeton_https)[0], 401, "l'ancien secret ne vaut plus")
         self.assertEqual(self.requete("GET", "/api/etat", jeton=jeton_http, securise=False)[0], 200,
@@ -285,6 +297,39 @@ class Conditions(AvecPointeur):
             self.refuse_partout(self.appairer(), "module-absent")
         finally:
             T.POINTEUR = ancien
+
+
+class DroitParTelephone(Conditions):
+    """Condition 4 : un jeton sûr ne suffit plus, il faut aussi CE téléphone autorisé
+    nommément (Réglages → Télécommande). Refusé par défaut à l'appairage.
+
+    Hérite de `Conditions` pour `refuse_partout` : c'est la même famille de tests,
+    « une condition, seule, suffit à tout refuser »."""
+
+    def test_appairage_seul_ne_donne_pas_le_clavier(self):
+        self.refuse_partout(self.appairer(autoriser=False), "non-autorise")
+
+    def test_autorisation_par_l_identifiant_l_ouvre_sans_nouvel_appairage(self):
+        jeton = self.appairer(autoriser=False)
+        ident = self.service.jetons.valide(jeton)
+        self.assertTrue(self.service.jetons.autoriser_pointeur(ident, True))
+        self.assertEqual(self.requete("GET", "/api/etat", jeton=jeton)[2]["pointeur"]["permis"], True)
+        self.assertEqual(self.requete("POST", "/api/pointeur/session", {}, jeton=jeton)[0], 200)
+
+    def test_autre_telephone_du_meme_appairage_n_est_pas_touche(self):
+        jeton_a = self.appairer(nom="Pixel de A")
+        jeton_b = self.appairer(autoriser=False, appareil="a" * 32, nom="Pixel de B")
+        self.assertEqual(self.requete("POST", "/api/pointeur/session", {}, jeton=jeton_a)[0], 200)
+        self.refuse_partout(jeton_b, "non-autorise")
+
+    def test_lister_et_cli_voient_le_droit(self):
+        jeton = self.appairer(autoriser=False)
+        ident = self.service.jetons.valide(jeton)
+        avant = next(t for t in self.service.jetons.lister() if t["id"] == ident)
+        self.assertFalse(avant["pointeurAutorise"])
+        self.service.jetons.autoriser_pointeur(ident, True)
+        apres = next(t for t in self.service.jetons.lister() if t["id"] == ident)
+        self.assertTrue(apres["pointeurAutorise"])
 
 
 class Tickets(AvecPointeur):
@@ -516,6 +561,16 @@ class EnCoursDeSession(AvecPointeur):
         fin = self.client.recevoir(delai=5)
         self.assertEqual(fin, {"t": "fin", "raison": "revoque"})
         self.assertIsNone(self.client.recevoir(delai=5))
+
+    def test_droit_a_la_souris_retire_depuis_la_tv(self):
+        """Comme un retrait complet, mais le téléphone garde sa télécommande : seul le
+        droit à la souris et au clavier part, `--interdire-souris` plutôt que
+        `--revoquer`."""
+        ident = self.service.jetons.lister()[0]["id"]
+        T.Jetons(self.chemins["jetons"]).autoriser_pointeur(ident, False)
+        self.coupee("non-autorise")
+        # La télécommande, elle, marche toujours : ce n'est pas une révocation.
+        self.assertIn(ident, self.service.jetons.identifiants())
 
     def test_un_autre_telephone_garde_sa_session(self):
         autre = self.ouvrir_ws(self.appairer())

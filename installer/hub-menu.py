@@ -841,6 +841,24 @@ def fermer_appairage(c):
         pass
 
 
+def autoriser_pointeur_telephone(ident, autorise, executer=subprocess.run):
+    """Accorder ou retirer, à UN téléphone, le droit à la souris et au clavier, depuis
+    Réglages → Télécommande.
+
+    Même choix que `retirer_telephone` : `hub-telecommande --autoriser-souris` /
+    `--interdire-souris` plutôt qu'écrire le fichier des jetons ici, pour le même
+    verrou et la même relecture immédiate par le service en cours."""
+    if not isinstance(ident, str) or not re.fullmatch(r"[0-9a-f]{4,32}", ident):
+        return False
+    option = "--autoriser-souris" if autorise is True else "--interdire-souris"
+    try:
+        r = executer(["hub-telecommande", option, ident], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError) as erreur:
+        print(f"hub-menu : droit à la souris non changé ({erreur})", file=sys.stderr)
+        return False
+    return getattr(r, "returncode", 1) == 0
+
+
 def retirer_telephone(ident, executer=subprocess.run):
     """Retirer un téléphone depuis Réglages → Télécommande.
 
@@ -2096,6 +2114,14 @@ def lancer(arguments=None):
                     GLib.idle_add(lambda: self.surveiller_telecommande() and False)
                     return None
                 self.en_fond(retirer)
+            elif genre == "telecommande-souris-telephone":
+                ident, autorise = message.get("id"), message.get("autoriser") is True
+
+                def souris_telephone():
+                    autoriser_pointeur_telephone(ident, autorise)
+                    GLib.idle_add(lambda: self.surveiller_telecommande() and False)
+                    return None
+                self.en_fond(souris_telephone)
             elif genre == "recopie-code":
                 nouveau = message.get("nouveau") is True
                 self.en_fond(lambda: {"type": "recopie-code", "code": code_recopie(nouveau), "permise": recopie_permise(), "nouveau": nouveau})

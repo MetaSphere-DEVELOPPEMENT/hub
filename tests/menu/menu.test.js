@@ -701,8 +701,8 @@ test("télécommande : QR code et code d'appairage, annonce quand un téléphone
 test("télécommande : les téléphones reliés, leur dernier usage, et en retirer un", async () => {
   const jour = 86400000;
   const liste = [
-    { id: "2ab063", nom: "Pixel 8", cree: Date.now() - 30 * jour, vu: Date.now() - 3 * jour },
-    { id: "9fe410", nom: "iPhone de Camille", cree: Date.now() - 2 * jour, vu: Date.now() },
+    { id: "2ab063", nom: "Pixel 8", cree: Date.now() - 30 * jour, vu: Date.now() - 3 * jour, pointeurAutorise: false },
+    { id: "9fe410", nom: "iPhone de Camille", cree: Date.now() - 2 * jour, vu: Date.now(), pointeurAutorise: true },
   ];
   const etat = { url: "http://192.168.1.50:8790/", code: "482913", expire: Date.now() + 240000, telephones: 2, appairageOuvert: true, listeTelephones: liste };
   await ouvrir({ retour: true, telecommande: etat });
@@ -713,6 +713,21 @@ test("télécommande : les téléphones reliés, leur dernier usage, et en retir
   assert.match(lignes[0], /Pixel 8/);
   assert.match(lignes[0], /il y a 3 jours/);
   assert.match(lignes[1], /aujourd'hui/);
+
+  // Le droit à la souris, par téléphone : refusé par défaut, un bouton l'accorde ou
+  // le retire, sans confirmation (réversible, à l'inverse de retirer le téléphone).
+  assert.equal(await page.textContent('[data-cle="souris-2ab063"]'), "Autoriser la souris");
+  assert.doesNotMatch(await page.getAttribute('[data-cle="souris-2ab063"]', "class"), /\bchoisie\b/);
+  assert.equal(await page.textContent('[data-cle="souris-9fe410"]'), "Retirer la souris");
+  assert.match(await page.getAttribute('[data-cle="souris-9fe410"]', "class"), /\bchoisie\b/);
+  await page.click('[data-cle="souris-2ab063"]');
+  assert.deepEqual(await messages("telecommande-souris-telephone"),
+    [{ type: "telecommande-souris-telephone", id: "2ab063", autoriser: true }]);
+  // hub-menu republie l'état une fois le geste fait : le bouton suit.
+  await page.evaluate(e => window.hub.recevoir({ type: "telecommande", etat: {
+    ...e, listeTelephones: e.listeTelephones.map(t => t.id === "2ab063" ? { ...t, pointeurAutorise: true } : t),
+  } }), etat);
+  assert.equal(await page.textContent('[data-cle="souris-2ab063"]'), "Retirer la souris");
 
   // Retirer demande deux appuis : le premier arme, le second envoie.
   await page.click('[data-cle="retirer-2ab063"]');

@@ -2969,6 +2969,25 @@ function dernierUsage(ms) {
 // sur le même bouton se comprend mieux qu'un dialogue où il faut retrouver le focus.
 let retraitAConfirmer = null;
 let minuterieRetrait = null;
+// Le droit à la souris et au clavier, PAR téléphone : un bouton qui bascule tout de
+// suite (pas de « Confirmer » — accorder ou retirer se défait d'un appui, à l'inverse
+// de retirer le téléphone entier). Refusé par défaut à l'appairage (hub_telecommande.py,
+// Jetons.creer) : un téléphone tout juste relié n'a que la télécommande, pas le clavier,
+// tant que ce bouton n'a pas été touché ici.
+function souris(p) {
+  return el("button", {
+    class: `option${p.pointeurAutorise ? " choisie" : ""}`, "data-nav": true, "data-cle": `souris-${p.id}`,
+    onclick: () => autoriserSourisTelephone(p.id, !p.pointeurAutorise),
+  }, p.pointeurAutorise ? t("telecommande.souris.retirer") : t("telecommande.souris.autoriser"));
+}
+
+function autoriserSourisTelephone(id, autoriser) {
+  envoyer({ type: "telecommande-souris-telephone", id, autoriser });
+  son("ok");
+  annoncer(autoriser ? t("telecommande.souris.accordee") : t("telecommande.souris.retiree"));
+  rendreSection();
+}
+
 function listeTelephones(liste) {
   if (!Array.isArray(liste) || !liste.length) return null;
   return el("ul", { class: "telephones" }, liste.slice(0, 20).map(p => {
@@ -2976,6 +2995,7 @@ function listeTelephones(liste) {
     return el("li", {},
       el("div", { class: "telephone-nom" }, p.nom || t("telecommande.telephone")),
       el("div", { class: "aide" }, t("telecommande.vu", { quand: dernierUsage(p.vu) })),
+      souris(p),
       el("button", {
         class: `option${confirme ? " confirme" : ""}`, "data-nav": true, "data-cle": `retirer-${p.id}`,
         onclick: () => retirerTelephone(p.id),
