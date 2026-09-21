@@ -187,7 +187,9 @@ body:not([data-motif="nappes"]) #fond { filter: none; }
    changer de mode croise deux opacités, que le compositeur fait sans repeindre. */
 #visuel-mode {
   position: fixed;
-  top: 6vh; height: 88vh; right: -3vh;
+  /* Collée en haut et à droite : la bande de 6vh au-dessus d'elle, et les 3vh qu'elle
+     perdait hors de l'écran, montraient le fond du motif autour de la photo. */
+  top: 0; height: 94vh; right: 0;
   width: 104vh;
   pointer-events: none;
   /* Le fondu du mode ambiant, plus bas ; ailleurs, elle ne bouge pas. */
@@ -445,6 +447,10 @@ body.calque-ouvert .ecran *, body.calque-ouvert .ecran *::before, .calque:not(.o
   background: var(--verre-fort);
   box-shadow: inset 0 0 0 1px var(--liseré);
 }
+/* En sombre, la couleur du motif vit maintenant sous le héros : un verre BLANC posé sur une
+   lueur turquoise s'éclaircit, et le blanc du libellé tombait à 4,1:1. Un verre sombre tient
+   sur n'importe quelle lueur, et reste un verre sur le noir. */
+:root:not([data-theme="clair"]) .heros-services span { background: rgba(6, 10, 20, .46); }
 /* Dit ce que fait OK sur l'onglet ; pas une cible de plus (la souris peut cliquer). */
 .lancer {
   margin-top: .5rem;
