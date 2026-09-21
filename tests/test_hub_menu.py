@@ -235,6 +235,22 @@ class Telecommande(AvecDossier):
             self.assertFalse(hub_menu.retirer_telephone(mauvais, executer=executer), mauvais)
         self.assertEqual(len(appels), 1)
 
+    def test_autoriser_ou_retirer_la_souris_d_un_telephone_passe_par_la_commande_du_service(self):
+        appels = []
+
+        def executer(commande, **_kw):
+            appels.append(commande)
+            return subprocess.CompletedProcess(commande, 0)
+
+        self.assertTrue(hub_menu.autoriser_pointeur_telephone("2ab063", True, executer=executer))
+        self.assertTrue(hub_menu.autoriser_pointeur_telephone("2ab063", False, executer=executer))
+        self.assertEqual(appels, [["hub-telecommande", "--autoriser-souris", "2ab063"],
+                                  ["hub-telecommande", "--interdire-souris", "2ab063"]])
+        # Même garde que retirer_telephone : rien du réseau ne devient argument.
+        for mauvais in (None, 42, "", "2ab063; rm -rf /", "../../etc", "x" * 40):
+            self.assertFalse(hub_menu.autoriser_pointeur_telephone(mauvais, True, executer=executer), mauvais)
+        self.assertEqual(len(appels), 2)
+
     def test_fenetre_d_appairage_et_empreinte_courte(self):
         base = {"url": "http://192.168.1.50:8790/", "code": "123456"}
         hub_menu.ecrire_atomique(self.c["telecommande"], json.dumps({**base, "https": "https://hub.local:8791/", "appairageOuvert": True,

@@ -57,6 +57,10 @@ class Conditions(unittest.TestCase):
                                            lancer=self.lancer, acces=lambda: self.acces)
         self.service.pointeur.DUREE_GARDE_S = -1  # pas de mémoire entre deux questions
         self.regler(True)
+        # « abc123 », le téléphone que `refus()` questionne par défaut, déjà autorisé
+        # nommément : ces tests portent chacun sur une AUTRE condition (voir
+        # DroitParTelephone, qui teste celle-ci seule).
+        self.autoriser("abc123", True)
 
     def tearDown(self):
         self._tmp.cleanup()
@@ -69,6 +73,19 @@ class Conditions(unittest.TestCase):
     def regler(self, valeur):
         self.chemins["reglages"].parent.mkdir(parents=True, exist_ok=True)
         self.chemins["reglages"].write_text(json.dumps({"systeme": {"telecommandeSouris": valeur}}))
+
+    def autoriser(self, ident, valeur):
+        """`refus()` n'appaire jamais vraiment (`ident` est donné en dur) : on pose
+        l'entrée nous-mêmes, comme si Réglages → Télécommande venait de l'écrire."""
+        self.chemins["jetons"].parent.mkdir(parents=True, exist_ok=True)
+        actuel = json.loads(self.chemins["jetons"].read_text()) if self.chemins["jetons"].exists() \
+            else {"telephones": []}
+        reste = [t for t in actuel["telephones"] if t["id"] != ident]
+        # `_entree_lue` écarte une entrée sans empreinte (elle la croirait jamais
+        # appairée) : une empreinte factice suffit, `refus()` ne valide pas de jeton ici.
+        reste.append({"id": ident, "nom": "Test", "empreintes": ["x" * 64], "sures": [],
+                      "pointeurAutorise": valeur, "cree": 0, "vu": 0})
+        self.chemins["jetons"].write_text(json.dumps({"telephones": reste}))
 
     def refus(self, ident="abc123", sure=True, securise=True):
         return self.service.pointeur.refus(ident, sure, securise)
@@ -116,6 +133,17 @@ class Conditions(unittest.TestCase):
     def test_uinput_inaccessible_dit_pourquoi(self):
         self.acces = "uinput-refuse"
         self.assertEqual(self.refus(), "uinput-refuse")
+
+    def test_jamais_sans_le_geste_explicite_pour_ce_telephone(self):
+        # Refusé par défaut : « abc123 » n'a jamais été explicitement autorisé.
+        self.autoriser("abc123", False)
+        self.assertEqual(self.refus(), "non-autorise")
+        # Un AUTRE téléphone appairé et autorisé n'ouvre rien pour celui-ci.
+        self.autoriser("def456", True)
+        self.assertEqual(self.refus(), "non-autorise")
+        # Devant la TV, Réglages → Télécommande : le geste, et ça s'ouvre tout de suite.
+        self.autoriser("abc123", True)
+        self.assertIsNone(self.refus())
 
     def test_les_commandes_refusees_n_ouvrent_pas_le_peripherique(self):
         self.regler(False)

@@ -29,7 +29,8 @@ HORS DU MENU ET DE KODI (service web en plein écran, bureau), plus rien n'écou
 téléphone devient alors un clavier et une souris (hub_pointeur.py, /dev/uinput). C'est
 le plus gros pouvoir que ce service donne, et il n'est donné qu'à toutes ces conditions
 réunies (classe Pointeur) : interrupteur allumé sur la TV, connexion https, jeton obtenu
-en tapant le code de la TV en https, session au premier plan et déverrouillée.
+en tapant le code de la TV en https, CE téléphone autorisé nommément depuis Réglages →
+Télécommande (refusé par défaut à l'appairage), session au premier plan et déverrouillée.
 """
 
 import argparse
@@ -502,9 +503,16 @@ def _entree_lue(t):
     # « sures » : les empreintes des jetons délivrés contre le code de la TV tapé EN
     # HTTPS (voir Jetons.creer). Absent des fichiers d'avant : aucun jeton n'est sûr.
     sures = t.get("sures") if isinstance(t.get("sures"), list) else []
+    # « pointeurAutorise » : le droit à la souris et au clavier, accordé À CE TÉLÉPHONE
+    # depuis Réglages → Télécommande — pas seulement « ce téléphone peut, s'il retape le
+    # code en https » (ça, c'est `sures`). Absent des fichiers d'avant cette version, et
+    # pour tout nouveau téléphone : refusé, jusqu'à un geste explicite devant la TV. Le
+    # premier terrain, être dans la pièce pour lire le code, protège l'appairage ; celui-
+    # ci protège le clavier, le plus gros pouvoir de ce service (voir Pointeur, plus bas).
     return {"id": t["id"], "nom": t.get("nom"), "appareil": appareil_propre(t.get("appareil")),
             "cree": t.get("cree"), "vu": t.get("vu"), "empreintes": empreintes,
-            "sures": [e for e in sures if e in empreintes]}
+            "sures": [e for e in sures if e in empreintes],
+            "pointeurAutorise": t.get("pointeurAutorise") is True}
 
 
 class Jetons:
@@ -630,7 +638,11 @@ class Jetons:
             if entree is None:
                 entree = {"id": secrets.token_hex(3), "nom": nom,
                           "appareil": appareil or secrets.token_hex(16),
-                          "cree": maintenant, "vu": maintenant, "empreintes": []}
+                          "cree": maintenant, "vu": maintenant, "empreintes": [],
+                          # Refusé par défaut : un appairage seul (être dans la pièce)
+                          # ne donne pas le clavier, il faut le geste en plus, devant
+                          # la TV (Réglages → Télécommande).
+                          "pointeurAutorise": False}
                 liste.append(entree)
             else:
                 entree["nom"] = nom
@@ -680,7 +692,8 @@ class Jetons:
 
     def lister(self):
         with self._verrou:
-            return [{k: t.get(k) for k in ("id", "nom", "cree", "vu")} for t in self._lire()]
+            return [{k: t.get(k) for k in ("id", "nom", "cree", "vu", "pointeurAutorise")}
+                    for t in self._lire()]
 
     def identifiants(self):
         with self._verrou:
@@ -690,6 +703,25 @@ class Jetons:
         """Les téléphones qui tiennent un jeton sûr (pour --lister)."""
         with self._verrou:
             return {t["id"] for t in self._lire() if t["sures"]}
+
+    def pointeur_autorise(self, ident):
+        """Ce téléphone a-t-il reçu le droit à la souris et au clavier ? Un téléphone
+        inconnu (révoqué, jamais vu) n'a jamais ce droit."""
+        with self._verrou:
+            return any(t["id"] == ident and t["pointeurAutorise"] for t in self._lire())
+
+    def autoriser_pointeur(self, ident, autorise):
+        """Accorde ou retire le droit à la souris et au clavier pour ce téléphone,
+        sans toucher à ses jetons ni à sa date d'appairage. Faux si le téléphone
+        n'existe plus (révoqué entre-temps, ou identifiant forgé)."""
+        with self._verrou, self._verrou_fichier():
+            self._signature = None
+            liste = self._lire()
+            if not any(t["id"] == ident for t in liste):
+                return False
+            liste = [dict(t, pointeurAutorise=bool(autorise)) if t["id"] == ident else t for t in liste]
+            self._ecrire(liste)
+            return True
 
     def revoquer(self, ident):
         with self._verrou, self._verrou_fichier():
@@ -1079,9 +1111,13 @@ class Pointeur:
       3. le jeton est « sûr » (Jetons.creer) : obtenu en tapant le code de la TV en
          https. Un jeton http volé, ou le transfert qu'il permet de demander, ne donnent
          donc jamais le clavier ;
-      4. le contexte est un service web ou le bureau ;
-      5. /dev/uinput est accessible ;
-      6. la session est au premier plan et déverrouillée (logind) : ni GDM, ni écran
+      4. CE téléphone a reçu le droit nommément, depuis Réglages → Télécommande
+         (Jetons.pointeur_autorise) — refusé par défaut à l'appairage : lire le code
+         sur la TV ouvre la télécommande, pas le clavier ; celui-ci veut un second
+         geste, devant la TV, pour ce téléphone précis ;
+      5. le contexte est un service web ou le bureau ;
+      6. /dev/uinput est accessible ;
+      7. la session est au premier plan et déverrouillée (logind) : ni GDM, ni écran
          verrouillé — le périphérique parle à ce qui est devant, quoi que ce soit.
     Le périphérique n'existe que pendant l'usage : fermé, il est DÉTRUIT, et plus rien
     ne peut être injecté dans la session par ce service.
@@ -1162,6 +1198,13 @@ class Pointeur:
             return "connexion-non-securisee"
         if not ident or not sure:
             return "jeton-non-sur"
+        # Un jeton sûr prouve qu'on a lu le code sur la TV ; ça ne suffit plus à donner
+        # le clavier depuis cette version — il faut en plus le geste explicite, devant
+        # la TV, Réglages → Télécommande → ce téléphone. Une famille qui a toujours dit
+        # oui à l'interrupteur global n'était protégée que par « être entré une fois
+        # dans le salon » ; un invité de passage entrait dans le même lot pour toujours.
+        if not self.service.jetons.pointeur_autorise(ident):
+            return "non-autorise"
         return self._refus_systeme(contexte)
 
     # ── Le périphérique ──
@@ -1227,13 +1270,16 @@ class Pointeur:
                 raison = self._refus_systeme()
                 if raison:
                     return self.fermer(raison)
-                # Un téléphone retiré depuis la TV perd la main tout de suite, pas à sa
-                # prochaine requête : sa session est déjà ouverte, plus rien n'y passe
-                # par la vérification du jeton.
+                # Un téléphone retiré depuis la TV — entièrement, ou juste son droit à
+                # la souris — perd la main tout de suite, pas à sa prochaine requête :
+                # sa session est déjà ouverte, plus rien n'y passe par la vérification
+                # du jeton.
                 connus = self.service.jetons.identifiants()
                 for session in list(self._sessions):
                     if session.ident not in connus:
                         session.arreter("revoque")
+                    elif not self.service.jetons.pointeur_autorise(session.ident):
+                        session.arreter("non-autorise")
                 if not self._sessions and self.horloge() - self._dernier_usage > self.INACTIVITE_S:
                     return self.fermer("inactif")
             except Exception:  # noqa: BLE001
@@ -2605,6 +2651,10 @@ def main(argv=None):
     parser.add_argument("--lister", action="store_true", help="téléphones appairés")
     parser.add_argument("--revoquer", metavar="ID", help="retirer un téléphone")
     parser.add_argument("--revoquer-tout", action="store_true", help="retirer tous les téléphones")
+    parser.add_argument("--autoriser-souris", metavar="ID",
+                        help="donner à ce téléphone le droit à la souris et au clavier")
+    parser.add_argument("--interdire-souris", metavar="ID",
+                        help="retirer à ce téléphone le droit à la souris et au clavier")
     parser.add_argument("--travailleur-dictee", metavar="HUB_VOIX_PY", help=argparse.SUPPRESS)
     parser.add_argument("--modeles", help=argparse.SUPPRESS)
     parser.add_argument("-v", "--verbeux", action="store_true")
@@ -2638,7 +2688,7 @@ def main(argv=None):
         print("service hub-telecommande injoignable (pas de fichier d'état) : est-il lancé ?", file=sys.stderr)
         return 1
 
-    if args.lister or args.revoquer or args.revoquer_tout:
+    if args.lister or args.revoquer or args.revoquer_tout or args.autoriser_souris or args.interdire_souris:
         jetons = Jetons(chemins["jetons"])
         if args.revoquer:
             if not jetons.revoquer(args.revoquer):
@@ -2647,6 +2697,16 @@ def main(argv=None):
             print(f"téléphone {args.revoquer} révoqué")
         if args.revoquer_tout:
             print(f"{jetons.revoquer_tout()} téléphone(s) révoqué(s)")
+        if args.autoriser_souris:
+            if not jetons.autoriser_pointeur(args.autoriser_souris, True):
+                print(f"aucun téléphone « {args.autoriser_souris} »", file=sys.stderr)
+                return 1
+            print(f"téléphone {args.autoriser_souris} : souris et clavier autorisés")
+        if args.interdire_souris:
+            if not jetons.autoriser_pointeur(args.interdire_souris, False):
+                print(f"aucun téléphone « {args.interdire_souris} »", file=sys.stderr)
+                return 1
+            print(f"téléphone {args.interdire_souris} : souris et clavier retirés")
         if args.lister:
             liste = jetons.lister()
             if not liste:
@@ -2654,7 +2714,8 @@ def main(argv=None):
             clavier = jetons.avec_clavier()
             for t in liste:
                 print(f"{t['id']}  {t['nom'] or '?':<20}  appairé {_date(t['cree'])}  vu {_date(t['vu'])}"
-                      f"{'  [souris et clavier possibles]' if t['id'] in clavier else ''}")
+                      f"{'  [souris et clavier possibles]' if t['id'] in clavier else ''}"
+                      f"{'  [souris et clavier autorisés]' if t['pointeurAutorise'] else ''}")
         return 0
 
     if not VOIX:

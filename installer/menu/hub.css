@@ -1277,14 +1277,15 @@ body.verrouille .centre, body.verrouille .pied .aides { opacity: .15; pointer-ev
 .empreinte-courte { margin-top: .15rem; white-space: nowrap; font-family: "Ubuntu Sans Mono", monospace; font-size: var(--t-3); font-weight: 600; letter-spacing: .12em; }
 .empreinte-paires { font-family: "Ubuntu Sans Mono", monospace; font-size: var(--t-1); line-height: 1.45; letter-spacing: .04em; white-space: pre; opacity: .6; }
 
-/* Les téléphones reliés : un par ligne, son nom, son dernier usage, et le bouton qui
-   le retire. Le bouton garde sa place quand il devient « Confirmer » (largeur fixe),
-   sinon la ligne saute sous le doigt au premier appui. */
+/* Les téléphones reliés : un par ligne, son nom, son dernier usage, et deux boutons —
+   le droit à la souris (réversible d'un appui) et le retrait (largeur fixe même
+   « Confirmer », sinon la ligne saute sous le doigt au premier appui). Chaque bouton
+   prend sa propre colonne (auto-placement CSS), sinon ils se superposent. */
 .telephones { list-style: none; margin: .46rem 0 0; padding: 0; display: flex; flex-direction: column; gap: .3rem; }
-.telephones li { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: .3rem .76rem; padding: .3rem .53rem; border-radius: .61rem; background: var(--verre); }
+.telephones li { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: .3rem .53rem; padding: .3rem .53rem; border-radius: .61rem; background: var(--verre); }
 .telephones .telephone-nom { font-size: var(--t-2); font-weight: 600; }
 .telephones .aide { grid-column: 1; }
-.telephones .option { grid-column: 2; grid-row: 1 / span 2; min-width: 7.6rem; }
+.telephones .option { grid-row: 1 / span 2; min-width: 6.9rem; }
 .telephones .option.confirme { color: color-mix(in srgb, rgb(var(--arret)) var(--part-accent), var(--ton-accent)); box-shadow: inset 0 0 0 1px rgb(var(--arret) / .6); }
 
 .dialogue .aide-photo.conseil { text-align: left; color: color-mix(in srgb, rgb(var(--bureau)) var(--part-accent), var(--ton-accent)); margin-top: .53rem; }

@@ -194,15 +194,25 @@ Elle n'est donc donnée qu'à **toutes** ces conditions, vérifiées à chaque o
    pu demander l'autre). La page le dit et propose « Retaper le code » ; le jeton http du
    même téléphone reste valable pour la télécommande d'avant. `hub-telecommande
    --lister` marque les téléphones qui tiennent un tel jeton.
-4. **Le contexte est un service web ou le bureau.** Dans le menu et dans Kodi, les
+4. **CE téléphone a reçu le droit, nommément** — Réglages → Télécommande liste les
+   téléphones reliés, chacun avec un bouton « Autoriser la souris » / « Retirer la
+   souris ». **Refusé par défaut à l'appairage** : lire le code sur la TV ouvre la
+   télécommande (flèches, OK, modes), pas le clavier — il faut le second geste, devant
+   la TV, pour ce téléphone précis. Le jeton « sûr » (condition 3) prouve qu'on est
+   entré une fois dans la pièce ; sans cette condition-ci, ce seul fait suffisait à
+   ouvrir le clavier pour toujours, y compris à un invité de passage qu'on ne reverra
+   pas. `hub-telecommande --revoquer` retire le téléphone entier (télécommande et
+   souris) ; `--interdire-souris` ne retire que le clavier, le téléphone garde sa
+   télécommande.
+5. **Le contexte est un service web ou le bureau.** Dans le menu et dans Kodi, les
    flèches gardent leur chemin (socket, JSON-RPC), et le clavier virtuel n'est même pas
    créé.
-5. **La session est au premier plan et déverrouillée** (logind : `Active=yes`,
+6. **La session est au premier plan et déverrouillée** (logind : `Active=yes`,
    `LockedHint=no`, classe `user`, type graphique, locale). Un périphérique noyau parle à
    ce qui est devant, quoi que ce soit : sans cette garde, une frappe irait dans le champ
    du mot de passe de GDM (passage du HUB au bureau) ou de l'écran verrouillé. logind
    muet ou illisible : c'est non.
-6. `/dev/uinput` est accessible (groupe `hub-uinput`, voir Installation).
+7. `/dev/uinput` est accessible (groupe `hub-uinput`, voir Installation).
 
 Et autour :
 
@@ -213,7 +223,7 @@ Et autour :
   transfert n'ouvre pas la souris. `Origin` doit être exactement celle du HUB (un
   WebSocket échappe à CORS), en plus du `Host` et de `Sec-Fetch-Site` déjà vérifiés.
 - **La route des boutons n'est pas une porte de derrière** : `POST /api/commande` ne
-  transforme flèches, OK, Retour et texte en touches qu'aux mêmes six conditions, et
+  transforme flèches, OK, Retour et texte en touches qu'aux mêmes sept conditions, et
   partage la même limite de débit.
 - **Le périphérique n'existe que pendant l'usage.** Créé à l'ouverture d'une session,
   **détruit** à la fermeture de la dernière (page fermée ou cachée, téléphone en veille,
@@ -392,7 +402,7 @@ pilote : la page l'affiche (« En veille », « Rien à piloter ») mais reste r
 |---|---|
 | socket du menu présent et joignable | datagramme au menu (`accueil` y devient `retour`) ; `texte` refusé (le menu n'a pas ce message) |
 | menu fermé, Kodi lancé | JSON-RPC : `Input.Left/Right/Up/Down/Select/Back`, `Input.SendText` (avec `done: true`), `accueil` = `Application.Quit` puis SIGTERM en dernier recours |
-| menu fermé, service web (`hub-web` vivant, lu dans `web.pid`) | `accueil` = `hub-web --fermer` ; flèches, OK, Retour, texte = **touches** (voir « Souris et clavier ») si les six conditions sont réunies, sinon sans effet et la réponse dit laquelle manque (`pointeur-…`) |
+| menu fermé, service web (`hub-web` vivant, lu dans `web.pid`) | `accueil` = `hub-web --fermer` ; flèches, OK, Retour, texte = **touches** (voir « Souris et clavier ») si les sept conditions sont réunies, sinon sans effet et la réponse dit laquelle manque (`pointeur-…`) |
 | menu fermé, bureau GNOME | `accueil` = `gnome-session-quit --logout --no-prompt` ; flèches, OK, Retour, texte = **touches**, aux mêmes conditions ; le reste est sans effet |
 | n'importe où | `volume:+` / `volume:-` = `wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%±` (plafonné à 100 %) |
 
@@ -758,7 +768,7 @@ de Playwright, Node 26) — souris et clavier hors du menu et de Kodi :
   messages hors liste (« ctrl+alt+t », code de touche brut, « exec »…) sans effet, journal
   sans le texte tapé.
 - `tests/test_telecommande_souris.py` : 20 tests, **dans `tests/`** — donc rejoués par le
-  HUB avant toute mise à jour : les six conditions, les jetons sûrs, les touches
+  HUB avant toute mise à jour : les sept conditions, les jetons sûrs, les touches
   interdites, la règle udev (groupe dédié, jamais `input`), l'étape de l'installateur en
   simulation sous `set -u`, l'interrupteur éteint par défaut dans le menu.
 - `node --test installer/telecommande/test_navigateur.mjs` : 3 tests de plus, en **https
