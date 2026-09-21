@@ -1,0 +1,13 @@
+# Clavier et souris virtuels de la télécommande — /etc/udev/rules.d/71-hub-uinput.rules
+#
+# /dev/uinput appartient à root (0600) : hub-telecommande, unité UTILISATEUR sans
+# privilèges (NoNewPrivileges), ne peut pas l'ouvrir. Un groupe dédié, et lui seul.
+#
+# SURTOUT PAS le groupe « input ». Il donne aussi la LECTURE de /dev/input/event* :
+# tout programme de la session pourrait enregistrer ce qui est tapé sur n'importe quel
+# clavier. « hub-uinput » ne permet que de CRÉER un périphérique virtuel, pas d'écouter
+# les vrais.
+#
+# static_node : le nœud existe avant que le module soit chargé ; sans cette option, les
+# droits ne seraient posés qu'après la première ouverture… que seul root pourrait faire.
+KERNEL=="uinput", SUBSYSTEM=="misc", GROUP="hub-uinput", MODE="0660", OPTIONS+="static_node=uinput"
