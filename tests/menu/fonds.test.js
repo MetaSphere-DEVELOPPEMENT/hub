@@ -589,7 +589,8 @@ test("WebKitGTK : aucun masque dans la feuille, et les calques de fond en rgba()
   const masques = css.match(/[^\n]*mask[^\n]*/g) || [];
   assert.deepEqual(masques, [], "un masque CSS est revenu dans hub.css");
   // Les calques plein écran : s'ils ne se peignent pas, l'écran entier change de visage.
-  const calques = /(#fond|#fond-lignes|#filigrane|#visuel-mode|#photos|#ambiant|\.grain|\.vignette)(?![\w-])/;
+  // Le voile et la lueur de l'intro en sont : s'ils ne se peignent pas, l'allumage est raté.
+  const calques = /(#fond|#fond-lignes|#filigrane|#visuel-mode|#photos|#ambiant|\.grain|\.vignette|#intro|\.intro-voile|\.intro-halo)(?![\w-])/;
   const modernes = [];
   for (const regle of css.split("}")) {
     const [tete, corps] = [regle.slice(0, regle.indexOf("{")), regle.slice(regle.indexOf("{") + 1)];

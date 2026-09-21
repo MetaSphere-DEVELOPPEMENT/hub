@@ -3516,14 +3516,145 @@ rendreReprises();
 if (APERCU) document.body.append(el("div", { class: "bandeau-apercu" }, t("apercu.bandeau")));
 setInterval(() => { horloge(); majMinuteur(); }, 5000);
 
-// Intro à l'allumage seulement : revenir de Kodi doit être immédiat.
-if (!INITIAL.retour && !parametres.get("ecran") && !parametres.has("sans-intro") && profil().animations !== "reduites" && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+// ── Intro à l'allumage ────────────────────────────────────────────────────
+// À l'allumage seulement : revenir de Kodi doit être immédiat. L'intro n'ajoute aucune
+// attente : elle occupe le temps où le menu se prépare de toute façon (premier dessin du
+// fond, cuisson des trois photos du mode, dernier relevé météo), et s'en va dès qu'il est
+// prêt. L'ancienne durait 2,7 s quoi qu'il arrive — le voile partait à 1,7 s, le calque
+// était retiré une seconde plus tard. Celle-ci est bornée des deux côtés : pas moins que
+// le temps de lire le logo, jamais plus que le plafond, même si une photo ne vient pas.
+const INTRO = {
+  lecture: 1400,   // le logo est entier vers 1,1 s : on le laisse lire
+  plafond: 1500,   // le menu n'est pas prêt ? on enchaîne quand même : l'accueil ne doit pas se lire plus tard qu'avant (voile parti à 1700)
+  pose: 700,       // le logo va du centre à l'en-tête ; l'accueil paraît pendant ce temps (hub.css)
+  relais: 540,     // en fin de vol, encore en mouvement, le logo de l'en-tête prend la place de celui de l'intro
+  marge: 40,       // quelques images immobiles avant de ranger l'intro
+  reduite: 700,    // animations réduites : le logo fixe, puis un fondu
+  fondu: 400,      // le même que « transition » de #intro (hub.css)
+};
+let introEnCours = false;
+const suitesIntro = [];
+// Ce qui ouvre un calque à l'allumage (choix du profil, code) attend la fin de l'intro : le
+// voile n'étant plus opaque, le dialogue se serait vu sous le logo.
+function apresIntro(suite) { if (introEnCours) suitesIntro.push(suite); else suite(); }
+// Le menu est prêt : le fond a été dessiné, et chaque photo du jeu est cuite (ou absente).
+function menuPret() { return fondPret && photosVisuels.every(v => v.fichier === null || v.toile.dataset.cuisson); }
+function jouerIntro() {
   const intro = $("intro");
+  const logo = intro.querySelector(".intro-marque");
+  // (« .entete .marque » : les tuiles des services ont aussi une classe « marque ».)
+  const marque = document.querySelector(".entete .marque");
+  const corps = document.body.classList;
+  const reduit = profil().animations === "reduites" || matchMedia("(prefers-reduced-motion: reduce)").matches;
+  // Le réveil programmé passe en mode ambiant à 2 s : le logo se poserait sur un en-tête
+  // qui s'efface. Il garde le fondu simple, lui aussi.
+  const simple = reduit || !!INITIAL.reveilProgramme;
+  // Un calque déjà ouvert, un mode qui part, l'écran qui passe en ambiant : l'en-tête n'est
+  // plus à sa place (l'accueil recule à l'échelle .975) ou ne se voit plus.
+  const derange = () => ["calque-ouvert", "depart", "ambiant"].some(c => corps.contains(c));
+  const debut = performance.now();
+  let etape = "centre";
+  introEnCours = true;
+  intro.classList.toggle("reduite", reduit);
   intro.hidden = false;
+  corps.add("intro", "intro-avant");
   son("ok");
-  setTimeout(() => intro.classList.add("fin"), 1700);
-  setTimeout(() => { intro.hidden = true; }, 2700);
+
+  const finir = () => {
+    if (etape === "finie") return;
+    etape = "finie";
+    intro.hidden = true;
+    intro.classList.remove("allume", "pose", "relais", "fin");
+    corps.remove("intro", "intro-avant", "intro-pose");
+    logo.style.transform = "";
+    marque.style.transform = "";
+    removeEventListener("keydown", abreger, true);
+    introEnCours = false;
+    for (const suite of suitesIntro.splice(0)) suite();
+  };
+  // Le repli : tout le calque s'efface d'un fondu, et l'accueil — logo compris — est déjà
+  // entier dessous. Rien ne se déplace.
+  const fondre = () => {
+    if (etape !== "centre") return;
+    etape = "fondu";
+    corps.remove("intro", "intro-avant");
+    intro.classList.add("fin");
+    setTimeout(finir, INTRO.fondu + 40);
+  };
+  // L'enchaînement : DEUX logos font le même trajet, l'un sur l'autre, du centre à l'en-tête.
+  // Celui de l'intro, écrit en grand, qui rétrécit ; et le vrai logo de l'en-tête, agrandi
+  // jusqu'au centre, qui revient à sa place. On voit le premier au départ — net, il est
+  // peint à cette taille — et le second à l'arrivée : le relais se fait en plein vol, là où
+  // l'œil ne peut pas comparer. À l'arrivée, ce qui est à l'écran EST le logo de l'en-tête,
+  // sans transformation : sa place est exacte par construction.
+  // La première version posait le logo de l'intro sur l'en-tête et l'échangeait à l'arrêt.
+  // Les boîtes coïncidaient au tiers de pixel, mais pas l'encre : un texte peint à 37 px est
+  // calé sur la grille des pixels, le même réduit depuis 110 px ne l'est pas, et les lettres
+  // sautaient d'un pixel vers le haut au moment de l'échange (mesuré sur captures grossies,
+  // WebKit et Chromium, 21/09/2026). Aucun calcul ne rattrape un calage qui dépend du moteur.
+  const poser = () => {
+    if (etape !== "centre") return;
+    if (simple || derange()) return fondre();
+    // Mesurés maintenant : la marge, la taille du texte et l'écran déplacent l'en-tête.
+    const cible = marque.getBoundingClientRect();
+    const depart = logo.getBoundingClientRect();
+    if (!cible.width || !depart.width) return fondre();
+    // Une seule échelle, celle des largeurs mesurées — pas --k : l'avance des glyphes ne
+    // s'arrondit pas pareil aux deux tailles. En hauteur, ce sont les LIGNES DE BASE des
+    // deux mots qui coïncident, pas le milieu des boîtes : les hauteurs de ligne
+    // s'arrondissent elles aussi. Un repère vide en fin de ligne donne cette ligne ; arrondie
+    // au pixel, comme le fait le moteur en peignant un texte (sans l'arrondi, les lettres des
+    // deux logos étaient à un pixel l'une de l'autre sur deux tailles d'écran sur cinq au
+    // lieu d'une, captures du vol figé, WebKit, 21/09/2026).
+    const ligneDeBase = bloc => {
+      const repere = el("s", { style: "display:inline-block;width:0;height:0" });
+      bloc.append(repere);
+      const y = repere.getBoundingClientRect().bottom;
+      repere.remove();
+      return y;
+    };
+    const k = cible.width / depart.width;
+    const baseCible = Math.round(ligneDeBase(marque.querySelector("b"))), baseDepart = Math.round(ligneDeBase(logo.querySelector("b")));
+    const versEntete = `translate(${(cible.left - depart.left).toFixed(2)}px, ${(baseCible - depart.top - (baseDepart - depart.top) * k).toFixed(2)}px) scale(${k.toFixed(5)})`;
+    const depuisCentre = `translate(${(depart.left - cible.left).toFixed(2)}px, ${(baseDepart - cible.top - (baseCible - cible.top) / k).toFixed(2)}px) scale(${(1 / k).toFixed(5)})`;
+    etape = "pose";
+    // Le logo de l'en-tête part du centre : placé d'abord sans transition, et le style
+    // calculé une fois, sinon il n'y a rien d'où partir et il ne bouge pas.
+    marque.style.transform = depuisCentre;
+    marque.getBoundingClientRect();
+    intro.classList.add("pose");
+    corps.add("intro-pose");
+    corps.remove("intro-avant");
+    logo.style.transform = versEntete;
+    marque.style.transform = "translate(0px, 0px) scale(1)";
+    setTimeout(() => {
+      if (etape !== "pose") return;
+      // Le vrai logo paraît SOUS celui de l'intro, qui s'efface sur lui : jamais de trou.
+      corps.remove("intro");
+      intro.classList.add("relais");
+    }, INTRO.relais);
+    setTimeout(finir, INTRO.pose + INTRO.marge);
+  };
+  // Une touche, et l'intro s'efface devant elle : la touche agit (l'intro ne l'arrête
+  // pas), et ce qu'elle a fait doit se voir tout de suite.
+  const abreger = () => poser();
+  addEventListener("keydown", abreger, true);
+
+  if (simple) { setTimeout(fondre, INTRO.reduite); return; }
+  // Deux images plus tard : le voile part d'un état peint, sinon sa transition ne joue pas.
+  requestAnimationFrame(() => requestAnimationFrame(() => intro.classList.add("allume")));
+  const guetter = () => {
+    if (etape !== "centre") return;
+    const ecoule = performance.now() - debut;
+    if (derange() || ecoule >= INTRO.plafond || (ecoule >= INTRO.lecture && menuPret())) return poser();
+    setTimeout(guetter, 30);
+  };
+  guetter();
 }
+if (!INITIAL.retour && !parametres.get("ecran") && !parametres.has("sans-intro")) jouerIntro();
+// index.html pose ces classes avant la première image, sur les mêmes conditions ; si elles
+// divergeaient un jour (« ?ecran= » vide…), l'accueil resterait caché pour de bon.
+else document.body.classList.remove("intro", "intro-avant");
 setInterval(chargerMeteo, 20 * 60000);
 // L'état de la connexion est poussé à chaque changement ; celui d'avant l'ouverture de la page, on le redemande.
 if (PONT && !INITIAL.ambiantSeul) envoyer({ type: "internet" });
@@ -3539,8 +3670,10 @@ chargerMeteo();
 
 if (!INITIAL.retour) {
   if (profil().pin) verrouillerAccueil();
-  if (reglages.systeme.demanderProfil && reglages.profils.length > 1) ACTIONS.profils();
-  else if (verrouAccueil) setTimeout(exigerDeverrouillage, parametres.has("sans-intro") ? 0 : 1800);
+  // Sous l'ancienne intro, opaque, le choix du profil s'ouvrait tout de suite et le code
+  // attendait 1,8 s. Les deux attendent maintenant la fin réelle de l'intro.
+  if (reglages.systeme.demanderProfil && reglages.profils.length > 1) apresIntro(() => ACTIONS.profils());
+  else if (verrouAccueil) apresIntro(() => setTimeout(exigerDeverrouillage, 0));
 }
 
 // Mise au point : ?ecran=reglages&section=fond, ?ecran=meteo, ?theme=clair, ?motif=profondeur&fond=emeraude…
