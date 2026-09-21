@@ -305,7 +305,11 @@ etape_mesure() {
 poser_version() {
   local version_depot cible=/usr/local/share/hub/VERSION
   # safe.directory : lancé par sudo, git refuse un dépôt appartenant à l'utilisateur.
-  version_depot=$(git -c safe.directory='*' -C "$DEPOT/.." describe --always --dirty 2>/dev/null)
+  # --long est indispensable : pile sur un tag annoté (une release), `describe`
+  # rendrait sinon juste « v1.0.9 » sans hash — hub-mise-a-jour ne pourrait alors
+  # plus jamais reconnaître « déjà installé » face au hash distant, et proposerait
+  # de réinstaller la même version à l'infini (bug réel observé).
+  version_depot=$(git -c safe.directory='*' -C "$DEPOT/.." describe --always --dirty --long 2>/dev/null)
   # Une Ubuntu neuve n'a pas git : la révision se lit alors directement dans .git
   # (sans l'indication « -dirty », que seul git sait calculer).
   if [ -z "$version_depot" ] && [ -f "$DEPOT/../.git/HEAD" ]; then
