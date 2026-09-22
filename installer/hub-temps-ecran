@@ -260,6 +260,22 @@ def kodi_jsonrpc(methode, parametres=None, delai=2):
         return s.recv(4096)
 
 
+def kodi_en_veille(kodi=kodi_jsonrpc):
+    """Le mode TV ne doit pas compter pendant que l'écran de veille de Kodi occupe
+    l'écran : personne ne regarde. Kodi expose cet état par JSON-RPC (« TV » ne
+    veut pas dire que la TV elle-même est éteinte — CEC ne donne aucun état fiable
+    et continu pour ça ; le repli est l'écran de veille de Kodi lui-même, qui
+    s'ouvre après l'inactivité configurée dans ses réglages). Une erreur (Kodi qui
+    démarre encore, ou une requête concurrente) ne doit pas arrêter le décompte
+    pour de bon : on répond alors « pas en veille », comme avertir() le fait déjà
+    pour ses propres appels à Kodi."""
+    try:
+        reponse = json.loads(kodi("XBMC.GetInfoBooleans", {"booleans": ["System.ScreenSaverActive"]}))
+        return bool(reponse.get("result", {}).get("System.ScreenSaverActive"))
+    except (OSError, ValueError, AttributeError, TypeError):
+        return False
+
+
 def avertir(nature, minutes, mode, langue, executer=subprocess.Popen, kodi=kodi_jsonrpc):
     """Jamais bloquant, jamais fatal : un avertissement raté ne doit pas empêcher la coupure."""
     titre, detail = textes(nature, minutes, langue)
@@ -516,7 +532,14 @@ def main(arguments):
     if genre == "bureau":
         return suivre("bureau", c, demarrer=SansProcessus, en_pause=lambda: ambiant_bureau_affiche(c["ambiant"]))
     try:
-        return suivre(mode, c, demarrer=lambda: subprocess.Popen(programme, start_new_session=True))
+        # BUG CONFIRMÉ (rapporté 22/09/2026) : jusqu'ici en_pause n'était jamais
+        # passé sur ce chemin (seul le mode bureau l'avait, via ambiant_bureau_affiche
+        # ci-dessus) — le temps du mode TV et des autres modes lancés continuait
+        # donc à s'accumuler même quand personne ne regardait. Kodi seul (mode "tv")
+        # a un signal de veille exploitable ici ; les autres modes n'ont toujours
+        # rien d'équivalent, donc pas de en_pause pour eux tant que ça n'existe pas.
+        return suivre(mode, c, demarrer=lambda: subprocess.Popen(programme, start_new_session=True),
+                      en_pause=kodi_en_veille if mode == "tv" else None)
     except OSError as erreur:
         print(f"hub-temps-ecran : {erreur}", file=sys.stderr)
         return 127
