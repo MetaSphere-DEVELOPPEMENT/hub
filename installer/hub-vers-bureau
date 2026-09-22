@@ -9,14 +9,34 @@
 
 set -u
 
+# Écran d'attente AVANT tout le reste : le menu vient de se fermer (gnome-kiosk-script
+# attend sa fin pour lire le choix), donc sans cela la TV est déjà noire pendant
+# l'habillage, le choix de session et le démontage. Détaché, sinon il mourrait avec
+# ce script ; la fermeture de session l'emportera. Jamais bloquant : sans lui la
+# bascule doit quand même avoir lieu, on perd l'attente habillée, pas le bureau.
+transition=
+if [ -x /usr/local/bin/hub-transition ]; then
+  setsid /usr/local/bin/hub-transition >/dev/null 2>&1 &
+  transition=$!
+fi
+
+# Si la bascule échoue, cet écran doit disparaître : le laisser masquerait le menu
+# revenu derrière lui, et la TV semblerait figée pour de bon.
+retirer_transition() {
+  [ -n "$transition" ] && kill "$transition" 2>/dev/null
+}
+
 # Le fond et l'accent du profil, posés AVANT de fermer la session HUB : dconf est
 # commun aux deux sessions, et appliqués après, le bureau s'ouvrirait une seconde avec
-# l'ancien fond. Sauf apparence d'origine choisie dans le menu ; jamais bloquant.
+# l'ancien fond. C'est aussi ce qui fait que la reprise du bureau se fait déjà aux
+# couleurs du HUB, au lieu d'un noir brut le temps que GNOME se peigne.
+# Sauf apparence d'origine choisie dans le menu ; jamais bloquant.
 [ -e "$HOME/.config/hub/habillage-desactive" ] || /usr/local/bin/hub-theme bureau >/dev/null 2>&1
 
 if ! busctl call org.freedesktop.Accounts "/org/freedesktop/Accounts/User$(id -u)" \
      org.freedesktop.Accounts.User SetSession s ubuntu; then
   # Sans ce choix, la déconnexion rouvrirait le HUB : on reste plutôt dans le menu.
+  retirer_transition
   echo "hub-vers-bureau : impossible de choisir la session Ubuntu" >&2
   exit 1
 fi

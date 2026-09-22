@@ -356,6 +356,9 @@ etape_session() {
   poser_repertoire "$DEPOT/menu" /usr/local/share/hub/menu "${ajouts[@]}" || return 1
   poser_version || return 1
   poser "$DEPOT/hub-vers-bureau"          /usr/local/bin/hub-vers-bureau       0755 || return 1
+  # L'écran d'attente de la bascule. hub-vers-bureau ne le lance que s'il est
+  # exécutable : une installation où il manquerait bascule quand même, en silence.
+  poser "$DEPOT/hub-transition.py"        /usr/local/bin/hub-transition        0755 || return 1
   # hub-web à côté de hub-menu : le menu l'importe pour savoir quelles tuiles proposer,
   # et gnome-kiosk-script le lance pour le mode « web ».
   poser "$DEPOT/hub-web"                  /usr/local/bin/hub-web               0755 || return 1
