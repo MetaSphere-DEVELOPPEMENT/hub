@@ -186,7 +186,35 @@ class DepotLocal(unittest.TestCase):
         self.assertFalse(reponse["verifiable"])
         self.assertEqual(reponse["raison"], "signataires")
 
-    def test_version_signee_testee_sans_root_puis_installee(self):
+    def test_reinstallation_infinie_sur_un_commit_tague(self):
+        """Bug réel signalé : sur un HEAD qui tombe pile sur un tag annoté (le
+        cas d'une release, ex. v1.0.9), `git describe --always --dirty` SANS
+        `--long` rend juste « v1.0.9 » — aucun hash à comparer au commit distant,
+        donc `meme_commit` ne reconnaît jamais « déjà installé » et le bouton
+        Installer resterait proposé à l'infini. `poser_version` (hub-installer.sh)
+        doit donc toujours utiliser `--long` : seul ça garantit un `-g<hash>` même
+        pile sur un tag. Ce test fige le contrat entre les deux bouts (bash → VERSION
+        → Python) sans lancer le vrai script d'installation (racines /usr/local,
+        sudo)."""
+        c = self.commit()
+        git("tag", "-a", "v9.9.9", "-m", "release", cwd=self.source)
+
+        def installee_pour(texte):
+            with tempfile.NamedTemporaryFile("w", delete=False) as f:
+                f.write(texte + "\n")
+            return maj.version_installee(f.name)
+
+        sans_long = git("describe", "--always", "--dirty", cwd=self.source)
+        self.assertEqual(sans_long, "v9.9.9", "hypothèse du test : bien un tag annoté, exactement sur ce commit")
+        config = {"source": str(self.source), "branche": "main"}
+        self.assertTrue(maj.verifier(config, installee_pour(sans_long))["disponible"],
+                         "reproduit le bug : sans --long, « déjà installé » n'est jamais reconnu")
+
+        avec_long = git("describe", "--always", "--dirty", "--long", cwd=self.source)
+        self.assertFalse(maj.verifier(config, installee_pour(avec_long))["disponible"],
+                          "avec --long, le hash est bien présent même pile sur un tag : reconnu à jour")
+
+    def test_nouvelle_version_testee_puis_installee_pour_l_utilisateur(self):
         c = self.commit()
         self.assertEqual(self.appliquer(installee="0000000"), 0)
         self.assertEqual(self.installations, [(c, "samuel")])

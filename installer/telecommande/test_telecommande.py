@@ -975,9 +975,16 @@ class ServiceHTTPS(AvecDossier):
         self.assertEqual(self.requete("GET", "/", securise=True)[0], 200)
 
     def test_http_sur_le_port_https_ne_fait_pas_tomber_le_service(self):
+        # La pile TLS peut couper la connexion par un RST plutôt qu'une fermeture
+        # ordonnée face à un ClientHello invalide (comportement qui varie selon
+        # l'OS/la lib TLS) : ce n'est pas ce que ce test vérifie, seul compte que
+        # le service lui-même reste debout pour la requête suivante, ci-dessous.
         with socket.create_connection(("127.0.0.1", self.https), timeout=5) as s:
             s.sendall(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
-            s.recv(100)
+            try:
+                s.recv(100)
+            except (ConnectionResetError, BrokenPipeError, OSError):
+                pass
         self.assertEqual(self.requete("GET", "/", securise=True)[0], 200)
 
     def test_cle_privee_jamais_servie(self):
