@@ -381,6 +381,18 @@ class Tickets(AvecPointeur):
         self.assertEqual(self.ws(ticket).statut, 401)
 
 
+class SessionLongue(AvecPointeur):
+    def test_un_websocket_ouvert_survit_a_l_echeance_des_requetes(self):
+        # L'échéance d'une minute vaut pour une requête, pas pour la session de souris :
+        # une fois la poignée de main acceptée, c'est le gardien du pointeur qui veille.
+        for serveur in self.serveurs:
+            serveur.RequestHandlerClass.DELAI_REQUETE_S = 1
+        client = self.ouvrir_ws(self.appairer())
+        time.sleep(1.6)
+        client.envoyer({"t": "p", "n": 7})
+        self.assertEqual(client.recevoir(), {"t": "p", "n": 7}, "coupé par l'échéance de la requête")
+
+
 class ApresFermeture(AvecPointeur):
     """L'écran se verrouille, le gardien ferme : ce qui était déjà reçu ne doit pas
     rouvrir le clavier dans l'écran de connexion."""

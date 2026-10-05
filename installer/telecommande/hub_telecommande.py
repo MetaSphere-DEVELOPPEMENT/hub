@@ -854,7 +854,7 @@ class Appairage:
                 return FERME
             if len(self._essais) > 1000:
                 self._essais = {k: v for k, v in self._essais.items() if v and v[-1] > maintenant - 60}
-            recents = self._essais.setdefault(ip, deque())
+            recents = self._essais.setdefault(cle_adresse(ip), deque())
             while recents and recents[0] <= maintenant - 60:
                 recents.popleft()
             # Compter AVANT de comparer, et compter aussi les réussites : sinon le
@@ -883,7 +883,7 @@ class Appairage:
         with self._verrou:
             maintenant = self.horloge()
             attente = self._bloque_jusqua - maintenant
-            recents = self._essais.get(ip)
+            recents = self._essais.get(cle_adresse(ip))
             if recents and len(recents) >= ESSAIS_PAR_MINUTE:
                 attente = max(attente, recents[0] + 60 - maintenant)
             return max(1, math.ceil(attente))
@@ -2091,41 +2091,6 @@ def enregistrer_photo(dossier, octets, maintenant, espace_libre=_espace_libre):
         provisoire.unlink(missing_ok=True)
 
 
-class _LectureBornee:
-    """Le `rfile` du gestionnaire, sous un délai pour la requête ENTIÈRE.
-
-    Le délai de la socket (Gestionnaire.timeout) vaut par lecture : un client qui
-    envoyait un octet toutes les six secondes gardait sa place et son fil sans fin, et
-    quatre adresses du réseau suffisaient à remplir les deux ports (plafonds par
-    adresse et global). Chaque lecture rearme la socket sur ce qui reste du délai."""
-
-    def __init__(self, rfile, connexion, delai_lecture):
-        self._rfile, self._connexion, self._delai = rfile, connexion, delai_lecture
-        self._fin = None
-
-    def armer(self, delai_total):
-        self._fin = time.monotonic() + delai_total
-
-    def _avant(self):
-        if self._fin is None:
-            return
-        reste = self._fin - time.monotonic()
-        if reste <= 0:
-            raise TimeoutError("requête trop lente")
-        self._connexion.settimeout(min(reste, self._delai))
-
-    def readline(self, *args):
-        self._avant()
-        return self._rfile.readline(*args)
-
-    def read(self, *args):
-        self._avant()
-        return self._rfile.read(*args)
-
-    def __getattr__(self, nom):
-        return getattr(self._rfile, nom)
-
-
 def _gestionnaire(service):
     class Gestionnaire(BaseHTTPRequestHandler):
         server_version = "HUB"
@@ -2133,7 +2098,11 @@ def _gestionnaire(service):
         # Un client qui ouvre une connexion et n'envoie rien ne doit pas garder un fil.
         timeout = 10
         # Ni celui qui envoie au compte-gouttes : ligne, en-têtes et corps en une minute,
-        # photo de profil comprise (2 Mio au plus), sinon la connexion est fermée.
+        # photo de profil comprise (2 Mio au plus), sinon la connexion est coupée. Une
+        # échéance absolue, tenue par un minuteur qui ferme la socket : vérifier le temps
+        # entre deux lectures ne suffisait pas, un seul read() de 2 Mio ou un readline()
+        # sans fin de ligne enchaîne en interne autant de recv() qu'il faut, chacun sous
+        # le délai de 10 s — un octet toutes les six secondes tenait le fil des heures.
         DELAI_REQUETE_S = 60
 
         def setup(self):
@@ -2143,11 +2112,33 @@ def _gestionnaire(service):
                 self.request.settimeout(self.timeout)
                 self.request.do_handshake()
             super().setup()
-            self.rfile = _LectureBornee(self.rfile, self.connection, self.timeout)
+            self._echeance = None
+
+        def _armer_echeance(self, delai):
+            self._desarmer_echeance()
+            connexion, qui = self.connection, self.client_address[0]
+
+            def couper():
+                journal.debug("%s : requête trop lente, connexion coupée", qui)
+                try:
+                    connexion.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+            self._echeance = threading.Timer(delai, couper)
+            self._echeance.daemon = True
+            self._echeance.start()
+
+        def _desarmer_echeance(self):
+            minuterie, self._echeance = self._echeance, None
+            if minuterie is not None:
+                minuterie.cancel()
 
         def handle_one_request(self):
-            self.rfile.armer(self.DELAI_REQUETE_S)
-            super().handle_one_request()
+            self._armer_echeance(self.DELAI_REQUETE_S)
+            try:
+                super().handle_one_request()
+            finally:
+                self._desarmer_echeance()
 
         @property
         def securise(self):
@@ -2328,6 +2319,9 @@ def _gestionnaire(service):
             if session is None:
                 return self._json(403, {"erreur": "pointeur", "raison": raison})
             self.close_connection = True
+            # Une session de souris dure légitimement bien plus qu'une requête : l'échéance
+            # de la requête s'arrête ici, le gardien du pointeur prend le relais.
+            self._desarmer_echeance()
             # Écrit à la main : http.server répondrait « HTTP/1.0 101 », que les
             # navigateurs refusent pour un WebSocket.
             self.connection.sendall(("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
@@ -2623,6 +2617,21 @@ def _gestionnaire(service):
     return Gestionnaire
 
 
+def cle_adresse(ip):
+    """La clé des plafonds « par adresse » : l'adresse IPv4 telle quelle, le réseau /64 en
+    IPv6. Une seule machine du réseau dispose de milliards d'adresses dans son /64 : un
+    plafond par adresse exacte ne la gênerait pas."""
+    try:
+        adresse = ipaddress.ip_address(str(ip).split("%", 1)[0])
+    except ValueError:
+        return str(ip)
+    if adresse.version == 6:
+        if adresse.ipv4_mapped:
+            return str(adresse.ipv4_mapped)
+        return str(ipaddress.ip_network((adresse, 64), strict=False))
+    return str(adresse)
+
+
 class Serveur(ThreadingHTTPServer):
     daemon_threads = True
     # Pas de SO_REUSEPORT : un second service lancé par erreur doit échouer bruyamment
@@ -2637,6 +2646,7 @@ class Serveur(ThreadingHTTPServer):
         super().__init__(*args, **kwargs)
 
     def _reserver(self, ip):
+        ip = cle_adresse(ip)
         with self._verrou_places:
             if sum(self._places.values()) >= self.max_connexions or self._places.get(ip, 0) >= self.max_par_ip:
                 return False
@@ -2644,6 +2654,7 @@ class Serveur(ThreadingHTTPServer):
             return True
 
     def _liberer(self, ip):
+        ip = cle_adresse(ip)
         with self._verrou_places:
             reste = self._places.get(ip, 0) - 1
             if reste > 0:

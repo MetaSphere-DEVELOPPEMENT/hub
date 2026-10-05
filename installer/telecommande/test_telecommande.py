@@ -530,38 +530,76 @@ class Connexions(AvecServeur):
         self.assertEqual(self.serveur._places, {}, "chaque fil rend sa place")
         self.assertEqual(self.requete("GET", "/")[0], 200)
 
-    def test_une_connexion_au_compte_gouttes_rend_sa_place(self):
-        # Le délai de la socket est par lecture : un octet toutes les secondes le
-        # contournait et la place restait prise sans fin. Le délai de la requête
-        # entière, lui, finit par fermer.
-        self.serveur.RequestHandlerClass.DELAI_REQUETE_S = 1.5
+    def goutte_a_goutte(self, octets, pas=0.3, pendant=4):
+        """Envoie `octets` un par un ; rend True si le service a coupé avant la fin."""
         lente = socket.create_connection(("127.0.0.1", self.port), timeout=5)
         try:
-            fin = time.monotonic() + 4
-            fermee = False
-            for octet in b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Lent: ":
+            fin = time.monotonic() + pendant
+            for octet in octets:
                 if time.monotonic() > fin:
                     break
                 try:
                     lente.sendall(bytes([octet]))
                 except OSError:
-                    fermee = True
-                    break
-                time.sleep(0.3)
-            if not fermee:
-                lente.settimeout(3)
-                try:
-                    fermee = lente.recv(100) == b""
-                except OSError:
-                    fermee = True
-            self.assertTrue(fermee, "le service devait fermer la connexion trop lente")
+                    return True
+                time.sleep(pas)
+            lente.settimeout(3)
+            try:
+                return lente.recv(100) == b""
+            except OSError:
+                return True
         finally:
             lente.close()
+
+    def attendre_places_rendues(self):
         fin = time.monotonic() + 5
         while self.serveur._places and time.monotonic() < fin:
             time.sleep(0.01)
         self.assertEqual(self.serveur._places, {}, "la place est rendue")
         self.assertEqual(self.requete("GET", "/")[0], 200)
+
+    def test_une_ligne_de_requete_au_compte_gouttes_rend_sa_place(self):
+        # Le délai de la socket est par lecture : un octet toutes les secondes le
+        # contournait et la place restait prise sans fin. L'échéance de la requête
+        # entière, elle, coupe — y compris au milieu d'une ligne jamais terminée.
+        self.serveur.RequestHandlerClass.DELAI_REQUETE_S = 1.5
+        self.assertTrue(self.goutte_a_goutte(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Lent: " + b"a" * 200),
+                        "le service devait couper la ligne trop lente")
+        self.attendre_places_rendues()
+
+    def test_un_corps_au_compte_gouttes_rend_sa_place(self):
+        # readline() ou read(n) enchaînent les recv() en interne : seule une échéance
+        # absolue par connexion coupe un corps qui arrive octet par octet.
+        self.serveur.RequestHandlerClass.DELAI_REQUETE_S = 1.5
+        entete = b"POST /api/commande HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: 200\r\n\r\n"
+        lente = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+        try:
+            lente.sendall(entete)
+        finally:
+            lente.close()
+        self.assertTrue(self.goutte_a_goutte(entete + b'{"nom": "' + b"a" * 190), "le service devait couper le corps trop lent")
+        self.attendre_places_rendues()
+
+    def test_les_adresses_d_un_meme_reseau_ipv6_partagent_le_plafond(self):
+        self.assertEqual(T.cle_adresse("192.168.1.40"), "192.168.1.40")
+        self.assertEqual(T.cle_adresse("2001:db8:1:2:aaaa::1"), "2001:db8:1:2::/64")
+        self.assertEqual(T.cle_adresse("2001:db8:1:2:bbbb::7"), "2001:db8:1:2::/64")
+        self.assertEqual(T.cle_adresse("fe80::1%eth0"), "fe80::/64")
+        self.assertEqual(T.cle_adresse("::ffff:10.0.0.3"), "10.0.0.3")
+        self.assertEqual(T.cle_adresse("pas une adresse"), "pas une adresse")
+        self.serveur.max_par_ip = 2
+        self.assertTrue(self.serveur._reserver("2001:db8:1:2::1"))
+        self.assertTrue(self.serveur._reserver("2001:db8:1:2::2"))
+        self.assertFalse(self.serveur._reserver("2001:db8:1:2:ffff::3"), "même /64 : même plafond")
+        self.assertTrue(self.serveur._reserver("2001:db8:1:3::1"), "autre /64")
+        for ip in ("2001:db8:1:2::1", "2001:db8:1:2::2", "2001:db8:1:3::1"):
+            self.serveur._liberer(ip)
+        self.assertEqual(self.serveur._places, {})
+        # Et les essais de code aussi.
+        self.service.fenetre.ouvrir()
+        for _ in range(T.ESSAIS_PAR_MINUTE):
+            self.service.appairage.essayer("2001:db8:1:2::1", "000000")
+        self.assertEqual(self.service.appairage.essayer("2001:db8:1:2:dead::beef", "000000"), T.TROP)
 
     def test_plafond_global(self):
         self.serveur.max_connexions = 2
