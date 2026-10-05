@@ -34,6 +34,10 @@
 Description=HUB : télécommande téléphone (page web sur le réseau local, port 8790)
 Documentation=file:///usr/local/lib/hub/telecommande/README.md
 After=graphical-session.target
+# Sans cette ligne, cinq chutes en dix secondes (disque plein au démarrage, adresse
+# invalide) et systemd abandonnait l'unité pour de bon : plus de télécommande jusqu'au
+# prochain redémarrage, en contradiction avec Restart=always.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple

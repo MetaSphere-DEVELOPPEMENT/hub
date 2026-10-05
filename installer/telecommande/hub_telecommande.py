@@ -472,6 +472,21 @@ def ecrire_prive(chemin, texte):
         raise
 
 
+def _poser_public(source, chemin):
+    """Copie un certificat à sa place d'un seul coup (copie à côté, puis renommage) :
+    un .crt tronqué par une coupure laissait le HTTPS en panne jusqu'à ce qu'on efface
+    le dossier à la main, alors que les clés, elles, étaient déjà posées d'un bloc."""
+    chemin = Path(chemin)
+    provisoire = chemin.with_name(f".{chemin.name}.{os.getpid()}.tmp")
+    try:
+        shutil.copyfile(source, provisoire)
+        os.chmod(provisoire, 0o644)
+        os.replace(provisoire, chemin)
+    except BaseException:
+        Path(provisoire).unlink(missing_ok=True)
+        raise
+
+
 def _empreinte(jeton):
     # On ne garde que l'empreinte : une copie du fichier (sauvegarde, dépôt par erreur)
     # ne donne pas la télécommande. Un jeton de 256 bits n'a pas besoin de sel.
@@ -1210,6 +1225,13 @@ class Pointeur:
     # ── Le périphérique ──
     def _ouvrir(self):
         if self._peripherique is None:
+            # Recréer le périphérique, c'est rouvrir le clavier : les conditions du
+            # système (écran verrouillé, session en arrière-plan) sont revérifiées ici
+            # même, pas seulement par le gardien toutes les demi-secondes — une trame
+            # arrivée entre les deux écrivait sinon dans l'écran de connexion.
+            raison = self._refus_systeme()
+            if raison:
+                raise POINTEUR.PointeurIndisponible(raison)
             peripherique = self.fabrique()
             peripherique.ouvrir()
             self._peripherique = peripherique
@@ -1330,6 +1352,10 @@ class Pointeur:
     def message(self, session, contenu):
         """Traite un message de la page ; rend la réponse à lui envoyer, ou None."""
         session.recus += 1
+        # Session arrêtée (verrouillage, révocation) : plus rien n'est joué, même ce qui
+        # était déjà lu quand le drapeau a été levé.
+        if session.raison_fin:
+            return None
         try:
             m = json.loads(contenu.decode("utf-8"))
         except (ValueError, UnicodeDecodeError):
@@ -1371,6 +1397,10 @@ class _FluxPointeur:
         self.dernier = time.monotonic()
 
     def read(self, n):
+        # Avant de servir le tampon aussi : une trame déjà reçue ne vaut pas plus qu'une
+        # trame à venir une fois la session arrêtée.
+        if self.session.raison_fin:
+            raise EOFError
         while len(self.tampon) < n:
             if self.session.raison_fin:
                 raise EOFError
@@ -1603,8 +1633,7 @@ class AutoriteLocale:
             cle.unlink(missing_ok=True)
             raise
         os.replace(cle, self.racine_cle)
-        shutil.copyfile(crt, self.racine_crt)
-        os.chmod(self.racine_crt, 0o644)
+        _poser_public(crt, self.racine_crt)
         # Une nouvelle racine rend l'ancien certificat du HUB orphelin.
         self.fiche.unlink(missing_ok=True)
         journal.info("autorité locale créée, empreinte SHA-256 %s", self.empreinte())
@@ -1634,7 +1663,7 @@ class AutoriteLocale:
             cle.unlink(missing_ok=True)
             raise
         os.replace(cle, self.cle)
-        shutil.copyfile(crt, self.crt)
+        _poser_public(crt, self.crt)
         fin = self._commande("x509", "-in", self.crt, "-noout", "-enddate").strip()
         expire = ssl.cert_time_to_seconds(fin.split("=", 1)[1])
         ecrire_prive(self.fiche, json.dumps({"adresse": adresse, "noms": noms, "expire": expire,
@@ -1917,6 +1946,16 @@ class Service:
             self._tickets[_empreinte(ticket)] = (maintenant + (duree or DUREE_TICKET_S), ident, nature)
         return ticket
 
+    def ticket_connu(self, ticket, nature="transfert"):
+        """Le ticket vaut-il encore, sans le consommer ? Sert à répondre 401 à qui n'en a
+        pas de valable avant même de juger sa poignée de main — et à ne brûler le ticket
+        qu'une fois celle-ci acceptée."""
+        if not isinstance(ticket, str) or not 20 <= len(ticket) <= 200:
+            return False
+        with self._verrou_tickets:
+            trouve = self._tickets.get(_empreinte(ticket))
+        return trouve is not None and trouve[0] > self.horloge() and trouve[2] == nature
+
     def consommer_ticket(self, ticket, nature="transfert"):
         """{"id": identifiant du téléphone} si le ticket vaut encore, sinon None. Présenté
         au mauvais guichet, il est brûlé quand même."""
@@ -2052,12 +2091,50 @@ def enregistrer_photo(dossier, octets, maintenant, espace_libre=_espace_libre):
         provisoire.unlink(missing_ok=True)
 
 
+class _LectureBornee:
+    """Le `rfile` du gestionnaire, sous un délai pour la requête ENTIÈRE.
+
+    Le délai de la socket (Gestionnaire.timeout) vaut par lecture : un client qui
+    envoyait un octet toutes les six secondes gardait sa place et son fil sans fin, et
+    quatre adresses du réseau suffisaient à remplir les deux ports (plafonds par
+    adresse et global). Chaque lecture rearme la socket sur ce qui reste du délai."""
+
+    def __init__(self, rfile, connexion, delai_lecture):
+        self._rfile, self._connexion, self._delai = rfile, connexion, delai_lecture
+        self._fin = None
+
+    def armer(self, delai_total):
+        self._fin = time.monotonic() + delai_total
+
+    def _avant(self):
+        if self._fin is None:
+            return
+        reste = self._fin - time.monotonic()
+        if reste <= 0:
+            raise TimeoutError("requête trop lente")
+        self._connexion.settimeout(min(reste, self._delai))
+
+    def readline(self, *args):
+        self._avant()
+        return self._rfile.readline(*args)
+
+    def read(self, *args):
+        self._avant()
+        return self._rfile.read(*args)
+
+    def __getattr__(self, nom):
+        return getattr(self._rfile, nom)
+
+
 def _gestionnaire(service):
     class Gestionnaire(BaseHTTPRequestHandler):
         server_version = "HUB"
         sys_version = ""
         # Un client qui ouvre une connexion et n'envoie rien ne doit pas garder un fil.
         timeout = 10
+        # Ni celui qui envoie au compte-gouttes : ligne, en-têtes et corps en une minute,
+        # photo de profil comprise (2 Mio au plus), sinon la connexion est fermée.
+        DELAI_REQUETE_S = 60
 
         def setup(self):
             # La poignée de main TLS a lieu ici, dans le fil de la connexion et sous son
@@ -2066,6 +2143,11 @@ def _gestionnaire(service):
                 self.request.settimeout(self.timeout)
                 self.request.do_handshake()
             super().setup()
+            self.rfile = _LectureBornee(self.rfile, self.connection, self.timeout)
+
+        def handle_one_request(self):
+            self.rfile.armer(self.DELAI_REQUETE_S)
+            super().handle_one_request()
 
         @property
         def securise(self):
@@ -2218,15 +2300,19 @@ def _gestionnaire(service):
             délivré à l'instant, en https, à un téléphone qui y avait droit."""
             protocoles = [p.strip() for p in (self.headers.get("Sec-WebSocket-Protocol") or "").split(",")]
             ticket = next((p[7:] for p in protocoles if p.startswith("ticket.")), None)
-            porteur = service.consommer_ticket(ticket, "pointeur")
-            if porteur is None or porteur["id"] not in service.jetons.identifiants():
+            if not service.ticket_connu(ticket, "pointeur"):
                 return self._json(401, {"erreur": "ticket"})
             cle = self.headers.get("Sec-WebSocket-Key") or ""
+            # La forme de la poignée de main avant de consommer : une requête bancale ne
+            # doit pas brûler le ticket que la page s'apprête à présenter correctement.
             if (self.command != "GET" or (self.headers.get("Upgrade") or "").lower() != "websocket"
                     or "upgrade" not in (self.headers.get("Connection") or "").lower()
                     or self.headers.get("Sec-WebSocket-Version") != "13"
                     or not re.fullmatch(r"[A-Za-z0-9+/]{22}==", cle) or "hub-pointeur" not in protocoles):
                 return self._json(400, {"erreur": "websocket"})
+            porteur = service.consommer_ticket(ticket, "pointeur")
+            if porteur is None or porteur["id"] not in service.jetons.identifiants():
+                return self._json(401, {"erreur": "ticket"})
             # Un WebSocket échappe à CORS : n'importe quelle page peut en ouvrir un vers
             # le HUB. L'origine doit donc être la nôtre, exactement — en plus du Host
             # (rebinding) et de Sec-Fetch-Site, déjà vérifiés par _admis.
@@ -2384,7 +2470,10 @@ def _gestionnaire(service):
             if "transfert" in corps:
                 # Seulement sur l'origine https : c'est tout l'objet du transfert.
                 porteur = service.consommer_ticket(corps.get("transfert")) if self.securise else None
-                if porteur is None:
+                # Le ticket vit deux minutes ; « Retirer » sur la TV a pu passer entre-temps.
+                # Sans cette relecture, un téléphone retiré revenait par la porte https avec
+                # un jeton neuf, sans code ni fenêtre d'appairage.
+                if porteur is None or porteur["id"] not in service.jetons.identifiants():
                     journal.info("transfert refusé depuis %s", ip)
                     return self._json(403, {"erreur": "transfert"})
                 # Le même téléphone, sur son autre origine : il garde son entrée ET son

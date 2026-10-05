@@ -260,6 +260,8 @@ souris_telecommande "$d/absent" /usr/local/lib/hub; echo "SANS $?"
     def test_l_unite_reste_sans_privileges(self):
         unite = (TEL / "hub-telecommande.service").read_text(encoding="utf-8")
         self.assertIn("NoNewPrivileges=yes", self.lignes_actives(unite))
+        # Restart=always ne vaut rien si systemd abandonne l'unité après cinq chutes rapprochées.
+        self.assertIn("StartLimitIntervalSec=0", self.lignes_actives(unite))
 
 
 if __name__ == "__main__":

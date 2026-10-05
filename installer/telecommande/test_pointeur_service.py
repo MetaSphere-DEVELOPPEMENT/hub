@@ -365,8 +365,11 @@ class Tickets(AvecPointeur):
 
     def test_poignee_de_main_incomplete(self):
         jeton = self.appairer()
-        client = self.ws(self.ticket(jeton), entetes={"Sec-WebSocket-Version": "8"})
+        ticket = self.ticket(jeton)
+        client = self.ws(ticket, entetes={"Sec-WebSocket-Version": "8"})
         self.assertEqual(client.statut, 400)
+        # Une requête bancale ne brûle pas le ticket : la page le présente ensuite correctement.
+        self.assertEqual(self.ws(ticket).statut, 101, "le ticket a été consommé par la poignée de main refusée")
         # Sans le protocole « hub-pointeur », ce n'est pas la page.
         client = self.ws(None, protocoles=["ticket." + self.ticket(jeton)])
         self.assertEqual(client.statut, 400)
@@ -376,6 +379,38 @@ class Tickets(AvecPointeur):
         ticket = self.ticket(jeton)
         self.service.jetons.revoquer_tout()
         self.assertEqual(self.ws(ticket).statut, 401)
+
+
+class ApresFermeture(AvecPointeur):
+    """L'écran se verrouille, le gardien ferme : ce qui était déjà reçu ne doit pas
+    rouvrir le clavier dans l'écran de connexion."""
+
+    def creations(self):
+        return sum(1 for requete, _a in self.noyau.ioctls if requete == P.UI_DEV_CREATE)
+
+    def test_une_trame_deja_recue_ne_recree_pas_le_peripherique(self):
+        jeton = self.appairer()
+        ident = self.service.jetons.valide(jeton)
+        self.service.pointeur.DUREE_GARDE_S = -1
+        session, raison = self.service.pointeur.ouvrir_session(ident)
+        self.assertIsNone(raison)
+        self.assertEqual(self.creations(), 1)
+        self.session = bloc(LockedHint="yes")
+        self.service.pointeur.fermer("session-verrouillee")
+        self.assertEqual(session.raison_fin, "session-verrouillee")
+        self.noyau.ecrits.clear()
+        # La trame était dans le tampon quand le drapeau a été levé : elle n'est plus lue…
+        trame = b"\x81\x92" + b"\0\0\0\0" + b'{"t":"k","n":"ok"}'
+        flux = T._FluxPointeur(None, session, self.service.pointeur, deja=trame)
+        with self.assertRaises(EOFError):
+            P.lire_trame(flux, T.TRAME_POINTEUR_MAX)
+        # … et déjà lue, elle n'est pas jouée non plus.
+        self.assertIsNone(self.service.pointeur.message(session, b'{"t":"k","n":"ok"}'))
+        self.assertEqual(self.creations(), 1, "le périphérique a été recréé écran verrouillé")
+        self.assertEqual(self.noyau.ecrits, [])
+        # Une session neuve n'ouvre rien non plus tant que l'écran est verrouillé.
+        self.assertEqual(self.service.pointeur.ouvrir_session(ident), (None, "session-verrouillee"))
+        self.assertEqual(self.creations(), 1)
 
 
 class Gestes(AvecPointeur):

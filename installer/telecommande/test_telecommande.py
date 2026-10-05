@@ -530,6 +530,39 @@ class Connexions(AvecServeur):
         self.assertEqual(self.serveur._places, {}, "chaque fil rend sa place")
         self.assertEqual(self.requete("GET", "/")[0], 200)
 
+    def test_une_connexion_au_compte_gouttes_rend_sa_place(self):
+        # Le délai de la socket est par lecture : un octet toutes les secondes le
+        # contournait et la place restait prise sans fin. Le délai de la requête
+        # entière, lui, finit par fermer.
+        self.serveur.RequestHandlerClass.DELAI_REQUETE_S = 1.5
+        lente = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+        try:
+            fin = time.monotonic() + 4
+            fermee = False
+            for octet in b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Lent: ":
+                if time.monotonic() > fin:
+                    break
+                try:
+                    lente.sendall(bytes([octet]))
+                except OSError:
+                    fermee = True
+                    break
+                time.sleep(0.3)
+            if not fermee:
+                lente.settimeout(3)
+                try:
+                    fermee = lente.recv(100) == b""
+                except OSError:
+                    fermee = True
+            self.assertTrue(fermee, "le service devait fermer la connexion trop lente")
+        finally:
+            lente.close()
+        fin = time.monotonic() + 5
+        while self.serveur._places and time.monotonic() < fin:
+            time.sleep(0.01)
+        self.assertEqual(self.serveur._places, {}, "la place est rendue")
+        self.assertEqual(self.requete("GET", "/")[0], 200)
+
     def test_plafond_global(self):
         self.serveur.max_connexions = 2
         self.assertTrue(self.serveur._reserver("10.0.0.1"))
@@ -1271,6 +1304,20 @@ class ServiceHTTPS(AvecDossier):
         self.assertEqual(len(self.service.jetons.lister()), 1, "le transfert a créé un doublon")
         self.assertEqual(self.requete("GET", "/api/etat", jeton=jeton_http)[0], 200)
         self.assertEqual(self.requete("POST", "/api/appairer", {"transfert": ticket}, securise=True)[0], 403)
+
+    def test_transfert_refuse_pour_un_telephone_retire_entre_temps(self):
+        # Le ticket vit deux minutes ; on retire le téléphone sur la TV entre sa demande
+        # et sa présentation : il ne doit pas revenir par la porte https.
+        _s, _h, rep = self.requete("POST", "/api/appairer", {"code": self.service.appairage.code, "nom": "Invité"})
+        jeton_http, ident = rep["jeton"], rep["id"]
+        statut, _h, rep = self.requete("POST", "/api/transfert", {}, jeton=jeton_http)
+        self.assertEqual(statut, 200)
+        ticket = rep["url"].split("=", 1)[1]
+        self.assertTrue(T.Jetons(self.chemins["jetons"]).revoquer(ident), "retiré comme le fait hub-telecommande --revoquer")
+        self.assertEqual(self.requete("GET", "/api/etat", jeton=jeton_http)[0], 401)
+        statut, _h, rep = self.requete("POST", "/api/appairer", {"transfert": ticket, "nom": "Invité"}, securise=True)
+        self.assertEqual((statut, rep), (403, {"erreur": "transfert"}))
+        self.assertEqual(self.service.jetons.lister(), [], "aucune entrée recréée")
 
     def test_ticket_expire(self):
         ticket = self.service.creer_ticket()
