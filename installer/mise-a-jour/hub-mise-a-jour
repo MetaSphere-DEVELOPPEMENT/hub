@@ -137,8 +137,9 @@ def lire_config(chemin=CONFIG):
 
 def lire_version(chemin=VERSION_INSTALLEE):
     """(numéro lisible, empreinte du commit). L'installateur écrit trois lignes :
-    « 1.0.0 », `git describe --always --dirty`, la date. Un fichier d'une seule ligne
-    vient d'une version antérieure au numéro : c'était l'empreinte seule.
+    « 1.0.0 », `git describe --always --dirty --long` (« v1.0.0-0-g3eb4bf5 » : la forme
+    longue porte l'empreinte même pile sur l'étiquette), la date. Un fichier d'une seule
+    ligne vient d'une version antérieure au numéro : c'était l'empreinte seule.
 
     LE NUMÉRO N'EST QU'UNE ÉTIQUETTE. Tout ce qui décide (est-on à jour ? qu'installe-t-on ?
     qu'a-t-on signé ?) se fait sur l'empreinte, jamais sur lui : un dépôt hostile écrirait

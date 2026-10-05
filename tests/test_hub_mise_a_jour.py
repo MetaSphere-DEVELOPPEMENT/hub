@@ -22,7 +22,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-chemin = Path(__file__).resolve().parent.parent / "installer" / "mise-a-jour" / "hub-mise-a-jour"
+RACINE = Path(__file__).resolve().parent.parent
+chemin = RACINE / "installer" / "mise-a-jour" / "hub-mise-a-jour"
 chargeur = importlib.machinery.SourceFileLoader("hub_mise_a_jour", str(chemin))
 spec = importlib.util.spec_from_loader("hub_mise_a_jour", chargeur)
 maj = importlib.util.module_from_spec(spec)
@@ -294,6 +295,33 @@ class DepotLocal(unittest.TestCase):
         return maj.appliquer(config, "samuel", dossier_versions=self.versions, etat=self.etats.append,
                              lancer=self.lancer, installee=installee, signataires=self.signataires, tests=self.lancer_les_tests,
                              attendre=self.pauses.append)
+
+    def test_une_version_installee_pile_sur_son_etiquette_est_reconnue_a_jour(self):
+        """Vu sur la 1.0.15 : l'étiquette v1.0.15 est posée sur le commit même que le HUB
+        clone, et `git describe --always --dirty` y rend « v1.0.15 », sans empreinte. Lu
+        tel quel dans /usr/local/share/hub/VERSION, rien ne pouvait plus égaler le commit
+        distant : le menu annonçait la même version sans fin. L'installateur doit écrire
+        la forme longue, qui porte toujours l'empreinte, et hub-mise-a-jour doit la lire."""
+        self.commit()
+        git("tag", "-a", "v9.9.9", "-m", "9.9.9", cwd=self.source)
+        config = {"source": str(self.source), "branche": "main"}
+
+        def installee_pour(ligne):
+            fichier = Path(self._tmp.name) / "VERSION"
+            fichier.write_text(f"9.9.9\n{ligne}\n2026-10-06\n")
+            return maj.version_installee(fichier)
+
+        courte = git("describe", "--always", "--dirty", cwd=self.source)
+        self.assertEqual(courte, "v9.9.9", "le cas du défaut : pile sur l'étiquette, pas d'empreinte")
+        self.assertTrue(maj.verifier(config, installee_pour(courte), signataires=self.signataires)["disponible"],
+                        "sans empreinte, « déjà installé » n'est jamais reconnu")
+        longue = git("describe", "--always", "--dirty", "--long", cwd=self.source)
+        self.assertRegex(longue, r"^v9\.9\.9-0-g[0-9a-f]{7,}$")
+        self.assertFalse(maj.verifier(config, installee_pour(longue), signataires=self.signataires)["disponible"],
+                         "avec l'empreinte, la version installée est reconnue à jour")
+        # Le contrat tient aux deux bouts : c'est bien la forme longue que l'installateur écrit.
+        installateur = (RACINE / "installer" / "hub-installer.sh").read_text(encoding="utf-8")
+        self.assertRegex(installateur, r"describe --always --dirty --long")
 
     def test_verifier_compare_au_commit_installe(self):
         c = self.commit()

@@ -1132,7 +1132,7 @@ def lire_version(chemin=VERSION_INSTALLEE):
     """Le numéro lisible, l'empreinte du commit et la date de la version installée.
 
     L'installateur écrit trois lignes : « 1.0.0 », l'empreinte (`git describe --always
-    --dirty`), « 2026-09-17 ». Un fichier d'une seule ligne vient d'une version
+    --dirty --long`, « v1.0.0-0-g3eb4bf5 »), « 2026-09-17 ». Un fichier d'une seule ligne vient d'une version
     antérieure au numéro : c'était l'empreinte seule, et on la garde plutôt que de
     prétendre ne rien savoir. LE NUMÉRO NE PROUVE RIEN : c'est l'empreinte que la
     signature du commit protège, et c'est elle que compare la mise à jour."""
