@@ -34,8 +34,9 @@ ambiant (horloge, météo et cadre photo s'il est activé).
   le BIOS Lenovo (F1 au démarrage), vérifier *Power → Automatic Power On* : l'alarme
   logicielle doit y être permise. Contrôle : `sudo rtcwake -m off -s 120` doit
   rallumer la machine deux minutes après l'avoir éteinte.
-- **La TV ne s'allume pas avec le HUB** : pas de HDMI-CEC sur cette machine
-  (ARCHITECTURE.md). Le mode ambiant attend donc qu'on allume la TV.
+- **La TV ne s'allume avec le HUB qu'avec un adaptateur HDMI-CEC** (`installer/cec`) : la
+  machine n'en a pas en propre (ARCHITECTURE.md). Sans adaptateur, le mode ambiant attend
+  qu'on allume la TV.
 - L'extinction programmée éteint même en plein film, comme le minuteur de veille.
 
 ## Allumer le HUB à distance : Wake-on-LAN

@@ -47,11 +47,13 @@ Sources lues le 17/09/2026 (gitlab.gnome.org, étiquettes `50.0`) : l'en-tête d
 moins de 5 min d'ambiant, `hub-veille-bureau` le **relève** à délai + 15 min (25 min pour 10)
 et l'écrit dans le journal. Il ne le baisse jamais et laisse « Jamais » (0) tel quel. **Le
 verrouillage suit le réglage du HUB** (`systeme.verrouBureau`, Réglages → Veille et minuteur →
-« Verrouiller le bureau ») : désactivé par défaut — sur une TV de salon, le code des profils
-est le verrou, et un mot de passe au clavier devant la TV, c'est l'ordinateur qui
-réapparaît (décision du 21/09/2026) ; un foyer qui le veut l'active là, et `lock-enabled`
-est remis à `true` à l'ouverture suivante du bureau. Une mise en veille automatique réglée
-avant l'écran noir est signalée dans le journal, pas modifiée.
+« Verrouiller le bureau ») : un HUB neuf part sur « non » — sur une TV de salon, le code des
+profils est le verrou, et un mot de passe au clavier devant la TV, c'est l'ordinateur qui
+réapparaît (décision du 21/09/2026) ; un foyer qui le veut choisit « oui ». Tant que personne
+n'a choisi (HUB installé avant ce réglage), **rien n'est écrit** : GNOME garde son verrou.
+Sous un profil restreint (mode interdit, temps d'écran), le verrou est tenu quel que soit le
+réglage. Une mise en veille automatique réglée avant l'écran noir est signalée dans le
+journal, pas modifiée.
 
 Ce réglage vit ici et pas dans `hub-theme` : `hub-theme` est l'habillage, qu'on désactive
 et « restaure » depuis le menu ; le délai d'écran noir n'est pas de l'apparence et dépend

@@ -1,7 +1,9 @@
 # Architecture du HUB
 
-État au 12 septembre 2026. Repose sur `audit/rapport-2026-09-12-machine-de-travail.md`,
-mesuré avant la réinstallation.
+Écrit le 12 septembre 2026 sur `audit/rapport-2026-09-12-machine-de-travail.md`, mesuré
+avant la réinstallation ; complété au fil des chantiers (dates dans chaque section), relu
+le 6 octobre 2026. Les cases à cocher vides sont des mesures qui n'existent qu'une fois la
+machine à sa place : elles ne se remplissent pas au jugé.
 
 ## La machine
 
@@ -159,13 +161,20 @@ une ; « revenir au HUB » est la fin normale d'une session.
 | Mode | Ce qui tourne | Retour au HUB |
 |---|---|---|
 | **HUB** | un menu plein écran, lancé automatiquement | — |
-| **TV** | Kodi, lancé dans la session HUB | Kodi quitte (Accueil ou F12) |
-| **Gaming** | client de streaming en plein écran | le client quitte |
-| **Desktop** | session GNOME normale | déconnexion |
+| **TV** | Kodi, lancé dans la session HUB à travers `hub-temps-ecran` | Kodi quitte (Accueil ou F12), ou le temps d'écran l'arrête |
+| **Streaming et jeux** (`web`) | Google Chrome en kiosque sur un service (Netflix, GeForce NOW…), lancé par `hub-web` | F12, Échap maintenue, manette, « Accueil » du téléphone ou de la voix |
+| **Bureau** | session GNOME normale, choisie pour la connexion suivante par `hub-vers-bureau` ; `hub-transition` tient l'écran pendant la bascule | déconnexion (« Retour au HUB » dans le dock) |
+| **Arrêt, redémarrage** | `systemctl poweroff` / `reboot` par la session | — |
+
+La « carte Jeux » n'est pas un mode : elle ouvre le sous-écran des services de jeu en
+nuage, qui partent tous en `web`. Le mode ambiant (grande horloge) et la veille machine
+vivent dans le menu lui-même.
 
 Aucun mode ne dépend des autres : si Kodi casse, le HUB et le reste vivent. Et le
 retour au HUB n'est pas un bricolage — c'est le comportement du gestionnaire de
-session, qu'on ne réécrit pas.
+session, qu'on ne réécrit pas. Depuis le 06/10/2026, cette boucle sait aussi attendre :
+un menu qui meurt au démarrage est relancé de plus en plus tard (1 → 30 s) derrière un
+écran qui le dit, au lieu de clignoter chaque seconde.
 
 ## La session kiosque, éprouvée en machine virtuelle
 
@@ -189,7 +198,7 @@ La première version de l'installateur visait exactement cela.
 | Réglages du menu | `~/.config/hub/reglages.json` | écrit par le menu ; l'installateur ne l'écrase jamais |
 | Kodi | `kodi --windowing=wayland` dans la session | client Wayland ordinaire, mis plein écran par le compositeur |
 | Retour depuis Kodi | `~/.kodi/userdata/keymaps/hub.xml` | Accueil et F12 → `Quit` ; noms de touches lus dans les sources de Kodi 21.3 |
-| Bureau | `hub-vers-bureau` | le bureau GNOME ne tourne pas dans un kiosque : on choisit la session `ubuntu` pour la connexion suivante (AccountsService `SetSession`) et on ferme la session HUB |
+| Bureau | `hub-vers-bureau`, `hub-transition` | le bureau GNOME ne tourne pas dans un kiosque : on choisit la session `ubuntu` pour la connexion suivante (AccountsService `SetSession`) et on ferme la session HUB ; `hub-transition` (GTK) tient l'écran pendant ce temps, sinon la TV est noire sans un mot |
 | Retour du bureau | `hub-session-par-defaut` en autostart (`OnlyShowIn=ubuntu`) | remet le HUB par défaut dès l'ouverture du bureau, quelle que soit la façon d'en sortir ensuite |
 
 ### Les pièges rencontrés
@@ -457,18 +466,23 @@ enceintes.
   verrouillage de GNOME passent après (`idle-delay` relevé, verrouillage inchangé).
   `installer/veille/README.md` ; **rien d'éprouvé** hors tests.
 
-## Ce qui reste à trancher avant le prototype
+## Ce qui a été tranché depuis (relecture du 06/10/2026)
 
-1. **Avec quoi pilote-t-on ?** Clé Bluetooth (manette, télécommande), adaptateur
-   USB-CEC (télécommande de la TV), ou clavier sans fil. Décide l'interface.
-2. **Le mode Gaming streame depuis quoi ?** Services en nuage dans Chrome en attendant mieux (voir « Streaming et jeu en nuage ») ; Moonlight si un PC de jeu arrive.
+1. **Avec quoi pilote-t-on ?** Tranché par l'usage : le téléphone (`installer/telecommande`,
+   page web appairée, souris et clavier téléphone par téléphone), la voix (`installer/voix`),
+   un clavier ou une manette dans le menu et devant un service web, et la télécommande de la
+   TV **si** un adaptateur USB-CEC est branché (`installer/cec`, jamais essayé sur un vrai
+   adaptateur). Le menu se lit en rangées, à la croix directionnelle.
+2. **Le mode Gaming streame depuis quoi ?** Des services en nuage dans Chrome (« Streaming
+   et jeu en nuage ») ; Moonlight et Steam seulement s'ils sont installés.
 
 ## Ce qui n'est pas encore mesuré
 
 Trois choses n'existent qu'une fois la machine à sa place, et elles ne se
 supposent pas :
 
-- [ ] résolution et fréquence réellement négociées avec la TV
+- [x] résolution et fréquence réellement négociées avec la TV : 3840×2160 à **30 Hz** le
+      17/09/2026 (lien HDMI 1.4), 1920×1080 à 60 Hz choisi depuis Réglages → Affichage
 - [ ] sortie audio HDMI : présence, canaux, passthrough
 - [ ] débit Ethernet réel, mesuré vers la box
 

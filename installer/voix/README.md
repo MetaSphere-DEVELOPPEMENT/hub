@@ -245,9 +245,8 @@ Journal : `journalctl --user -u hub-voix -f`. Code de sortie 78 = Vosk absent, p
 relance en boucle (`RestartPreventExitStatus`). Modèle absent : le service reste en
 vie et le dit une fois dans le journal.
 
-**Non vérifié** : que la session kiosque (`gnome-kiosk-script-session`) atteigne
-`graphical-session.target`, ce dont dépend `WantedBy=`. À constater en VM avec
-`systemctl --user status hub-voix` depuis la session HUB.
+**Vérifié en VM le 15/09/2026** (ARCHITECTURE.md, « Preuves ») : la session kiosque
+atteint `graphical-session.target`, et `hub-voix` y est actif.
 
 ## Essai sans micro
 

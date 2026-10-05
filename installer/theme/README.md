@@ -143,8 +143,9 @@ install -m 644 /tmp/hub-plymouth/* /usr/share/plymouth/themes/hub/
 update-alternatives --install /usr/share/plymouth/themes/default.plymouth default.plymouth \
   /usr/share/plymouth/themes/hub/hub.plymouth 200
 update-alternatives --set default.plymouth /usr/share/plymouth/themes/hub/hub.plymouth
-# Ubuntu 26.04 construit l'initramfs avec dracut (plus update-initramfs) :
-dracut --force --regenerate-all
+# Reconstruire l'initramfs : update-initramfs (dracut échouait dès qu'un ancien noyau
+# laissait son dossier de modules, constaté en VM le 15/09/2026 — ARCHITECTURE.md)
+update-initramfs -u -k all
 ```
 
 La ligne de noyau doit garder `splash` (présent par défaut sur Ubuntu Desktop).

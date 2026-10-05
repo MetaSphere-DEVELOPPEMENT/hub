@@ -60,10 +60,9 @@ systemctl --global enable hub-telecommande.service
 - **Logique de la voix.** Le service réutilise `hub_voix_logique.py` (envoi au socket
   du menu, détection de Kodi et du bureau). Il le cherche dans `$HUB_VOIX_DOSSIER`,
   `../voix` (le dépôt), `/usr/local/lib/hub/voix/`, puis `/opt/hub-voix/`.
-  L'installateur doit donc poser `voix/hub_voix_logique.py` dans l'un d'eux — il ne
-  le fait pas aujourd'hui (seul `hub-voix.py` est copié). Sans ce module, la
-  télécommande pilote encore le menu et le volume, mais ni Kodi ni le bureau menu
-  fermé ; le journal le signale au démarrage.
+  L'installateur le pose dans `/usr/local/lib/hub/voix/` (étape 6) et dans
+  `/opt/hub-voix/` (étape 10). Sans ce module, la télécommande pilote encore le menu et
+  le volume, mais ni Kodi ni le bureau menu fermé ; le journal le signale au démarrage.
 - **Pare-feu.** `ufw` est inactif par défaut sur Ubuntu. S'il est activé :
   `ufw allow from 192.168.0.0/16 to any port 8790 proto tcp` (adapter au réseau).
 - **Pare-feu, HTTPS.** Ouvrir aussi 8791 (l'installateur le fait pour les deux ports).
@@ -72,13 +71,12 @@ systemctl --global enable hub-telecommande.service
   `/opt/hub-voix/venv/bin/python` et les modèles de `/opt/hub-voix/modeles`
   (`HUB_VOIX_DOSSIER`, `HUB_VOIX_PYTHON`, `HUB_VOIX_MODELES` pour forcer). Sans elle,
   la dictée répond « non installée » et tout le reste marche.
-- **Le menu doit ouvrir la fenêtre d'appairage** (fichier `telecommande-appairage`, voir
+- **Le menu ouvre la fenêtre d'appairage** (fichier `telecommande-appairage`, voir
   « Intégration dans le menu ») tant que l'écran Télécommande est affiché : sans elle,
   tout code est refusé. Recours sans menu : `hub-telecommande --appairage`.
-- **Le menu doit afficher l'empreinte** `empreinteRacineCourte` du fichier d'état à côté
-  du code (voir plus bas) : c'est ce que le téléphone compare, dans ses propres réglages,
-  avant de faire confiance au certificat. Tant qu'il ne le fait pas :
-  `hub-telecommande --empreinte`.
+- **Le menu affiche l'empreinte** `empreinteRacineCourte` du fichier d'état à côté du
+  code (voir plus bas) : c'est ce que le téléphone compare, dans ses propres réglages,
+  avant de faire confiance au certificat. Sans menu : `hub-telecommande --empreinte`.
 - Aucune dépendance à installer : `python3`, `openssl`, `wpctl` (paquet
   `wireplumber`) et `gnome-session-quit` sont déjà sur Ubuntu Desktop.
 
@@ -185,7 +183,7 @@ Elle n'est donc donnée qu'à **toutes** ces conditions, vérifiées à chaque o
 1. **L'interrupteur est allumé sur la TV** — Réglages → Télécommande → « Souris et
    clavier depuis le téléphone ». Éteint par défaut ; tout ce qui n'est pas exactement
    `true` dans `reglages.json` vaut éteint ; l'éteindre coupe les sessions en cours dans
-   la seconde. Un profil restreint ne voit pas l'interrupteur.
+   la seconde. Un profil restreint ne voit ni l'interrupteur ni le bouton par téléphone.
 2. **La connexion est en https** (port 8791). En http, le jeton se lit sur le wifi :
    tenable pour des flèches, pas pour un clavier.
 3. **Le jeton est « sûr »** : obtenu en tapant le code de la TV **sur la page https**.
@@ -198,10 +196,12 @@ Elle n'est donc donnée qu'à **toutes** ces conditions, vérifiées à chaque o
    téléphones reliés, chacun avec un bouton « Autoriser la souris » / « Retirer la
    souris ». **Refusé par défaut à l'appairage** : lire le code sur la TV ouvre la
    télécommande (flèches, OK, modes), pas le clavier — il faut le second geste, devant
-   la TV, pour ce téléphone précis. Le jeton « sûr » (condition 3) prouve qu'on est
-   entré une fois dans la pièce ; sans cette condition-ci, ce seul fait suffisait à
-   ouvrir le clavier pour toujours, y compris à un invité de passage qu'on ne reverra
-   pas. `hub-telecommande --revoquer` retire le téléphone entier (télécommande et
+   la TV, pour ce téléphone précis — et **vraiment devant la TV** : les ordres relayés
+   par le téléphone arrivent au menu signés `telephone:`, et le menu refuse d'eux ce
+   bouton comme l'interrupteur (« Ce réglage se fait devant la TV »). Le jeton « sûr »
+   (condition 3) prouve qu'on est entré une fois dans la pièce ; sans cette condition-ci,
+   ce seul fait suffisait à ouvrir le clavier pour toujours, y compris à un invité de
+   passage qu'on ne reverra pas. `hub-telecommande --revoquer` retire le téléphone entier (télécommande et
    souris) ; `--interdire-souris` ne retire que le clavier, le téléphone garde sa
    télécommande.
 5. **Le contexte est un service web ou le bureau.** Dans le menu et dans Kodi, les
@@ -256,13 +256,14 @@ Et autour :
 
 **Ce qui reste vrai, et qu'il faut savoir avant d'allumer :**
 
-- Un téléphone appairé pilote déjà le menu : il peut donc **aller lui-même allumer
-  l'interrupteur** (Réglages → Télécommande). Ce qui l'arrête ensuite est le point 3 :
-  il lui faut le code affiché sur la TV, tapé en https — être dans la pièce, certificat
-  installé. Un jeton http volé sur le wifi ne va pas plus loin que la télécommande
-  d'avant. Un invité ou un enfant **dans la pièce**, téléphone appairé, peut en revanche
-  tout faire : l'interrupteur n'est pas un contrôle parental (le profil restreint, lui,
-  ne le voit pas). Pistes non faites : un droit accordé téléphone par téléphone sur la TV.
+- Un téléphone appairé pilote le menu aux flèches, mais **ne peut ni allumer
+  l'interrupteur ni s'accorder la souris** : ses ordres arrivent au menu signés
+  `telephone:`, et ces deux boutons les refusent (depuis le 06/10/2026 ; avant, il
+  pouvait se donner le droit lui-même). Il faut un clavier, la télécommande CEC ou la
+  voix dans la pièce. Un jeton http volé sur le wifi ne va pas plus loin que la
+  télécommande d'avant. Un enfant **dans la pièce** avec un clavier peut en revanche
+  tout faire : ce n'est pas un contrôle parental, c'est le profil restreint (qui ne voit
+  aucun de ces boutons) qui en tient lieu.
 - `reglages.json`, `/dev/uinput` (groupe `hub-uinput`) et la clé du certificat sont à la
   portée de **tout programme de la session** (Kodi et ses extensions, Chrome) : ils
   tournent déjà avec les droits de l'utilisateur, la souris ne leur donne rien de plus.
@@ -400,7 +401,7 @@ pilote : la page l'affiche (« En veille », « Rien à piloter ») mais reste r
 
 | Situation | Destination |
 |---|---|
-| socket du menu présent et joignable | datagramme au menu (`accueil` y devient `retour`) ; `texte` refusé (le menu n'a pas ce message) |
+| socket du menu présent et joignable | datagramme `telephone:<nom>` au menu (`accueil` y devient `retour`) ; `texte` refusé (le menu n'a pas ce message). Le préfixe dit au menu d'où vient l'ordre : de cette source, il refuse les réglages à faire devant la TV (autoriser la souris d'un téléphone, l'interrupteur « Souris et clavier ») |
 | menu fermé, Kodi lancé | JSON-RPC : `Input.Left/Right/Up/Down/Select/Back`, `Input.SendText` (avec `done: true`), `accueil` = `Application.Quit` puis SIGTERM en dernier recours |
 | menu fermé, service web (`hub-web` vivant, lu dans `web.pid`) | `accueil` = `hub-web --fermer` ; flèches, OK, Retour, texte = **touches** (voir « Souris et clavier ») si les sept conditions sont réunies, sinon sans effet et la réponse dit laquelle manque (`pointeur-…`) |
 | menu fermé, bureau GNOME | `accueil` = `gnome-session-quit --logout --no-prompt` ; flèches, OK, Retour, texte = **touches**, aux mêmes conditions ; le reste est sans effet |
@@ -419,7 +420,7 @@ que `hub-voix`). `Input.SendText` n'a d'effet que si un clavier est ouvert dans 
 | `GET /` | non | la page |
 | `POST /api/appairer` `{"code":"123456","nom":"Pixel 8","appareil":"…32 hex…"}` | facultatif | 200 `{"jeton","id","nom","appareil"}` · 403 `{"erreur":"code"}` code faux · 403 `{"erreur":"appairage-ferme"}` écran d'appairage fermé · 429 `{"attente"}` trop d'essais. `appareil` est facultatif, et ignoré s'il est mal formé ; le jeton présenté en `Authorization`, s'il est encore valide, prime sur lui (voir « Un téléphone, une entrée ») |
 | `POST /api/commande` `{"nom":"gauche"}` ou `{"nom":"texte","texte":"Dune"}` | oui | 200 `{"ok","cible","raison"?,"volume"?}` · 400 hors liste · 401 |
-| `GET /api/etat` | oui | `{"ok":true,"contexte":"menu"\|"web"\|"kodi"\|"bureau"\|null,"pointeur":{"permis":bool,"raison":null\|"desactive"\|"connexion-non-securisee"\|"jeton-non-sur"\|"contexte"\|"uinput-absent"\|"uinput-refuse"\|"session-verrouillee"\|"session-en-arriere-plan"\|"session-inconnue"\|"module-absent"}}` |
+| `GET /api/etat` | oui | `{"ok":true,"contexte":"menu"\|"web"\|"kodi"\|"bureau"\|null,"pointeur":{"permis":bool,"raison":null\|"desactive"\|"connexion-non-securisee"\|"jeton-non-sur"\|"non-autorise"\|"contexte"\|"uinput-absent"\|"uinput-refuse"\|"session-verrouillee"\|"session-en-arriere-plan"\|"session-inconnue"\|"module-absent"}}` ; une commande refusée peut aussi dire `trop-de-sessions`, `debit`, `disposition-non-couverte` |
 | `POST /api/pointeur/session` `{}` (https) | oui, **sûr** | 200 `{"ticket"}` (usage unique, 30 s) · 401 · 403 `{"erreur":"pointeur","raison":…}` |
 | `GET /api/pointeur` (WebSocket, https, `Sec-WebSocket-Protocol: hub-pointeur, ticket.<ticket>`) | ticket | 101 puis messages JSON · 401 ticket absent, faux, usé, expiré · 400 poignée de main · 403 http, origine étrangère ou condition manquante |
 | `POST /api/oublier` `{}` | oui | révoque le jeton présenté |

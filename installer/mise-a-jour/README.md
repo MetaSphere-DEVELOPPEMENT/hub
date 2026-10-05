@@ -206,9 +206,12 @@ seulement le numéro dans l'annonce.
 peuvent pas sortir sous le même numéro.
 
 Sur le HUB, l'installateur écrit trois lignes dans `/usr/local/share/hub/VERSION` — le
-numéro, l'empreinte du commit installé, sa date — et pose `NOUVEAUTES.md` à côté. Un HUB
-installé avant les numéros n'a qu'une ligne (l'empreinte) : le menu affiche alors
-« Version : inconnue » et l'empreinte, comme avant.
+numéro, l'empreinte du commit installé (`git describe --always --dirty --long`, dont
+hub-mise-a-jour extrait l'empreinte : la forme courte, pile sur une étiquette, ne rendait
+que « v1.0.15 » et le menu réannonçait la même version sans fin), sa date — et pose
+`NOUVEAUTES.md` à côté. Un HUB installé avant les numéros n'a qu'une ligne (l'empreinte) :
+le menu complète alors le numéro avec celui du dépôt installé. Depuis la clé USB, sans
+`.git`, l'empreinte et la date viennent du fichier `COMMIT` écrit par `construire-cle.sh`.
 
 ## Ce qui est garanti
 

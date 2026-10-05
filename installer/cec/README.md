@@ -175,5 +175,6 @@ simulateur (menu réel en socket datagramme, faux Kodi JSON-RPC sur TCP) :
 - [ ] `on 0` / `as` allument la XG70 et basculent l'entrée ; `standby 0` l'éteint.
 - [ ] Kodi ne signale pas d'erreur CEC au lancement avec `cec_2548_1002.xml` (mode
       relais) ; en mode céder, Kodi prend l'adaptateur dans ses 10 s.
-- [ ] `hub-cec.service` démarre dans la session kiosque (même question que la voix :
-      `graphical-session.target` atteint ?).
+- [ ] `hub-cec.service` démarre dans la session kiosque (`graphical-session.target` y est
+      atteint, prouvé en VM le 15/09/2026 avec `hub-voix` et `hub-telecommande` ;
+      reste à le voir pour cette unité, adaptateur branché).

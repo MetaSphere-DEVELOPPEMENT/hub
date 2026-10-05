@@ -1,8 +1,9 @@
 # Menu du HUB
 
-La page (`index.html`, `hub.js`, `hub.css`, et les extensions `temps-ecran.js`,
-`allumage.js`, `cadre.js`, `fluidite.js`) est affichée plein écran par `hub-menu`
-(WebKitGTK 6.0). Les tests sont dans `tests/menu`.
+La page (`index.html`, `hub.js`, `hub.css`, `i18n.js` pour les textes FR et EN, et les
+extensions `affichage.js`, `allumage.js`, `cadre.js`, `temps-ecran.js`, `veille-bureau.js`,
+`fluidite.js`, avec `extensions.css` ; `qrcode.js` est posé avec elle) est affichée plein
+écran par `hub-menu` (WebKitGTK 6.0). Les tests sont dans `tests/menu`.
 
 ## Les images des modes
 
@@ -102,15 +103,16 @@ fond. La toile des traits ajoute un envoi de 960×540 pixels par image au GPU.
 
 L'image du mode (17/09/2026) remplace le filigrane, qui était le seul calque que le fond
 déplaçait à chaque image : elle, elle ne bouge pas. Son coût est un calque de plus à
-recomposer par-dessus le fond, large de 104vh et haut de 88vh sur la droite de l'écran —
-soit, en 4K, une texture de 2 246 × 1 901 pixels mélangée à chaque image. Rien n'y est
-recalculé : le cadrage, les deux dégradés de masque (un par élément : `mask-composite` n'est
-pas éprouvé sur la WebKitGTK de la TV) et l'opacité sont fixes, le changement de mode ne
-croise que deux opacités (160 ms), et les trois images du jeu choisi sont décodées une fois
-pour toutes au chargement (de 74 à 177 Ko de WebP selon le jeu, 11 à 17 Mo décodés). Aucun
-`filter`, aucun masque animé — et, depuis le 18/09/2026, aucun masque du tout : le cadrage,
-les fondus des bords et l'ombre de l'en-tête sont peints une fois dans une toile par mode,
-jamais plus large que la boîte ni que la photo (1123 × 950 px en 1080p, 3,2 Mo par mode).
+recomposer par-dessus le fond, large de 104vh et haut de 94vh (depuis la 1.0.12 ; 88vh
+avant) sur la droite de l'écran — soit, en 4K, une texture de 2 246 × 2 030 pixels mélangée
+à chaque image. Rien n'y est recalculé : le cadrage, les fondus et l'opacité sont fixes, le
+changement de mode ne croise que deux opacités (160 ms), et les trois images du jeu choisi
+sont décodées une fois pour toutes au chargement (de 74 à 177 Ko de WebP selon le jeu, 11 à
+17 Mo décodés). Aucun `filter`, aucun masque animé — et, depuis le 18/09/2026, aucun masque
+du tout : le cadrage, les fondus des bords (une courbe en S depuis la 1.0.12, voir
+`FONDU_COTE` et `FONDU_HAUT_BAS` dans `hub.js`) et l'ombre de l'en-tête sont peints une fois
+dans une toile par mode, jamais plus large que la boîte ni que la photo (1 123 × 1 015 px en
+1080p, 4,6 Mo par mode).
 
 - [ ] motif cinéma, accueil immobile 30 s : ____ images/s, pire seconde ____
 - [ ] motif aurore boréale (le plus de dessin) : ____ images/s ; CPU WebKitWebProcess ____ %
