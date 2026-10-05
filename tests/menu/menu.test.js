@@ -1215,3 +1215,123 @@ test("mise à jour : l'échec suivi s'annonce avec son détail, lisible dans la 
   assert.match(await page.textContent("#contenu-reglages"), /Réseau injoignable \(Internet ou DNS\)\./);
   assert.match(await page.textContent("#contenu-reglages .detail-maj"), /Could not resolve host/);
 });
+
+// ── Relecture du 06/10/2026 : six défauts reproduits depuis le canapé ─────────
+test("accueil verrouillé par un code : fermer tous les calques ne gèle plus la page", async () => {
+  await ouvrir({ reglages: deuxProfils() });
+  await page.waitForFunction(() => document.querySelector("#code.ouvert"));
+  // Le menu d'arrêt sous le code, puis « tout fermer » (ce que fait l'écran permanent) :
+  // fermerCalque redemande le code au lieu de dépiler, et la boucle ne finissait jamais.
+  const vivante = await Promise.race([
+    page.evaluate(() => { ACTIONS.arret(); fermerTout(); return pile.slice(); }).then(() => true),
+    new Promise(resolve => setTimeout(() => resolve(false), 3000)),
+  ]);
+  assert.ok(vivante, "fermerTout() tourne sans fin : page gelée");
+  assert.ok(await page.evaluate(() => document.body.classList.contains("verrouille")), "le verrou tient toujours");
+  // Et les lettres du clavier n'ouvrent rien sous le verrou, pas plus que la télécommande.
+  await touche("e", "r", "m");
+  assert.deepEqual(await calques(), ["code"], await calques());
+  assert.deepEqual(await messages("choix"), []);
+});
+
+test("supprimer un profil depuis Réglages → Profils garde une sélection, et la flèche reste dans la page", async () => {
+  await ouvrir({ retour: true, reglages: deuxProfils() });
+  await page.evaluate(() => ACTIONS.reglages("profils"));
+  await page.click('[data-cle="modifier-alix"]');
+  await page.click('[data-action="supprimer-profil"]');
+  await page.click('[data-cle="confirmer-oui"]');
+  await attendreReglages(d => d.profils.length === 1);
+  assert.deepEqual(await calques(), ["reglages"]);
+  assert.ok(await page.evaluate(() => document.querySelector(".focus")?.isConnected), "plus aucune sélection vivante après la suppression");
+  await touche("ArrowDown");
+  assert.equal(await page.textContent("#contenu-reglages h3"), "Profils", "la flèche a changé de page");
+});
+
+test("changer de profil demande la météo de sa ville, et n'affiche pas celle de l'autre en attendant", async () => {
+  const reglages = {
+    profilActif: "a", systeme: {},
+    profils: [{ id: "a", nom: "A", meteo: { active: true, ville: "Paris", lat: 48.85, lon: 2.35 } },
+      { id: "b", nom: "B", meteo: { active: true, ville: "Lyon", lat: 45.76, lon: 4.84 } }],
+  };
+  const releve = temperature => ({ current: { temperature_2m: temperature, weather_code: 0, is_day: 1 } });
+  await ouvrir({ retour: true, reglages, meteo: { donnees: releve(10), releveLe: Date.now(), horsLigne: false, lat: 48.85, lon: 2.35 } });
+  assert.match(await page.textContent("#meteo-ville-puce"), /Paris/);
+  await page.evaluate(() => choisirProfil("b"));
+  await page.waitForFunction(() => window.__messages.some(m => m.type === "meteo" && m.lat === 45.76), null, { timeout: 5000 });
+  assert.ok(!(await page.isVisible("#puce-meteo")), "la température de Paris restait affichée sous « Lyon »");
+  await page.evaluate(r => window.hub.recevoir({ type: "meteo", lat: 45.76, lon: 4.84, releveLe: Date.now(), horsLigne: false, donnees: r }), releve(21));
+  assert.match(await page.textContent("#meteo-ville-puce"), /Lyon/);
+  assert.match(await page.textContent("#meteo-temp-puce"), /21/);
+});
+
+test("touche L avec la sélection sur une reprise : la sélection reste sur la tuile", async () => {
+  await ouvrir({ retour: true, reprises: [{ genre: "film", titre: "Dune", sousTitre: null, fichier: "/d.mkv", position: 100, duree: 900, image: null }] });
+  await touche("ArrowDown");
+  assert.equal(await focus(), "reprise-0");
+  await touche("l");
+  assert.equal(await focus(), "reprise-0");
+  assert.ok(await page.evaluate(() => document.querySelector(".focus")?.isConnected));
+});
+
+test("retour des réglages après un changement : la sélection revient sur la tuile de départ", async () => {
+  await ouvrir({ retour: true });
+  await page.evaluate(() => definirFocus(document.querySelector('[data-cle="service-youtube"]'), true));
+  await touche("r");
+  await page.click('[data-section="langue"]');
+  await page.click('[data-cle="horloge-12"]');
+  await attendreReglages(d => d.profils[0].horloge === "12");
+  await touche("Escape");
+  assert.deepEqual(await calques(), []);
+  assert.equal(await focus(), "service-youtube");
+});
+
+test("code PIN : effacer juste après le quatrième chiffre n'envoie pas un code à trois chiffres", async () => {
+  await ouvrir({ retour: true, reglages: deuxProfils() });
+  await page.evaluate(() => { window.hub.recevoir({ type: "commande", nom: "profils" }); });
+  await page.click('[data-cle="profil-alix"]');
+  await page.click('[data-cle="profil-samuel"]');
+  await page.keyboard.type("1234");
+  await page.keyboard.press("Backspace");
+  await page.waitForTimeout(400);
+  assert.deepEqual(await messages("pin-verifier"), [], "un code de trois chiffres est parti à hub-menu, compté comme un échec");
+  await page.keyboard.type("4");
+  await page.waitForFunction(() => !document.querySelector(".calque.ouvert"));
+});
+
+test("mode ambiant : « HUB, retour » réveille seulement, « HUB, Netflix » réveille et lance", async () => {
+  await ouvrir({ retour: true });
+  await touche("a");
+  await page.evaluate(() => window.hub.recevoir({ type: "commande", nom: "retour" }));
+  assert.ok(!(await page.evaluate(() => document.body.classList.contains("ambiant"))));
+  assert.deepEqual(await calques(), [], "le menu d'arrêt s'est ouvert en se réveillant");
+  await touche("a");
+  assert.ok(await page.evaluate(() => document.body.classList.contains("ambiant")));
+  await page.evaluate(() => window.hub.recevoir({ type: "commande", nom: "web:netflix" }));
+  await attendreChoix();
+  assert.deepEqual(await messages("choix"), [{ type: "choix", mode: "web", service: "netflix" }]);
+});
+
+test("une reprise sans titre ne casse pas l'ouverture du menu", async () => {
+  await ouvrir({ retour: true, reprises: [{ genre: "film", titre: null, sousTitre: null, fichier: "/x.mkv", position: 10, duree: 100, image: null }] });
+  assert.deepEqual(page.erreurs, []);
+  assert.equal(await page.locator(".reprise").count(), 1);
+});
+
+test("thème automatique : au coucher du soleil, fond et accent suivent même en animations réduites", async () => {
+  await page?.close();
+  page = await navigateur.newPage({ viewport: { width: 1920, height: 1080 } });
+  // Sans ville, le thème « auto » bascule à 20 h : on se place juste avant.
+  await page.clock.install({ time: new Date(2026, 5, 21, 19, 59, 50) });
+  await page.route(/open-meteo\.com/, route => route.abort());
+  await page.addInitScript(installerFauxPont, { retour: true, reglages: { profilActif: "p", profils: [{ id: "p", nom: "P", theme: "auto", animations: "reduites", motif: "nappes" }], systeme: { meteo: { active: false } } } });
+  await page.goto(PAGE + "?sans-intro");
+  await page.clock.runFor(600);
+  const pixel = () => page.evaluate(() => { const d = document.getElementById("fond").getContext("2d").getImageData(60, 60, 1, 1).data; return d[0] + d[1] + d[2]; });
+  const accent = () => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--accent").trim());
+  assert.equal(await page.getAttribute("html", "data-theme"), "clair");
+  const [pixelClair, accentClair] = [await pixel(), await accent()];
+  await page.clock.runFor(20_000);
+  assert.equal(await page.getAttribute("html", "data-theme"), "sombre");
+  assert.ok((await pixel()) < pixelClair - 100, `le fond est resté peint aux couleurs du jour (${pixelClair} → ${await pixel()})`);
+  assert.notEqual(await accent(), accentClair, "l'accent est resté celui du thème clair");
+});

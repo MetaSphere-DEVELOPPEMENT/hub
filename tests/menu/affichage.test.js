@@ -289,3 +289,20 @@ test("contrastes : la section et le filet à 4,5:1 au moins, en sombre et en cla
     assert.deepEqual(faibles, [], `${theme} : ${JSON.stringify([...section, ...filet])}`);
   }
 });
+
+test("Retour pendant « Garder ce mode ? » revient en arrière tout de suite ; le compte à rebours ne continue pas à l'aveugle", async () => {
+  await ouvrir({ affichage: etatTV({ filet: 15 }) });
+  await page.click('[data-cle="mode-1280x720@60.000"]');
+  await page.waitForTimeout(200);
+  assert.deepEqual(await calques(), ["reglages", "affichage-filet"]);
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(300);
+  assert.deepEqual(await messages("affichage-revenir"), [{ type: "affichage-revenir" }]);
+  assert.deepEqual(await calques(), ["reglages"]);
+  assert.equal(await page.evaluate(() => filetAffichage), null, "le compte à rebours tourne encore, dialogue fermé");
+  // La section répond de nouveau : un autre mode se choisit.
+  await page.click('[data-cle="mode-1920x1080@60.000"]');
+  await page.waitForTimeout(200);
+  assert.deepEqual(await calques(), ["reglages", "affichage-filet"]);
+  assert.deepEqual(page.erreurs, []);
+});

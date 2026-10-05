@@ -181,7 +181,10 @@ function veilleMinutes() { return profil().veille ?? reglages.systeme.veille; }
 function modeAutorise(mode, p = profil()) { return p.modes?.[mode] !== false; }
 // Fonctionnalités chargées à part (temps-ecran.js, allumage.js, cadre.js) : elles
 // s'accrochent à ces points plutôt que de grossir ce fichier, que plusieurs mains modifient.
-const extensions = { restrictions: [], apparence: [], avantLancer: [], sections: [], contenus: {}, messages: {}, ambiant: [] };
+const extensions = { restrictions: [], apparence: [], avantLancer: [], sections: [], contenus: {}, messages: {}, ambiant: [],
+  // retour[id] : ce que fait la touche Retour sur ce calque, à la place de le fermer ;
+  // ferme[id] : prévenu quand le calque vient de se fermer, par quelque chemin que ce soit.
+  retour: {}, ferme: {} };
 window.hubExtensions = extensions;
 function estRestreint(p = profil()) {
   return ["tv", "gaming", "bureau"].some(m => !modeAutorise(m, p)) || extensions.restrictions.some(f => f(p));
@@ -287,6 +290,10 @@ function appliquerApparence() {
   if (racine.dataset.theme !== theme) {
     racine.dataset.theme = theme;
     fondPret = false;
+    // Le thème « auto » bascule au coucher du soleil, souvent sans personne devant : en
+    // animations réduites la boucle du fond est arrêtée et l'accent n'est recalculé qu'au
+    // prochain déplacement — les textes passaient en sombre sur un fond resté clair.
+    if (ongletHeros !== null) accentuer(accentNom);
   }
   racine.style.setProperty("--echelle", reglages.systeme.echelle);
   // L et XL : l'écran ne grandit pas avec le texte ; hub.css resserre l'accueil et la météo.
@@ -1063,6 +1070,7 @@ function apercuVisuel() {
 }
 let accentCible = COULEURS_MODE.tv;
 let accentCourant = [...COULEURS_MODE.tv];
+let accentNom = "tv";
 let fondPret = false;
 let boucleFond = false;
 // Temps du fond, avancé image par image : passer en ambiant ralentit sans faire sauter
@@ -1253,6 +1261,7 @@ function photosVisibles() {
 
 function accentuer(nom) {
   const couleur = COULEURS_MODE[nom] || COULEURS_MODE.tv;
+  accentNom = nom in COULEURS_MODE ? nom : "tv";
   accentCible = couleur;
   racine.style.setProperty("--accent", (racine.dataset.theme === "clair" ? couleur.map(v => Math.round(v * .78)) : couleur).join(" "));
   // L'image du mode, à droite (motif cinéma) : un fondu court d'une image à l'autre.
@@ -1292,6 +1301,12 @@ function horloge() {
 let meteo = null;
 let meteoReleve = null;
 let meteoHorsLigne = false;
+// Le lieu du relevé affiché ({ lat, lon }), quand hub-menu l'a dit : un changement de
+// profil montrait sinon la température de l'ancienne ville sous le nom de la nouvelle.
+let meteoPour = null;
+function meteoDuBonLieu(ici = meteoProfil()) {
+  return !meteoPour || (Math.abs(meteoPour.lat - ici.lat) < .01 && Math.abs(meteoPour.lon - ici.lon) < .01);
+}
 
 function nuage(classe = "nuage", dx = 0, dy = 0, echelle = 1) {
   return `<path class="${classe}" transform="translate(${dx} ${dy}) scale(${echelle})" d="M9 25h14.5a5.2 5.2 0 0 0 .6-10.4A7.2 7.2 0 0 0 10.3 16 4.5 4.5 0 0 0 9 25z"/>`;
@@ -1347,7 +1362,7 @@ function alerteMeteo() {
 }
 
 function afficherMeteo() {
-  const actif = meteoProfil().active && meteoSituee() && meteo?.current;
+  const actif = meteoProfil().active && meteoSituee() && meteo?.current && meteoDuBonLieu();
   $("puce-meteo").hidden = !actif;
   $("ambiant-meteo").replaceChildren();
   if (!actif) return;
@@ -1364,12 +1379,13 @@ function afficherMeteo() {
   horloge();
 }
 
-function recevoirMeteo(donnees, releveLe, horsLigne) {
+function recevoirMeteo(donnees, releveLe, horsLigne, lieu = null) {
   if (!donnees?.current) return;
   meteo = donnees;
+  meteoPour = Number.isFinite(lieu?.lat) && Number.isFinite(lieu?.lon) ? { lat: lieu.lat, lon: lieu.lon } : null;
   meteoReleve = releveLe ? new Date(releveLe) : new Date();
   meteoHorsLigne = !!horsLigne;
-  if (!PONT) try { localStorage.setItem("hub-meteo", JSON.stringify({ donnees, releveLe: meteoReleve })); } catch { /* aperçu */ }
+  if (!PONT) try { localStorage.setItem("hub-meteo", JSON.stringify({ donnees, releveLe: meteoReleve, lieu: meteoPour })); } catch { /* aperçu */ }
   afficherMeteo();
 }
 
@@ -1381,11 +1397,11 @@ async function chargerMeteo() {
   if (PONT) return envoyer({ type: "meteo", lat, lon });
   try {
     const reponse = await fetch(`${URL_METEO}&latitude=${lat}&longitude=${lon}`);
-    recevoirMeteo(await reponse.json(), new Date(), false);
+    recevoirMeteo(await reponse.json(), new Date(), false, { lat, lon });
   } catch {
     try {
       const cache = JSON.parse(localStorage.getItem("hub-meteo"));
-      if (cache) recevoirMeteo(cache.donnees, cache.releveLe, true);
+      if (cache) recevoirMeteo(cache.donnees, cache.releveLe, true, cache.lieu);
     } catch { /* rien en cache */ }
   }
 }
@@ -1595,6 +1611,8 @@ function voisinAccueil(depart, direction, liste) {
   if (!cible) return null;
   const retenu = memoireRangee.get(RANGEES_ACCUEIL.find(sel => cible[0].closest(`#accueil ${sel}`)));
   if (cible.includes(retenu)) return retenu;
+  const parCle = retenu?.dataset?.cle && cible.find(e => e.dataset.cle === retenu.dataset.cle);
+  if (parCle) return parCle;
   // L'en-tête, jamais visité : le profil, plutôt que la météo qui le précède.
   if (cible[0].closest("#accueil .entete")) return cible.find(e => e.id === "puce-profil") || cible[0];
   const a = depart.getBoundingClientRect(), x = a.left + a.width / 2;
@@ -1669,6 +1687,15 @@ function deplacer(direction) {
   definirFocus(suivant);
 }
 
+// Un calque peut être redessiné pendant qu'un autre le couvre (changer une option refait
+// les tuiles de l'accueil) : l'élément retenu est alors détaché. On le retrouve par sa
+// clé ; sinon on part du premier. Avant, la sélection retombait sur la puce du profil.
+function retrouverFocus(precedent, liste) {
+  if (liste.includes(precedent)) return precedent;
+  const cle = precedent?.dataset?.cle;
+  return (cle && liste.find(e => e.dataset.cle === cle)) || liste[0];
+}
+
 function ouvrirCalque(id, focusPremier = true) {
   if (pile.at(-1) === id) return;
   if (pile.includes(id)) pile.splice(pile.indexOf(id), 1);
@@ -1680,11 +1707,7 @@ function ouvrirCalque(id, focusPremier = true) {
   $(id).classList.add("ouvert");
   document.body.classList.toggle("calque-ouvert", pile.length > 1);
   majAppairage();
-  if (focusPremier) {
-    const precedent = focusParCalque[id];
-    const liste = candidats();
-    definirFocus(liste.includes(precedent) ? precedent : liste[0], true);
-  }
+  if (focusPremier) definirFocus(retrouverFocus(focusParCalque[id], candidats()), true);
   son("ok");
 }
 function fermerCalque() {
@@ -1696,20 +1719,30 @@ function fermerCalque() {
   if (id === "profils") document.body.classList.remove("gestion");
   document.body.classList.toggle("calque-ouvert", pile.length > 1);
   majAppairage();
-  const liste = candidats();
-  const precedent = focusParCalque[pile.at(-1)];
-  definirFocus(liste.includes(precedent) ? precedent : liste[0], true);
+  definirFocus(retrouverFocus(focusParCalque[pile.at(-1)], candidats()), true);
   if (pile.length === 1) relancerFond();
   son("retour");
+  extensions.ferme[id]?.();
   if (verrouAccueil && pile.length === 1 && id !== "code") setTimeout(exigerDeverrouillage, 0);
 }
-function fermerTout() { while (pile.length > 1) fermerCalque(); }
+// Accueil verrouillé par un code : fermerCalque, au lieu de dépiler, redemande le code.
+// Sans ce garde-fou la boucle ne finissait jamais — page gelée, télécommande et voix
+// comprises, jusqu'au redémarrage (vu à la relecture du 06/10/2026).
+function fermerTout() {
+  while (pile.length > 1) {
+    const avant = pile.length;
+    fermerCalque();
+    if (pile.length >= avant) break;
+  }
+}
 // Le « retour » de la télécommande : il ferme le calque ouvert, et sur l'accueil, où il
 // n'avait rien à fermer, il ouvre le menu d'arrêt. C'est le seul bouton que la
 // télécommande ait en propre pour ça (constaté sur la TV le 18/09/2026 : il fallait viser
 // le bouton Éteindre du pied), et c'est le geste des box.
 function retour() {
   if (pile.length === 1) return ACTIONS.arret();
+  const propre = extensions.retour[pile.at(-1)];
+  if (propre) return propre();
   fermerCalque();
 }
 
@@ -1895,22 +1928,27 @@ function rendreReprises() {
   document.body.classList.toggle("avec-reprises", liste.length > 0);
   $("reprises").hidden = !liste.length;
   const zone = $("reprises-liste");
+  // Redessinées à chaque appliquerTout (langue, thème…) : la sélection se retrouve par sa clé.
+  const cle = pile.at(-1) === "accueil" ? courant?.dataset.cle : null;
   zone.innerHTML = "";
   liste.slice(0, 4).forEach((r, i) => {
     const reste = Math.max(1, Math.round((r.duree - r.position) / 60));
+    const titre = String(r.titre || r.sousTitre || "");
     const tuile = el("button", {
       class: "reprise", "data-nav": true, "data-accent": "tv", "data-cle": `reprise-${i}`,
       style: r.image ? `background-image:linear-gradient(180deg, transparent, transparent), url("${encodeURI(r.image)}")` : null,
       onclick: () => lancerReprise(tuile, r),
     },
-    !r.image && el("span", { class: "lettre" }, (r.titre[0] || "").toUpperCase()),
+    !r.image && el("span", { class: "lettre" }, (titre[0] || "").toUpperCase()),
     el("span", { class: "lecture", html: '<svg viewBox="0 0 10 12"><path d="M0 0l10 6-10 6z"/></svg>' }),
     el("span", { class: "textes" },
-      el("div", { class: "t1" }, r.titre),
+      el("div", { class: "t1" }, titre),
       el("div", { class: "t2" }, [r.sousTitre, t("reprendre.reste", { m: reste })].filter(Boolean).join(" · "))),
     el("span", { class: "barre" }, el("i", { style: `width:${borne(r.position / r.duree * 100, 2, 100)}%` })));
     zone.append(tuile);
   });
+  const retrouve = cle && zone.querySelector(`[data-cle="${CSS.escape(cle)}"]`);
+  if (retrouve) definirFocus(retrouve, true);
 }
 
 function lancerReprise(tuile, reprise) {
@@ -2072,6 +2110,8 @@ function choisirProfil(id) {
   sauver();
   document.body.classList.remove("gestion");
   appliquerTout();
+  // Chaque profil a sa ville : on redemande son relevé plutôt que de garder celui d'avant.
+  chargerMeteo();
   fermerTout();
   const carte = onglets.find(c => c.dataset.mode === profil().dernier && !c.hidden) || onglets.find(c => !c.hidden);
   definirFocus(carte, true);
@@ -2153,7 +2193,15 @@ function effacerProfil(cible) {
   fermerCalque();
   rendreProfils();
   appliquerTout();
-  if (pile.includes("reglages")) rendreSection();
+  if (pile.includes("reglages")) {
+    // Le bouton « modifier » du profil effacé n'existe plus : la sélection va au premier
+    // réglage de la page, sinon elle restait sur un élément détaché et la flèche suivante
+    // sautait dans le sommaire — qui change de section sous les yeux.
+    rendreSection(false);
+    if (pile.at(-1) === "reglages") {
+      definirFocus($("contenu-reglages").querySelector("[data-nav]") || document.querySelector(`#sommaire [data-section="${sectionCourante}"]`), true);
+    }
+  }
 }
 
 function rendreSecurite() {
@@ -2342,10 +2390,12 @@ function taperChiffre(ch) {
   demande.saisie += ch;
   son("deplacer");
   majPoints();
-  if (demande.saisie.length === 4) setTimeout(validerCode, 180);
+  // Un court répit avant d'envoyer : le temps d'effacer une faute de frappe.
+  if (demande.saisie.length === 4) demande.minuterie = setTimeout(validerCode, 180);
 }
 function effacerChiffre() {
   if (!demande || demande.enCours) return;
+  clearTimeout(demande.minuterie);
   demande.saisie = demande.saisie.slice(0, -1);
   majPoints();
 }
@@ -2367,7 +2417,7 @@ async function attendreHub(travail) {
 }
 
 async function validerCode() {
-  if (!demande || demande.enCours) return;
+  if (!demande || demande.enCours || demande.saisie.length !== 4) return;
   const { p, mode, saisie } = demande;
   if (mode === "verifier") {
     // demande.profils : un code accepté de plusieurs profils (n'importe quel parent).
@@ -3206,8 +3256,12 @@ function recevoirVoix(etat, texte) {
   else if (etat === "micro-present") { etatVoix.micro = true; pastille.classList.remove("absent"); }
 }
 
-function commande(nom) {
-  reveiller();
+const COMMANDES_NAVIGATION = new Set(["ok", "retour", "gauche", "droite", "haut", "bas"]);
+function commande(nom, source = null) {
+  // Comme la première touche : « HUB, retour » dit pour éteindre la grande horloge ne doit
+  // pas ouvrir le menu d'arrêt. Une commande qui nomme une action (TV, Netflix, réglages)
+  // réveille ET agit : c'est ce qu'on a voulu dire.
+  if (reveiller() && COMMANDES_NAVIGATION.has(nom)) return;
   if (verrou) return;
   if (pile.at(-1) === "code") {
     if (nom === "retour") return annulerCode();
@@ -3311,6 +3365,9 @@ addEventListener("keydown", e => {
   if (e.key === "Escape" || e.key === "Backspace" || e.key === "BrowserBack") { e.preventDefault(); return retour(); }
   if (e.key === "Home") { e.preventDefault(); return fermerTout(); }
   if (e.ctrlKey || e.altKey || e.metaKey) return;
+  // Profil verrouillé : les lettres ouvrent des écrans (arrêt, réglages…) que la
+  // télécommande se voit refuser ; le clavier n'a pas à faire mieux qu'elle.
+  if (verrouAccueil) return;
 
   const touche = chiffre && ["1", "2", "3"].includes(chiffre) ? chiffre : e.key.toLowerCase();
   const raccourcis = {
@@ -3536,13 +3593,13 @@ window.hub = {
   recevoir(message) {
     if (typeof message === "string") message = JSON.parse(message);
     switch (message.type) {
-      case "commande": return commande(message.nom);
+      case "commande": return commande(message.nom, message.source || null);
       case "voix": return recevoirVoix(message.etat, message.texte);
       case "voix-mot":
         etatVoix.mot = message.etat && typeof message.etat === "object" ? message.etat : null;
         if (pile.at(-1) === "reglages" && sectionCourante === "voix") rendreSection();
         return;
-      case "meteo": return recevoirMeteo(message.donnees, message.releveLe, message.horsLigne);
+      case "meteo": return recevoirMeteo(message.donnees, message.releveLe, message.horsLigne, message);
       case "geocodage": return rappelGeocodage?.(message.resultats || []);
       case "minuteur": return recevoirMinuteur(message.fin);
       case "veille": return recevoirVeille(message);
@@ -3747,7 +3804,7 @@ window.hubBoucles = () => ({ fond: boucleFond, manettes: boucleManettes });
 const carteDepart = onglets.find(c => c.dataset.mode === (INITIAL.dernier || profil().dernier) && !c.hidden) || onglets.find(c => !c.hidden);
 definirFocus(carteDepart, true);
 // Le dernier relevé en cache s'affiche tout de suite ; le relevé frais suit.
-if (INITIAL.meteo) recevoirMeteo(INITIAL.meteo.donnees, INITIAL.meteo.releveLe, INITIAL.meteo.horsLigne);
+if (INITIAL.meteo) recevoirMeteo(INITIAL.meteo.donnees, INITIAL.meteo.releveLe, INITIAL.meteo.horsLigne, INITIAL.meteo);
 chargerMeteo();
 
 if (!INITIAL.retour) {

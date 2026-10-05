@@ -260,6 +260,11 @@ extensions.contenus.affichage = zone => {
   contenuAffichage(zone);
   if (!etatAffichage) envoyer({ type: "affichage-etat" });
 };
+// Retour sur « Garder ce mode ? » revient en arrière tout de suite. Avant, il fermait le
+// dialogue en laissant le compte à rebours tourner à l'aveugle : la section ne répondait
+// plus, puis l'écran changeait de mode quinze secondes plus tard sans prévenir.
+extensions.retour["affichage-filet"] = () => revenirAffichage(true);
+extensions.ferme["affichage-filet"] = () => { if (filetAffichage) revenirAffichage(false); };
 extensions.messages.affichage = message => {
   etatAffichage = message;
   affichageDemande = null;
