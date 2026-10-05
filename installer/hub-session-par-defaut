@@ -9,5 +9,21 @@
 # s'ouvre. En arrière-plan : remettre le HUB par défaut ne doit pas attendre le fond.
 [ -e "$HOME/.config/hub/habillage-desactive" ] || /usr/local/bin/hub-theme bureau >/dev/null 2>&1 &
 
+# « Retour au HUB » dans le dock : depuis le canapé, avec la souris du téléphone, c'est la
+# seule chose à viser pour revenir au menu. Posé une seule fois (marqueur) : qui l'a
+# retiré du dock ne doit pas le retrouver à chaque ouverture du bureau.
+epingler_retour() { # fichier_marqueur
+  [ -e "$1" ] && return 0
+  favoris=$(gsettings get org.gnome.shell favorite-apps 2>/dev/null) || return 0
+  case "$favoris" in
+    *"'retour-au-hub.desktop'"*) ;;
+    "@as []" | "[]") gsettings set org.gnome.shell favorite-apps "['retour-au-hub.desktop']" || return 0 ;;
+    "["*"]") gsettings set org.gnome.shell favorite-apps "['retour-au-hub.desktop', ${favoris#[}" || return 0 ;;
+    *) return 0 ;;
+  esac
+  mkdir -p "$(dirname "$1")" && : >"$1"
+}
+epingler_retour "$HOME/.config/hub/dock-retour-pose" &
+
 exec busctl call org.freedesktop.Accounts "/org/freedesktop/Accounts/User$(id -u)" \
   org.freedesktop.Accounts.User SetSession s gnome-kiosk-script-wayland

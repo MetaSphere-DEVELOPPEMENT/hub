@@ -6,10 +6,41 @@
 # après le programme) : le retour au HUB est la fin normale d'un mode, pas un
 # mécanisme à part.
 
+# ── Le menu qui ne démarre pas ──────────────────────────────────────────────
+# Un menu mort sans rien choisir (page cassée, Python en erreur) était relancé chaque
+# seconde : écran noir qui clignote, et rien pour le dire. On attend de plus en plus
+# longtemps (1, 2, 4, 8, 16, puis 30 s) et, dès le deuxième échec de suite, l'écran
+# d'attente le dit avec le compte à rebours. Un menu qui se ferme normalement — un mode
+# choisi, ou sa relance après une mise à jour — remet le compteur à zéro.
+COMPTEUR_ECHECS="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/hub/menu-echecs"
+delai_apres_echecs() { # nombre d'échecs de suite → secondes
+  case "$1" in 1) echo 1 ;; 2) echo 2 ;; 3) echo 4 ;; 4) echo 8 ;; 5) echo 16 ;; *) echo 30 ;; esac
+}
+attendre_apres_echec() { # fichier_compteur code_de_sortie
+  n=$(tr -cd '0-9' <"$1" 2>/dev/null); n=$(( ${n:-0} + 1 ))
+  mkdir -p "$(dirname "$1")" && printf '%s\n' "$n" >"$1"
+  delai=$(delai_apres_echecs "$n")
+  echo "gnome-kiosk-script : le menu s'est arrêté (code $2), échec $n de suite, nouvel essai dans $delai s" >&2
+  ecran=
+  if [ "$n" -ge 2 ] && [ -x /usr/local/bin/hub-transition ]; then
+    setsid /usr/local/bin/hub-transition --secours "$delai" >/dev/null 2>&1 &
+    ecran=$!
+  fi
+  sleep "$delai"
+  [ -n "$ecran" ] && kill "$ecran" 2>/dev/null
+  return 0
+}
+
 # Le menu écrit le mode sur sa première ligne et, pour « Continuer à regarder », le
 # fichier à reprendre sur la seconde. Deux lignes plutôt qu'un format à analyser :
 # un script de session doit se lire d'un coup d'œil un soir de panne.
 sortie=$(/usr/local/bin/hub-menu)
+code=$?
+if [ -z "$sortie" ] && [ "$code" -ne 0 ]; then
+  attendre_apres_echec "$COMPTEUR_ECHECS" "$code"
+  exec "$0" "$@"
+fi
+rm -f "$COMPTEUR_ECHECS"
 choix=$(printf '%s\n' "$sortie" | sed -n 1p)
 fichier=$(printf '%s\n' "$sortie" | sed -n 2p)
 
