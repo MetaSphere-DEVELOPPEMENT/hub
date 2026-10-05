@@ -1157,9 +1157,15 @@ def commit_installe(chemin=VERSION_INSTALLEE):
     return lire_version(chemin)["commit"]
 
 
-def nouveautes(chemin, maximum=400):
+def nouveautes(chemin, maximum=600):
     """Ce qu'apporte la version installée : le corps de la première section de
-    NOUVEAUTES.md, sans son titre. Fichier absent ou vide : rien à dire, rien à afficher."""
+    NOUVEAUTES.md, sans son titre, en une seule phrase suivie. Fichier absent ou vide :
+    rien à dire, rien à afficher.
+
+    Le gras et le code du Markdown n'ont pas leur place sur une TV : ils sont ôtés. Et
+    si la section déborde, on coupe à la fin d'une phrase plutôt qu'au milieu d'un mot —
+    la phrase en gras de la 1.0.15 (« ce n'est pas un bug… ») finissait en « **Si un ».
+    tests/test_version.py exige que la première section tienne entière."""
     try:
         texte = Path(chemin).read_text(encoding="utf-8")
     except OSError:
@@ -1173,11 +1179,18 @@ def nouveautes(chemin, maximum=400):
                 break
             corps.append(suite.strip())
         break
-    # Les paragraphes bout à bout, en une seule phrase suivie : le menu n'a qu'une ligne.
     resume = " ".join(m for m in " ".join(corps).split(" ") if m).strip()
+    resume = re.sub(r"\*\*(.+?)\*\*", r"\1", resume).replace("`", "")
     if not resume:
         return None
-    return resume if len(resume) <= maximum else resume[:maximum - 1].rsplit(" ", 1)[0] + "…"
+    if len(resume) <= maximum:
+        return resume
+    coupe = resume[:maximum]
+    # À la fin d'une phrase si elle laisse assez à lire (un tiers), sinon au mot.
+    fin_phrase = max(coupe.rfind(". "), coupe.rfind("! "), coupe.rfind("? "))
+    if fin_phrase >= maximum // 3:
+        return coupe[:fin_phrase + 1]
+    return coupe.rsplit(" ", 1)[0] + "…"
 
 
 def meme_commit(a, b):

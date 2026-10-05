@@ -78,6 +78,23 @@ class Numero(unittest.TestCase):
         self.assertTrue(quoi and len(quoi) > 40, "la première section de NOUVEAUTES.md est vide")
         self.assertNotIn("##", quoi, "le titre de section ne doit pas se retrouver dans le résumé")
 
+    def test_la_section_tient_entiere_sur_la_tv(self):
+        """Le menu coupe au-delà de 600 caractères : la première section, celle qu'il
+        affiche, doit tenir en dessous — « une ou deux phrases lisibles depuis le canapé »."""
+        entiere = hub_menu.nouveautes(NOUVEAUTES, maximum=100_000)
+        self.assertLessEqual(len(entiere), 600, f"la section fait {len(entiere)} caractères : le menu la couperait")
+
+    def test_le_markdown_est_ote_et_la_coupe_tombe_en_fin_de_phrase(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "NOUVEAUTES.md"
+            f.write_text("# N\n\n## 1.0.0 — 1 janvier 2026\n\nUn mot en **gras**, un `fichier`.\n"
+                         "Une seconde phrase assez longue pour déborder la limite ! Et la troisième.\n\n## 0.9.0 — …\n\nvieux\n")
+            self.assertEqual(hub_menu.nouveautes(f), "Un mot en gras, un fichier. Une seconde phrase assez longue pour déborder la limite ! Et la troisième.")
+            self.assertEqual(hub_menu.nouveautes(f, maximum=60), "Un mot en gras, un fichier.")
+            # Aucune fin de phrase dans la seconde moitié : au mot, avec les points de suspension.
+            f.write_text("## 1.0.0 — 1 janvier 2026\n\nUne seule très longue phrase sans aucun point avant la fin du texte qui déborde\n")
+            self.assertEqual(hub_menu.nouveautes(f, maximum=40), "Une seule très longue phrase sans aucun…")
+
     def test_le_menu_affiche_ce_numero(self):
         """infos() est ce que la page reçoit pour Réglages → À propos.
 
