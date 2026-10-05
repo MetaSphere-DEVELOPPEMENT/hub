@@ -299,6 +299,7 @@ for m in lire():
 
 
 class Fermer(unittest.TestCase):
+    @unittest.skipUnless(Path("/proc/self/cmdline").exists(), "fermer_en_cours lit la ligne de commande dans /proc (Linux)")
     def test_signale_seulement_un_hub_web(self):
         with tempfile.TemporaryDirectory() as d:
             pid = Path(d) / "web.pid"
