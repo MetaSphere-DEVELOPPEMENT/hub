@@ -7,6 +7,16 @@ lisibles depuis le canapé : le menu affiche cette première section sous « Ins
 **La première section doit porter le numéro du fichier `VERSION`.** Un test le vérifie
 (`tests/test_version.py`). Marche à suivre pour publier : `installer/mise-a-jour/README.md`.
 
+## 1.1.0 — 6 octobre 2026
+
+Le mot d'éveil de la voix se règle enfin dans Réglages → Voix et sons (OK HUB, Salut HUB,
+Dis HUB ou un prénom), et le menu dit ce que le HUB écoute vraiment. En passant au Bureau,
+la TV ne reste plus noire : un écran d'attente l'accompagne, et « Retour au HUB » attend
+dans le dock. Le menu proposait de réinstaller la 1.0.15 sans fin : corrigé. Le temps
+d'écran du mode TV s'arrête quand Kodi n'affiche plus rien et que rien ne joue. Le
+verrouillage du bureau devient un réglage (Veille et minuteur) ; un HUB déjà installé
+garde le sien tant que personne n'a choisi.
+
 ## 1.0.15 — 21 septembre 2026
 
 La souris et le clavier depuis le téléphone se méritent maintenant téléphone par
