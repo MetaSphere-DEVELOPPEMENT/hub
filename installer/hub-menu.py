@@ -156,10 +156,30 @@ def restreindre_droits(chemin, droits=DROITS_REGLAGES):
         pass
 
 
+def mettre_de_cote(chemin):
+    """Copie un reglages.json illisible à côté de lui, daté, avant que la page reparte des
+    défauts et l'écrase à la première option changée : profils, codes et villes y sont."""
+    chemin = Path(chemin)
+    try:
+        if not chemin.is_file() or chemin.stat().st_size == 0:
+            return None
+        copie = chemin.with_name(f"reglages.illisible-{datetime.now():%Y%m%d-%H%M%S}.json")
+        if copie.exists():
+            return copie
+        shutil.copy2(chemin, copie)
+        print(f"hub-menu : réglages illisibles, copie gardée dans {copie}", file=sys.stderr)
+        return copie
+    except OSError:
+        return None
+
+
 def charger_reglages(c):
     restreindre_droits(c["reglages"])
     donnees = lire_json(c["reglages"])
-    return donnees if reglages_valides(donnees) else None
+    if reglages_valides(donnees):
+        return donnees
+    mettre_de_cote(c["reglages"])
+    return None
 
 
 def enregistrer_reglages(c, donnees):
@@ -338,10 +358,15 @@ def dossiers_images(sous_dossier):
 
 
 def images_de(dossiers, limite=200, recentes_d_abord=False):
-    fichiers = [
-        f for d in dossiers for f in d.iterdir()
-        if f.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"} and f.is_file()
-    ]
+    """Un dossier illisible (droits, disque débranché) n'est pas une panne du menu : il
+    est sauté. Avant, PermissionError sortait de l'ouverture de la fenêtre et la session
+    relançait un menu sans fenêtre toutes les secondes — écran noir."""
+    fichiers = []
+    for d in dossiers:
+        try:
+            fichiers.extend(f for f in d.iterdir() if f.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"} and f.is_file())
+        except OSError as erreur:
+            print(f"hub-menu : dossier d'images ignoré ({erreur})", file=sys.stderr)
     if recentes_d_abord:
         fichiers.sort(key=lambda f: f.stat().st_mtime, reverse=True)
     else:
@@ -426,13 +451,20 @@ def date_exif(chemin, lecture_max=256_000):
         longueur = struct.unpack(">H", donnees[i + 2:i + 4])[0]
         segment = donnees[i + 4:i + 2 + longueur]
         if marqueur == 0xE1 and segment[:6] == b"Exif\x00\x00":
-            return _date_tiff(segment[6:])
+            try:
+                return _date_tiff(segment[6:])
+            except (struct.error, IndexError, ValueError):
+                # Un EXIF abîmé n'a pas de date ; il ne doit surtout pas priver le cadre
+                # photo de toutes ses images (le fil qui le préparait mourait là).
+                return None
         i += 2 + longueur
     return None
 
 
 def _date_tiff(tiff):
     import struct
+    if len(tiff) < 8:
+        return None
     if tiff[:4] == b"II*\x00":
         o = "<"
     elif tiff[:4] == b"MM\x00*":
@@ -563,7 +595,7 @@ def reprises_kodi(dossier_kodi, limite=6):
                         "ORDER BY type = 'poster' DESC LIMIT 1", (ident, "movie" if genre == "film" else "episode")).fetchone()
                     elements.append({
                         "genre": genre,
-                        "titre": serie or titre,
+                        "titre": serie or titre or "",
                         "sousTitre": f"S{int(saison):02d} E{int(episode):02d} · {titre}" if genre == "episode" and str(saison).isdigit() and str(episode).isdigit() else None,
                         # Kodi range les URL (smb://, nfs://, chemins locaux) déjà complètes.
                         "fichier": fichier if "://" in fichier or fichier.startswith("/") else (chemin or "") + fichier,
@@ -632,7 +664,9 @@ def meteo(c, lat, lon, maintenant=None, telecharger=telecharger_json):
     Kodi dix fois par soirée) et donne encore quelque chose à afficher sans réseau."""
     maintenant = maintenant or time.time()
     cache = lire_json(c["meteo"])
-    meme_lieu = cache and abs(cache.get("lat", 999) - lat) < .01 and abs(cache.get("lon", 999) - lon) < .01
+    cache = cache if isinstance(cache, dict) and "donnees" in cache else None
+    meme_lieu = (cache and all(isinstance(cache.get(k), (int, float)) and not isinstance(cache.get(k), bool) for k in ("lat", "lon"))
+                 and abs(cache["lat"] - lat) < .01 and abs(cache["lon"] - lon) < .01)
     if meme_lieu and maintenant - cache.get("releve", 0) < METEO_FRAICHE_S:
         return {"donnees": cache["donnees"], "releve": cache["releve"], "horsLigne": False}
     try:
@@ -1620,6 +1654,11 @@ REVEIL_GRACE_S = 1.5
 REVEIL_MOUVEMENT_PX = 24
 
 
+def choix_vue_simple(cle, arret_deja_demande):
+    """Dans la vue de secours, « Éteindre » demande un second appui ; tout le reste part."""
+    return "confirmer" if cle == "eteindre" and not arret_deja_demande else "choisir"
+
+
 def analyser_arguments(arguments):
     """Sans argument : le menu. « --ambiant » seul : le mode ambiant. Autre chose : None."""
     arguments = list(arguments)
@@ -1865,7 +1904,8 @@ def lancer(arguments=None):
             }
             cache = lire_json(c["meteo"])
             if cache and "donnees" in cache:
-                initial["meteo"] = {"donnees": cache["donnees"], "releveLe": cache["releve"] * 1000, "horsLigne": False}
+                initial["meteo"] = {"donnees": cache["donnees"], "releveLe": cache["releve"] * 1000, "horsLigne": False,
+                                    "lat": cache.get("lat"), "lon": cache.get("lon")}
             if self.ambiant:
                 # « retour » : ni intro, ni choix du profil, ni code à l'ouverture.
                 initial.update(retour=True, reveilProgramme=False, ambiantSeul=True)
@@ -2077,7 +2117,11 @@ def lancer(arguments=None):
         def en_fond(self, travail, *args):
             """Réseau et systemd hors du fil graphique : le menu ne gèle jamais."""
             def executer():
-                reponse = travail(*args)
+                try:
+                    reponse = travail(*args)
+                except Exception as erreur:  # noqa: BLE001 — une tâche qui lève ne doit pas mourir en silence
+                    print(f"hub-menu : tâche de fond en échec ({type(erreur).__name__} : {erreur})", file=sys.stderr)
+                    return
                 if reponse:
                     GLib.idle_add(self.vers_page, reponse)
             threading.Thread(target=executer, daemon=True).start()
@@ -2120,7 +2164,9 @@ def lancer(arguments=None):
                 if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
                     def releve():
                         r = meteo(c, lat, lon)
-                        return r and {"type": "meteo", "donnees": r["donnees"], "releveLe": r["releve"] * 1000, "horsLigne": r["horsLigne"]}
+                        return r and {"type": "meteo", "donnees": r["donnees"], "releveLe": r["releve"] * 1000, "horsLigne": r["horsLigne"],
+                                      # Le lieu du relevé : la page n'affiche pas la météo d'une autre ville.
+                                      "lat": lat, "lon": lon}
                     self.en_fond(releve)
             elif genre == "fps":
                 ligne = ligne_fps(message)
@@ -2275,7 +2321,14 @@ def lancer(arguments=None):
             premier.grab_focus()
             return colonne
 
-        def choisir(self, _bouton, cle):
+        def choisir(self, bouton, cle):
+            suite = choix_vue_simple(cle, getattr(self, "arret_demande", False))
+            if suite == "confirmer":
+                # Éteindre coupe le HUB pour toute la maison : jamais au premier appui,
+                # même dans cette vue de secours sans page.
+                self.arret_demande = True
+                bouton.set_label("Éteindre — appuyer encore pour confirmer")
+                return
             self.choix = cle
             retenir(c, cle)
             self.quit()

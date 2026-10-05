@@ -78,6 +78,24 @@ class Reglages(AvecDossier):
         self.assertIsNotNone(hub_menu.charger_reglages(self.c))
         self.assertEqual(self.c["reglages"].stat().st_mode & 0o777, 0o600)
 
+    def test_un_fichier_illisible_est_mis_de_cote_avant_d_etre_remplace(self):
+        # Profils, codes et villes y sont : la page repart des défauts, mais rien n'est perdu.
+        self.c["reglages"].parent.mkdir(parents=True)
+        self.c["reglages"].write_text("{ tronqué")
+        self.assertIsNone(hub_menu.charger_reglages(self.c))
+        copies = [p.name for p in self.c["reglages"].parent.iterdir() if p.name.startswith("reglages.illisible-")]
+        self.assertEqual(len(copies), 1, copies)
+        self.assertEqual((self.c["reglages"].parent / copies[0]).read_text(), "{ tronqué")
+        # Un fichier absent ou vide n'a rien à garder.
+        self.c["reglages"].unlink()
+        self.assertIsNone(hub_menu.charger_reglages(self.c))
+        self.assertEqual(len([p for p in self.c["reglages"].parent.iterdir() if p.name.startswith("reglages.illisible-")]), 1)
+
+    def test_la_vue_de_secours_demande_un_second_appui_pour_eteindre(self):
+        self.assertEqual(hub_menu.choix_vue_simple("eteindre", False), "confirmer")
+        self.assertEqual(hub_menu.choix_vue_simple("eteindre", True), "choisir")
+        self.assertEqual(hub_menu.choix_vue_simple("tv", False), "choisir")
+
     def test_dernier_choix_ignore_eteindre_et_web(self):
         hub_menu.retenir(self.c, "bureau")
         hub_menu.retenir(self.c, "eteindre")
@@ -112,6 +130,16 @@ class Meteo(AvecDossier):
         def coupe(url):
             raise OSError
         self.assertIsNone(hub_menu.meteo(self.c, 43.3, 5.4, maintenant=1010, telecharger=coupe))
+
+    def test_un_cache_sans_coordonnees_ne_leve_pas(self):
+        # Un cache valide en JSON mais sans lat/lon (ou avec null) levait TypeError dans le
+        # fil de fond : plus aucune météo tant que le fichier existait.
+        self.c["meteo"].parent.mkdir(parents=True)
+        self.c["meteo"].write_text(json.dumps({"lat": None, "lon": None, "releve": 1000, "donnees": METEO}))
+        r = hub_menu.meteo(self.c, 45.76, 4.84, maintenant=1010, telecharger=lambda url: METEO)
+        self.assertEqual(r["donnees"], METEO)
+        self.c["meteo"].write_text(json.dumps([1, 2]))
+        self.assertEqual(hub_menu.meteo(self.c, 45.76, 4.84, maintenant=1010, telecharger=lambda url: METEO)["donnees"], METEO)
 
     def test_reponse_inattendue_n_ecrase_pas_le_cache(self):
         hub_menu.meteo(self.c, 45.76, 4.84, maintenant=1000, telecharger=lambda url: METEO)
@@ -631,6 +659,21 @@ class Images(unittest.TestCase):
             os.utime(d / "recente.png", (5000, 5000))
             noms = [Path(u).name for u in hub_menu.avatars([d])]
         self.assertEqual(noms, ["recente.png", "photo.WEBP", "ancienne.jpg"])
+
+    def test_un_dossier_illisible_est_saute(self):
+        import os
+        with tempfile.TemporaryDirectory() as d:
+            ferme, ouvert = Path(d) / "ferme", Path(d) / "ouvert"
+            ferme.mkdir(); ouvert.mkdir()
+            (ouvert / "a.jpg").write_bytes(b"x")
+            ferme.chmod(0o000)
+            try:
+                if os.access(ferme, os.R_OK):
+                    self.skipTest("ce compte lit tout (root)")
+                noms = [Path(u).name for u in hub_menu.images_de([ferme, ouvert])]
+            finally:
+                ferme.chmod(0o700)
+        self.assertEqual(noms, ["a.jpg"])
 
     def test_datagramme_avatars(self):
         self.assertEqual(hub_menu.message_voix(b"avatars"), {"type": "avatars"})

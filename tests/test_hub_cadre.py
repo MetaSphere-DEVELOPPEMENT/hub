@@ -70,6 +70,9 @@ class Exif(unittest.TestCase):
         self.assertIsNone(hub_menu.date_exif(self.ecrire("pas-jpeg.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 30)))
         self.assertIsNone(hub_menu.date_exif(self.ecrire("tronque.jpg", jpeg_exif("2019:09:15 18:42:07")[:40])))
         self.assertIsNone(hub_menu.date_exif(self.ecrire("zeros.jpg", jpeg_exif("0000:00:00 00:00:00"))))
+        # Un bloc EXIF de six octets (« II*\0 » puis plus rien) : struct.unpack levait, et le
+        # fil qui préparait le cadre photo mourait avec lui.
+        self.assertIsNone(hub_menu.date_exif(self.ecrire("exif-court.jpg", b"\xff\xd8\xff\xe1\x00\x0cExif\x00\x00II*\x00" + b"\xff\xd9")))
         self.assertIsNone(hub_menu.date_exif(self.d / "absent.jpg"))
 
     def test_offsets_absurdes_ne_bouclent_pas(self):
