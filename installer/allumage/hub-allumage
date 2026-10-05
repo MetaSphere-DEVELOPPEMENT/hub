@@ -158,9 +158,15 @@ def heure_de_demarrage(stat="/proc/stat"):
 
 
 def cartes_ethernet(net=Path("/sys/class/net")):
-    """Les cartes filaires physiques : type 1 (Ethernet), un vrai périphérique, pas de wifi."""
+    """Les cartes filaires physiques : type 1 (Ethernet), un vrai périphérique, pas de wifi.
+    Sans sysfs (conteneur, autre noyau) : aucune carte, et le menu le dit, plutôt qu'un
+    état d'allumage qui ne s'affiche plus du tout."""
     cartes = []
-    for d in sorted(Path(net).iterdir()):
+    try:
+        dossiers = sorted(Path(net).iterdir())
+    except OSError:
+        return cartes
+    for d in dossiers:
         try:
             if (d / "type").read_text().strip() != "1" or not (d / "device").exists() or (d / "wireless").exists():
                 continue

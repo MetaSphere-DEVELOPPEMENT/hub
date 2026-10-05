@@ -177,6 +177,12 @@ class WakeOnLan(unittest.TestCase):
                     (net / nom / "wireless").mkdir()
             self.assertEqual(al.cartes_ethernet(net), [{"interface": "enp0s31f6", "adresse": "8c:16:45:aa:bb:cc"}])
 
+    def test_sans_sysfs_aucune_carte_plutot_qu_une_erreur(self):
+        # Le menu appelle cette lecture pour afficher l'état d'allumage : un dossier absent
+        # (conteneur, autre système) ne doit pas lui faire perdre tout l'écran.
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(al.cartes_ethernet(Path(d) / "absent"), [])
+
 
 if __name__ == "__main__":
     unittest.main()
