@@ -114,11 +114,30 @@ class ReglagesGnome(unittest.TestCase):
         vb.coordonner_gnome(600, executer, ecrire=False, verrou=False)
         self.assertEqual(ecrits, [], "--etat n'écrit rien")
 
-    def test_le_reglage_du_verrou_est_lu_strictement(self):
-        self.assertFalse(vb.verrou_bureau(None))
-        self.assertFalse(vb.verrou_bureau({"systeme": {}}), "absent : désactivé, le défaut d'une TV")
-        self.assertFalse(vb.verrou_bureau({"systeme": {"verrouBureau": "true"}}), "tout ce qui n'est pas true vaut faux")
-        self.assertTrue(vb.verrou_bureau({"systeme": {"verrouBureau": True}}))
+    def test_le_reglage_du_verrou_a_trois_etats(self):
+        # Absent (HUB installé avant ce réglage) : None, et GNOME garde le sien. Un défaut
+        # déduit aurait coupé en silence le verrou de tous les HUB déjà installés.
+        self.assertIsNone(vb.verrou_bureau(None))
+        self.assertIsNone(vb.verrou_bureau({"systeme": {}}))
+        self.assertIsNone(vb.verrou_bureau({"systeme": {"verrouBureau": "true"}}), "une chaîne n'est pas un choix")
+        self.assertIs(vb.verrou_bureau({"systeme": {"verrouBureau": False}}), False)
+        self.assertIs(vb.verrou_bureau({"systeme": {"verrouBureau": True}}), True)
+
+    def test_sans_choix_rien_n_est_ecrit_dans_gnome(self):
+        executer, ecrits = self.faux_gsettings(self.VALEURS)
+        rapport = vb.coordonner_gnome(600, executer, verrou=None)
+        self.assertEqual([e[1] for e in ecrits], ["idle-delay"], "seul l'écran noir est repoussé")
+        self.assertNotIn("lock-enabled-voulu", rapport)
+
+    def test_un_profil_restreint_garde_le_verrou_quel_que_soit_le_reglage(self):
+        enfant = {"profilActif": "c", "systeme": {"verrouBureau": False},
+                  "profils": [{"id": "p", "nom": "Parent"}, {"id": "c", "nom": "Enfant", "modes": {"tv": True, "gaming": True, "bureau": False}}]}
+        self.assertIs(vb.verrou_effectif(enfant), True)
+        enfant["profils"][1] = {"id": "c", "nom": "Enfant", "tempsEcran": {"limites": [120] * 7, "debut": None, "fin": None}}
+        self.assertIs(vb.verrou_effectif(enfant), True, "des règles de temps d'écran restreignent aussi")
+        parent = {**enfant, "profilActif": "p"}
+        self.assertIs(vb.verrou_effectif(parent), False, "le parent, lui, a choisi « non »")
+        self.assertIsNone(vb.verrou_effectif({"profilActif": "p", "profils": [{"id": "p"}], "systeme": {}}))
 
     def test_etat_n_ecrit_rien(self):
         executer, ecrits = self.faux_gsettings(self.VALEURS)

@@ -36,8 +36,10 @@ lock-delay, 0). À 5 minutes, l'écran noir passerait AVANT un mode ambiant rég
 Si idle-delay laisse moins de AMBIANT_MIN_S de mode ambiant, on le relève à délai +
 AMBIANT_VISE_S : l'ambiant d'abord, puis l'écran noir. On ne fait que relever, jamais
 baisser ; « jamais » (0) reste « jamais ». Le VERROUILLAGE, lui, suit le réglage du HUB
-(systeme.verrouBureau, Réglages → Veille et minuteur) : désactivé par défaut sur une TV
-de salon, où le code des profils est le verrou — un foyer qui le veut l'active là.
+(systeme.verrouBureau, Réglages → Veille et minuteur) : « non » sur un HUB neuf — sur une TV
+de salon, le code des profils est le verrou —, « oui » pour le foyer qui le veut, et rien
+n'est touché tant que personne n'a choisi (HUB installé avant ce réglage). Sous un profil
+restreint, le verrou est tenu quoi qu'il arrive.
 gnome-session lie idle-delay à sa présence en direct (gsm-manager.c) : pas besoin de
 rouvrir la session. La mise en veille automatique (plugins.power sleep-inactive-ac-*)
 n'est pas touchée : Ubuntu 26.04 la coupe sur secteur (ubuntu-settings, resolute :
@@ -105,11 +107,34 @@ def minutes_veille(reglages):
 
 def verrou_bureau(reglages):
     """systeme.verrouBureau : le bureau redemande-t-il le mot de passe de la session après
-    l'écran noir ? Sur une TV de salon, non par défaut : le code des profils est le verrou
-    familial, et un mot de passe au clavier devant la TV, c'est l'ordinateur qui
-    réapparaît. Un autre foyer peut le vouloir : c'est un réglage, pas un retrait."""
+    l'écran noir ? True, False, ou None quand personne n'a choisi — alors GNOME garde son
+    réglage, on n'écrit rien. Un HUB neuf part sur « non » (le menu l'écrit) : sur une TV
+    de salon, le code des profils est le verrou familial, et un mot de passe au clavier
+    devant la TV, c'est l'ordinateur qui réapparaît. Un HUB déjà installé garde son verrou
+    tant que son foyer n'a pas choisi : un réglage, jamais une déduction."""
     systeme = reglages.get("systeme") if isinstance(reglages, dict) else None
-    return isinstance(systeme, dict) and systeme.get("verrouBureau") is True
+    valeur = systeme.get("verrouBureau") if isinstance(systeme, dict) else None
+    return valeur if isinstance(valeur, bool) else None
+
+
+def profil_actif_restreint(reglages):
+    """Comme estRestreint() de la page : un mode interdit, ou des règles de temps d'écran.
+    Un profil restreint n'a pas à défaire ce que le mot de passe de la session protège."""
+    if not isinstance(reglages, dict):
+        return False
+    profils = [p for p in reglages.get("profils") or [] if isinstance(p, dict)]
+    actif = next((p for p in profils if p.get("id") == reglages.get("profilActif")), profils[0] if profils else {})
+    modes = actif.get("modes") if isinstance(actif.get("modes"), dict) else {}
+    regles = actif.get("tempsEcran") if isinstance(actif.get("tempsEcran"), dict) else {}
+    limites = regles.get("limites") if isinstance(regles.get("limites"), list) else []
+    return any(modes.get(m) is False for m in ("tv", "gaming", "bureau")) \
+        or any(v is not None for v in limites) or bool(regles.get("debut") or regles.get("fin"))
+
+
+def verrou_effectif(reglages):
+    """Ce que GNOME doit faire pour cette session : le verrou reste tenu tant qu'un profil
+    restreint est le profil courant, quel que soit le réglage."""
+    return True if profil_actif_restreint(reglages) else verrou_bureau(reglages)
 
 
 def idle_delay_voulu(actuel_s, delai_s):
@@ -303,7 +328,7 @@ def main(arguments):
     c = chemins()
     reglages = lire_reglages(c["reglages"])
     delai_s = minutes_veille(reglages) * 60
-    verrou_voulu = verrou_bureau(reglages)
+    verrou_voulu = verrou_effectif(reglages)
     if arguments == ["--etat"]:
         print(json.dumps({"delaiAmbiant": delai_s, "verrouBureau": verrou_voulu,
                           "gnome": coordonner_gnome(delai_s, executer_commande, ecrire=False, verrou=verrou_voulu)},
@@ -320,8 +345,9 @@ def main(arguments):
         print(f"hub-veille-bureau : écran noir de GNOME repoussé de {rapport['idle-delay']} s à "
               f"{rapport['idle-delay-voulu']} s, après le mode ambiant", file=sys.stderr)
     if "lock-enabled-voulu" in rapport:
-        print(f"hub-veille-bureau : verrouillage du bureau {'activé' if verrou_voulu else 'désactivé'} "
-              f"(Réglages → Veille et minuteur)", file=sys.stderr)
+        pourquoi = "profil restreint" if profil_actif_restreint(reglages) else "Réglages → Veille et minuteur"
+        print(f"hub-veille-bureau : verrouillage du bureau {'activé' if verrou_voulu else 'désactivé'} ({pourquoi})",
+              file=sys.stderr)
     if "alerte" in rapport:
         print(f"hub-veille-bureau : {rapport['alerte']}", file=sys.stderr)
 

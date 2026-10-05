@@ -252,7 +252,7 @@ class Conditions(AvecPointeur):
             self.assertEqual((statut, rep["raison"]), (403, "contexte"))
             statut, _h, rep = self.requete("POST", "/api/commande", {"nom": "haut"}, jeton=jeton)
             self.assertEqual(rep, {"ok": True, "cible": "menu"})
-            self.assertEqual(menu.recevoir(), "haut")
+            self.assertEqual(menu.recevoir(), "telephone:haut")
             self.assertEqual(self.requete("GET", "/api/etat", jeton=jeton)[2],
                              {"ok": True, "contexte": "menu", "pointeur": {"permis": False, "raison": "contexte"}})
         finally:

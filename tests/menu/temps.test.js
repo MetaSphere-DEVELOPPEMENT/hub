@@ -189,6 +189,9 @@ test("réglages Allumage : jours et heure du réveil, service réarmé, adresse 
   assert.equal(await page.textContent("#contenu-reglages h3"), "Allumage");
   assert.match(await page.textContent("#contenu-reglages"), /8c:16:45:aa:bb:cc/);
   assert.match(await page.textContent("#contenu-reglages"), /ne peut pas allumer le HUB/);
+  // La page ne sait pas ce que fait la TV : elle dit ce qu'il faudrait, pas un état inventé.
+  assert.match(await page.textContent("#contenu-reglages"), /HDMI-CEC/);
+  assert.doesNotMatch(await page.textContent("#contenu-reglages"), /reste éteinte/);
   await page.click('[data-cle="reveil-jour-0"]');
   await page.click('[data-cle="reveil-jour-6"]');
   await page.click('[data-cle="reveil-heure-06:30"]');

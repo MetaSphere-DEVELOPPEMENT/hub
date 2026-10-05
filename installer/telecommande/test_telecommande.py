@@ -860,10 +860,10 @@ class Commandes(AvecServeur):
             for nom in ("gauche", "ok", "theme:sombre", "tv"):
                 statut, _h, rep = self.requete("POST", "/api/commande", {"nom": nom}, jeton=jeton)
                 self.assertEqual((statut, rep["cible"]), (200, "menu"))
-                self.assertEqual(menu.recevoir(), nom)
+                self.assertEqual(menu.recevoir(), f"telephone:{nom}")
             # Accueil n'existe pas dans le protocole du menu : il y devient « retour ».
             self.requete("POST", "/api/commande", {"nom": "accueil"}, jeton=jeton)
-            self.assertEqual(menu.recevoir(), "retour")
+            self.assertEqual(menu.recevoir(), "telephone:retour")
         finally:
             menu.fermer()
 
@@ -1421,7 +1421,7 @@ class Dictee(AvecServeur):
             statut, _h, rep = self.dicter(wav(1.2), jeton)
             self.assertEqual(statut, 200, rep)
             self.assertEqual((rep["ok"], rep["commande"], rep["cible"], rep["texte"]), (True, "tv", "menu", "télé"))
-            self.assertEqual([menu.recevoir() for _ in range(3)], ["voix:entendu:télé", "tv", "voix:repos"])
+            self.assertEqual([menu.recevoir() for _ in range(3)], ["voix:entendu:télé", "telephone:tv", "voix:repos"])
             self.assertEqual(self.dicteur.appels, [(int(1.2 * 16000) * 2, "fr")])
         finally:
             menu.fermer()
@@ -1501,7 +1501,7 @@ class TravailleurDictee(AvecDossier):
             statut, rep = post("/api/dictee", Path(os.environ["HUB_TEST_DICTEE_WAV"]).read_bytes(),
                                {"Content-Type": "audio/wav", "Authorization": f"Bearer {rep['jeton']}"})
             self.assertEqual((statut, rep["commande"], rep["cible"]), (200, "tv", "menu"), rep)
-            self.assertEqual([menu.recevoir() for _ in range(3)], ["voix:entendu:télé", "tv", "voix:repos"])
+            self.assertEqual([menu.recevoir() for _ in range(3)], ["voix:entendu:télé", "telephone:tv", "voix:repos"])
         finally:
             menu.fermer()
             service.dicteur.arreter()

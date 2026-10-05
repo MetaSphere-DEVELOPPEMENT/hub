@@ -22,7 +22,7 @@
   --alerte: #ff6b6b;
   --depasse: #ff8a4c;
   /* Globe barré de l'en-tête : --alerte tombait à 2,35:1 sur le motif rubans (mesuré le 17/09/2026). */
-  --picto-aucun: #ff9b9b;
+  --picto-aucun: #ffa8a8;
   /* Initiales des avatars : encre foncée sur la couleur du profil. En blanc, sur turquoise
      ou ambre, elles tombaient à 2,05–2,2:1 (1,5:1 en thème clair). */
   --encre-avatar: #06070c;

@@ -696,10 +696,13 @@ class Messages(unittest.TestCase):
         self.assertIsNone(hub_menu.lire_message_page("pas du json"))
         self.assertIsNone(hub_menu.lire_message_page("[1,2]"))
 
-    def test_duree_lisible(self):
-        self.assertEqual(hub_menu.duree_lisible(59), "0 min")
-        self.assertEqual(hub_menu.duree_lisible(3 * 3600 + 5 * 60), "3 h 05")
-        self.assertEqual(hub_menu.duree_lisible(2 * 86400 + 4 * 3600), "2 j 4 h")
+    def test_commandes_du_telephone_portent_leur_source(self):
+        # hub-telecommande signe ce qui vient du téléphone ; la voix et la télécommande CEC
+        # envoient le nom nu, et rien d'autre n'est accepté derrière le préfixe.
+        self.assertEqual(hub_menu.message_voix(b"telephone:tv"), {"type": "commande", "nom": "tv", "source": "telephone"})
+        self.assertEqual(hub_menu.message_voix(b"telephone:ok"), {"type": "commande", "nom": "ok", "source": "telephone"})
+        self.assertIsNone(hub_menu.message_voix(b"telephone:rm -rf"))
+        self.assertIsNone(hub_menu.message_voix(b"telephone:"))
 
     def test_services_web_par_nom_jamais_par_adresse(self):
         self.assertEqual(hub_menu.message_voix(b"web:netflix"), {"type": "commande", "nom": "web:netflix"})
@@ -717,7 +720,7 @@ class Messages(unittest.TestCase):
     def test_infos_ne_plantent_pas(self):
         i = hub_menu.infos()
         self.assertTrue(i["machine"])
-        self.assertTrue(i["disqueLibre"].endswith("Go"))
+        self.assertIsInstance(i["disqueLibreOctets"], int, "des nombres : la page les écrit dans la langue du profil")
 
 
 class Fluidite(AvecDossier):

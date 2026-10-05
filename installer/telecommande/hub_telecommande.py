@@ -1033,7 +1033,10 @@ class Routeur:
         if self.socket_menu.is_socket():
             if nom == "texte":
                 return {"ok": False, "cible": "menu", "raison": "texte-hors-kodi"}
-            message = "retour" if nom == "accueil" else nom
+            # « telephone: » devant le nom : le menu sait que l'ordre vient du téléphone, et
+            # refuse de cette source les réglages à faire devant la TV (autoriser la souris
+            # d'un téléphone). La voix et la télécommande CEC envoient le nom nu.
+            message = "telephone:" + ("retour" if nom == "accueil" else nom)
             if _envoyer_menu(self.socket_menu, message):
                 return {"ok": True, "cible": "menu"}
             # Socket présent mais muet : le menu est tombé sans nettoyer. On continue

@@ -62,7 +62,7 @@ test("À propos : le numéro en grand, l'empreinte et la date en petit", async (
   await infos();
   await page.waitForTimeout(150);
   assert.equal(await page.textContent(".version-info .valeur"), "1.0.0");
-  assert.equal(await page.textContent(".version-info .version-detail"), "commit a03afa7 · du 2026-09-17");
+  assert.equal(await page.textContent(".version-info .version-detail"), "commit a03afa7 · du 17 septembre 2026");
   // L'empreinte reste plus petite que le numéro : c'est le numéro qu'on lit de loin.
   const tailles = await page.evaluate(() => [".version-info .valeur", ".version-info .version-detail"]
     .map(s => parseFloat(getComputedStyle(document.querySelector(s)).fontSize)));
@@ -127,6 +127,6 @@ test("anglais : le numéro et les nouveautés sont traduits", async () => {
   await infos();
   await page.waitForTimeout(150);
   assert.equal(await page.textContent(".version-info .valeur"), "1.0.0");
-  assert.equal(await page.textContent(".version-info .version-detail"), "commit a03afa7 · of 2026-09-17");
+  assert.equal(await page.textContent(".version-info .version-detail"), "commit a03afa7 · dated 17 September 2026");
   assert.match(await page.textContent("#nouveautes"), /What's new · 1\.0\.0/);
 });

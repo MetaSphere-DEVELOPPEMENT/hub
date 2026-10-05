@@ -97,6 +97,10 @@ const DEFAUTS = {
     // éteint tant que personne ne l'a allumé ici, devant la TV. hub-telecommande relit
     // ce réglage à chaque seconde d'usage ; tout ce qui n'est pas `true` vaut éteint.
     telecommandeSouris: false,
+    // systeme.verrouBureau (le bureau Ubuntu redemande-t-il le mot de passe après l'écran
+    // noir ?) n'a PAS de défaut ici : absent, hub-veille-bureau ne touche pas à GNOME. Un
+    // HUB neuf le reçoit à « non » plus bas (une machine de salon) ; un HUB déjà installé
+    // garde son verrou tant que personne n'a choisi — un réglage, jamais une déduction.
   },
 };
 
@@ -166,6 +170,9 @@ let reglages = (() => {
     try { brut = JSON.parse(localStorage.getItem("hub-reglages")); } catch { brut = null; }
   }
   const r = fusion(copie(DEFAUTS), brut || {});
+  // Le choix proposé à l'installation, posé seulement sur un HUB qui n'a encore aucun
+  // réglage : désactivé sur une TV de salon, le code des profils est le verrou.
+  if (!brut) r.systeme.verrouBureau = false;
   // « motif » est venu après « fond » : un profil qui ne le porte pas a été réglé quand il
   // n'y avait que les nappes, et doit les garder.
   r.profils = (r.profils.length ? r.profils : copie(DEFAUTS.profils)).map(p => ({ ...DEFAUTS_PROFIL, motif: "nappes", ...p }));
@@ -239,7 +246,12 @@ function sauver() {
 function t(cle, variables = {}) {
   const langue = profil().langue;
   let texte = TEXTES[langue]?.[cle] ?? TEXTES.fr[cle] ?? cle;
-  for (const [k, v] of Object.entries(variables)) texte = texte.replace(`{${k}}`, v);
+  // Le dossier d'images de la session (« Images », « Pictures »…), que hub-menu relève :
+  // un texte anglais sur une Ubuntu française désignait un dossier qui n'existe pas.
+  if (texte.includes("{dossier}")) texte = texte.replace("{dossier}", () => INITIAL.dossierImages || "Images");
+  // Par fonction : une valeur (nom de profil, ville) qui contient « $& » ou « $' »
+  // serait sinon interprétée par replace.
+  for (const [k, v] of Object.entries(variables)) texte = texte.replace(`{${k}}`, () => String(v));
   return texte;
 }
 function locale() { return profil().langue === "en" ? "en-GB" : "fr-FR"; }
@@ -2570,9 +2582,9 @@ function rangee(titre, aide, controle, large = false, commun = false) {
     el("div", {}, el("div", { class: "titre" }, titre, commun && el("span", { class: "portee-hub" }, t("portee.hub"))), aide && el("div", { class: "aide" }, aide)),
     controle);
 }
-function options(cle, liste, valeur, changer) {
+function options(cle, liste, valeur, changer, attributs = {}) {
   return el("div", { class: "options" }, liste.map(([v, libelle]) => el("button", {
-    class: `option${String(v) === String(valeur) ? " choisie" : ""}`, "data-nav": true, "data-cle": `${cle}-${v}`,
+    class: `option${String(v) === String(valeur) ? " choisie" : ""}`, "data-nav": true, "data-cle": `${cle}-${v}`, ...attributs,
     onclick: () => { changer(v); sauver(); appliquerTout(); rendreSection(); son("ok"); },
   }, libelle)));
 }
@@ -2593,7 +2605,7 @@ function rendreSection(garderFocus = true) {
   switch (sectionCourante) {
     case "apparence":
       zone.append(
-        rangee(t("theme"), p.theme === "auto" ? t("theme.auto.detail") : null,
+        rangee(t("theme"), p.theme === "auto" ? t(meteoSituee() ? "theme.auto.detail" : "theme.auto.detail.heures") : null,
           options("theme", [["sombre", t("theme.sombre")], ["clair", t("theme.clair")], ["auto", t("theme.auto")]], p.theme, v => { p.theme = v; })),
         rangee(t("animations"), null,
           options("animations", [["completes", t("animations.completes")], ["reduites", t("animations.reduites")]], p.animations, v => { p.animations = v; })),
@@ -2761,6 +2773,14 @@ function rendreSection(garderFocus = true) {
               class: `option${(v === 0 && !minuteurFin) ? " choisie" : ""}`, "data-nav": true, "data-cle": `minuteur-${v}`,
               onclick: () => programmerMinuteur(v),
             }, libelle))), false, true));
+      if (!estRestreint()) {
+        // Trois états : oui, non, ou pas encore choisi (HUB installé avant ce réglage) —
+        // alors GNOME garde le sien, et la page le dit plutôt que de cocher un défaut.
+        const choisi = typeof s.verrouBureau === "boolean";
+        zone.append(rangee(t("verrou.bureau"), `${t("verrou.bureau.detail")}${choisi ? "" : " " + t("verrou.bureau.non.choisi")}`,
+          options("verrou-bureau", [[true, t("oui")], [false, t("non")]], choisi ? s.verrouBureau : "aucun",
+            v => { s.verrouBureau = v === true || v === "true"; }), false, true));
+      }
       break;
     }
 
@@ -2774,7 +2794,7 @@ function rendreSection(garderFocus = true) {
       if (!estRestreint()) {
         zone.append(rangee(t("telecommande.souris"), t("telecommande.souris.detail"),
           options("telecommande-souris", [[true, t("oui")], [false, t("non")]], s.telecommandeSouris === true,
-            v => { s.telecommandeSouris = v === true || v === "true"; }), false, true));
+            v => { s.telecommandeSouris = v === true || v === "true"; }, { "data-sur-tv": true }), false, true));
       }
       break;
 
@@ -2793,14 +2813,14 @@ function rendreSection(garderFocus = true) {
           el("div", { class: "valeur" }, el("span", { class: "picto-internet", html: pictoInternet(internet.etat) }), libelleInternet()))
           : info(t("apropos.reseau"), i.adresse ? t("reseau.connecte") : t("reseau.deconnecte")),
         info(t("apropos.adresse"), i.adresse),
-        info(t("apropos.allume"), i.allumeDepuis),
-        info(t("apropos.disque"), i.disqueLibre),
+        info(t("apropos.allume"), Number.isFinite(i.allumeDepuisS) ? dureeLisible(i.allumeDepuisS) : null),
+        info(t("apropos.disque"), Number.isFinite(i.disqueLibreOctets) ? `${Math.round(i.disqueLibreOctets / 1e9)} ${t("unite.go")}` : null),
         // Le numéro en grand, l'empreinte et la date en petit : on lit « Version 1.0.0 »
         // au téléphone, et on retrouve le commit quand on vérifie une signature.
         el("div", { class: "info version-info" }, el("div", { class: "etiquette" }, t("apropos.version")),
           el("div", { class: "valeur" }, i.version || t("version.inconnue")),
           (i.commit || i.versionDate) && el("div", { class: "version-detail" },
-            [i.commit && t("apropos.commit", { c: i.commit }), i.versionDate && t("apropos.version.date", { d: i.versionDate })].filter(Boolean).join(" · ")))),
+            [i.commit && t("apropos.commit", { c: i.commit }), i.versionDate && t("apropos.version.date", { d: dateLisible(i.versionDate) })].filter(Boolean).join(" · ")))),
         contenuMiseAJour(),
         nouveautesVersion(i),
         rangee(t("maj.auto"), t("maj.auto.detail"),
@@ -2866,6 +2886,19 @@ const ETAPES_MAJ = ["verification", "telechargement", "tests", "installation", "
 // phrase : l'empreinte se lit en petit dans À propos, là où elle sert à vérifier la
 // signature. Les phrases qui l'entourent disent déjà « version » (i18n.js).
 function nomVersion(numero, commit) { return numero || commit || ""; }
+// « 2 j 4 h », « 3 h 05 », « 12 min » — dans la langue du profil, pas celle de hub-menu.
+function dureeLisible(secondes) {
+  const minutes = Math.floor(secondes / 60);
+  const jours = Math.floor(minutes / 1440), heures = Math.floor((minutes % 1440) / 60), m = minutes % 60;
+  if (jours) return `${jours} ${t("unite.jour")} ${heures} ${t("unite.heure")}`;
+  if (heures) return `${heures} ${t("unite.heure")} ${String(m).padStart(2, "0")}`;
+  return `${m} ${t("unite.min")}`;
+}
+// « 2026-09-21 » → « 21 septembre 2026 » ; une date illisible reste telle quelle.
+function dateLisible(iso) {
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(iso) ? new Date(`${iso}T12:00:00`) : null;
+  return d && !Number.isNaN(d.getTime()) ? d.toLocaleDateString(locale(), { day: "numeric", month: "long", year: "numeric" }) : iso;
+}
 function majActive(e = maj.etat) { return !!e && !["terminee", "echec", "a-jour"].includes(e.etape); }
 // L'état « terminée » d'une installation reste dans /run jusqu'au redémarrage du HUB.
 // Dès qu'une version PLUS RÉCENTE est trouvée, il parle du passé : il cachait le bouton
@@ -3044,7 +3077,7 @@ let minuterieRetrait = null;
 // tant que ce bouton n'a pas été touché ici.
 function souris(p) {
   return el("button", {
-    class: `option${p.pointeurAutorise ? " choisie" : ""}`, "data-nav": true, "data-cle": `souris-${p.id}`,
+    class: `option${p.pointeurAutorise ? " choisie" : ""}`, "data-nav": true, "data-cle": `souris-${p.id}`, "data-sur-tv": true,
     onclick: () => autoriserSourisTelephone(p.id, !p.pointeurAutorise),
   }, p.pointeurAutorise ? t("telecommande.souris.retirer") : t("telecommande.souris.autoriser"));
 }
@@ -3063,7 +3096,8 @@ function listeTelephones(liste) {
     return el("li", {},
       el("div", { class: "telephone-nom" }, p.nom || t("telecommande.telephone")),
       el("div", { class: "aide" }, t("telecommande.vu", { quand: dernierUsage(p.vu) })),
-      souris(p),
+      // Un profil restreint ne donne pas le clavier du bureau qu'on lui a fermé.
+      !estRestreint() && souris(p),
       el("button", {
         class: `option${confirme ? " confirme" : ""}`, "data-nav": true, "data-cle": `retirer-${p.id}`,
         onclick: () => retirerTelephone(p.id),
@@ -3292,7 +3326,12 @@ function commande(nom, source = null) {
   }
   const directions = { gauche: 1, droite: 1, haut: 1, bas: 1 };
   if (nom in directions) return deplacer(nom);
-  if (nom === "ok") return courant?.click();
+  if (nom === "ok") {
+    // Accorder la souris à un téléphone se fait devant la TV : un téléphone déjà relié
+    // pilote le menu aux flèches et aurait pu se donner ce droit lui-même.
+    if (source === "telephone" && courant?.dataset.surTv !== undefined) { son("erreur"); return annoncer(t("telecommande.sur.tv")); }
+    return courant?.click();
+  }
   if (nom === "retour") return retour();
   if (nom === "eteindre") { fermerTout(); return ACTIONS.arret(); }
   if (nom === "reglages" || nom === "aide" || nom === "meteo" || nom === "profils") { fermerTout(); return ACTIONS[nom](); }

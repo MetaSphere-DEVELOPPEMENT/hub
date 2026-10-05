@@ -209,7 +209,7 @@ test("arrêt : six actions expliquées, Annuler sélectionné à chaque ouvertur
   assert.deepEqual(entrees.map(e => e.cle),
     ["arret-annuler", "arret-eteindre", "arret-redemarrer", "arret-veille", "arret-ambiant", "arret-profils"]);
   assert.deepEqual(entrees.filter(e => !e.nom.trim() || !e.detail.trim()), [], "chaque action porte son nom et sa ligne d'explication");
-  assert.match(entrees[4].nom, /Always-On Display/);
+  assert.match(entrees[4].nom, /Mode ambiant/);
   assert.equal(await focus(), "arret-annuler");
   await touche("ArrowDown", "ArrowDown");
   assert.equal(await focus(), "arret-redemarrer", "les flèches parcourent la liste");
@@ -314,7 +314,7 @@ test("anglais : le menu d'arrêt et sa confirmation sont traduits", async () => 
   await touche("e");
   assert.equal(await page.textContent("#arret h2"), "What should the HUB do?");
   assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll("#arret .action-nom")].map(e => e.textContent)),
-    ["Cancel", "Power off", "Restart", "Sleep", "Always-On Display", "Switch profile"]);
+    ["Cancel", "Power off", "Restart", "Sleep", "Ambient mode", "Switch profile"]);
   await page.click('[data-cle="arret-redemarrer"]');
   assert.equal(await page.textContent("#confirmer-titre"), "Restart the HUB?");
   assert.equal(await page.textContent("#confirmer-oui"), "Restart");
@@ -1334,4 +1334,64 @@ test("thème automatique : au coucher du soleil, fond et accent suivent même en
   assert.equal(await page.getAttribute("html", "data-theme"), "sombre");
   assert.ok((await pixel()) < pixelClair - 100, `le fond est resté peint aux couleurs du jour (${pixelClair} → ${await pixel()})`);
   assert.notEqual(await accent(), accentClair, "l'accent est resté celui du thème clair");
+});
+
+// ── Textes et unités dans la langue du profil ; ce que la page ne sait pas, elle ne le dit plus ──
+test("À propos : durée d'allumage, espace libre et date de version s'écrivent dans la langue du profil", async () => {
+  await ouvrir({ retour: true, reglages: { profilActif: "p", profils: [{ id: "p", nom: "P", langue: "en" }], systeme: {} } });
+  await page.evaluate(() => ACTIONS.reglages("apropos"));
+  await page.evaluate(() => window.hub.recevoir({ type: "infos", machine: "hub", systeme: "Ubuntu", adresse: "10.0.0.2", allumeDepuisS: 2 * 86400 + 4 * 3600 + 120, disqueLibreOctets: 112_000_000_000, version: "1.1.0", commit: "abc1234", versionDate: "2026-10-06", nouveautes: "x" }));
+  const texte = await page.textContent("#contenu-reglages");
+  assert.match(texte, /2 d 4 h/, "« 2 j 4 h » n'est pas de l'anglais");
+  assert.match(texte, /112 GB/);
+  assert.match(texte, /dated 6 October 2026/);
+  await page.evaluate(() => { profil().langue = "fr"; appliquerTout(); rendreSection(); });
+  const fr = await page.textContent("#contenu-reglages");
+  assert.match(fr, /2 j 4 h/);
+  assert.match(fr, /112 Go/);
+  assert.match(fr, /du 6 octobre 2026/);
+});
+
+test("un nom de profil avec « $& » s'affiche tel quel dans les textes", async () => {
+  await ouvrir({ retour: true, reglages: { profilActif: "p", profils: [{ id: "p", nom: "A$& B$'" }], systeme: {} } });
+  assert.match(await page.textContent("#salut"), /A\$& B\$'/);
+  assert.equal(await page.evaluate(() => t("code.titre", { nom: "A$& B$'" })), "Code de A$& B$'");
+});
+
+test("le thème automatique dit ce qu'il fait : le soleil avec une ville, 8 h – 20 h sans", async () => {
+  await ouvrir({ retour: true, reglages: { profilActif: "p", profils: [{ id: "p", nom: "P", theme: "auto" }], systeme: { meteo: { active: false } } } });
+  await page.evaluate(() => ACTIONS.reglages("apparence"));
+  assert.match(await page.textContent("#contenu-reglages"), /Clair de 8 h à 20 h/);
+  await page.evaluate(() => { reglages.systeme.meteo = { active: true, ville: "Lyon", lat: 45.76, lon: 4.84 }; rendreSection(); });
+  assert.match(await page.textContent("#contenu-reglages"), /coucher du soleil/);
+});
+
+test("le menu d'arrêt ne promet plus rien sur la TV, et le verrouillage du bureau se règle dans Veille", async () => {
+  await ouvrir({ retour: true });
+  await touche("e");
+  const arret = await page.textContent("#arret");
+  assert.doesNotMatch(arret, /TV reste allumée|TV restera/);
+  await touche("Escape");
+  await page.evaluate(() => ACTIONS.reglages("veille"));
+  assert.match(await page.textContent("#contenu-reglages"), /Verrouiller le bureau/);
+  // Un HUB neuf (aucun réglage) part sur « non » : le choix proposé à l'installation.
+  assert.match(await page.getAttribute('[data-cle="verrou-bureau-false"]', "class"), /\bchoisie\b/, "« non » sur un HUB neuf");
+  await page.click('[data-cle="verrou-bureau-true"]');
+  await attendreReglages(d => d.systeme.verrouBureau === true);
+  // Un HUB déjà installé, sans ce réglage : rien n'est coché ni déduit, et la page le dit.
+  await page.close();
+  await ouvrir({ retour: true, reglages: { profilActif: "p", profils: [{ id: "p", nom: "P" }], systeme: { veille: 10 } } });
+  await page.evaluate(() => ACTIONS.reglages("veille"));
+  assert.doesNotMatch(await page.getAttribute('[data-cle="verrou-bureau-false"]', "class"), /\bchoisie\b/);
+  assert.doesNotMatch(await page.getAttribute('[data-cle="verrou-bureau-true"]', "class"), /\bchoisie\b/);
+  assert.match(await page.textContent("#contenu-reglages"), /Pas encore choisi/);
+  await page.evaluate(() => { profil().langue = "fr"; sauver(); });
+  await attendreReglages(d => !("verrouBureau" in d.systeme), "un autre réglage enregistré n'y ajoute pas un verrou déduit");
+});
+
+test("les textes nomment le vrai dossier d'images de la session", async () => {
+  await ouvrir({ retour: true, dossierImages: "Pictures", reglages: { profilActif: "p", profils: [{ id: "p", nom: "P", fond: "photos" }], systeme: {} } });
+  await page.evaluate(() => ACTIONS.reglages("fond"));
+  assert.match(await page.textContent("#contenu-reglages"), /Pictures\/HUB/);
+  assert.doesNotMatch(await page.textContent("#contenu-reglages"), /Images\/HUB/);
 });

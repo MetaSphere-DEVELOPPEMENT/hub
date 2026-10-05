@@ -374,6 +374,18 @@ def images_de(dossiers, limite=200, recentes_d_abord=False):
     return [f.resolve().as_uri() for f in fichiers[:limite]]
 
 
+def nom_dossier_images():
+    """Le nom du dossier d'images de la session (« Images », « Pictures »…), pour que
+    les textes du menu désignent celui qui existe, quelle que soit la langue du profil."""
+    try:
+        images = subprocess.run(["xdg-user-dir", "PICTURES"], capture_output=True, text=True, timeout=2).stdout.strip()
+        if images and Path(images) != Path.home():
+            return Path(images).name
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return next((n for n in ("Images", "Pictures") if (Path.home() / n).is_dir()), "Images")
+
+
 def photos(dossiers=None):
     """Les images de Images/HUB (ou Pictures/HUB) deviennent un fond possible."""
     return images_de(dossiers if dossiers is not None else dossiers_images("HUB"))
@@ -746,17 +758,6 @@ def mettre_en_veille(executer=subprocess.run):
 
 
 # ── Infos machine ─────────────────────────────────────────────────────────
-def duree_lisible(secondes):
-    minutes = int(secondes // 60)
-    jours, minutes = divmod(minutes, 24 * 60)
-    heures, minutes = divmod(minutes, 60)
-    if jours:
-        return f"{jours} j {heures} h"
-    if heures:
-        return f"{heures} h {minutes:02d}"
-    return f"{minutes} min"
-
-
 def adresse_ip():
     # Connecter un socket UDP n'envoie rien : cela demande seulement au noyau quelle
     # interface il utiliserait, donc l'adresse du HUB sur le réseau local.
@@ -777,7 +778,7 @@ def infos():
     except OSError:
         pass
     try:
-        allume = duree_lisible(float(Path("/proc/uptime").read_text().split()[0]))
+        allume = float(Path("/proc/uptime").read_text().split()[0])
     except (OSError, ValueError, IndexError):
         allume = None
     libre = shutil.disk_usage("/").free
@@ -796,8 +797,10 @@ def infos():
         "machine": socket.gethostname(),
         "systeme": systeme,
         "adresse": adresse_ip(),
-        "allumeDepuis": allume,
-        "disqueLibre": f"{libre / 1e9:.0f} Go",
+        # Des nombres : la page les écrit dans la langue du profil (« 2 j 4 h » n'est pas de
+        # l'anglais, « 112 Go » non plus).
+        "allumeDepuisS": allume,
+        "disqueLibreOctets": libre,
         # Le numéro pour l'humain, l'empreinte pour la vérification : les deux, jamais l'un
         # à la place de l'autre (c'est la signature du commit qui fait la confiance).
         "version": version["numero"],
@@ -1392,6 +1395,11 @@ def message_voix(datagramme):
         if etat == "entendu":
             return {"type": "voix", "etat": "entendu", "texte": reste[:120]}
         return {"type": "voix", "etat": etat} if etat in ETATS_VOIX else None
+    if texte.startswith("telephone:"):
+        # hub-telecommande signe ce qui vient du téléphone : la page refuse de cette source
+        # les réglages à faire devant la TV (le droit à la souris d'un téléphone).
+        nom = texte[len("telephone:"):]
+        return {"type": "commande", "nom": nom, "source": "telephone"} if nom in COMMANDES else None
     return {"type": "commande", "nom": texte} if texte in COMMANDES else None
 
 
@@ -1886,6 +1894,7 @@ def lancer(arguments=None):
                 "reglages": charger_reglages(c),
                 "dernier": dernier_choix(c),
                 "photos": photos(),
+                "dossierImages": nom_dossier_images(),
                 "avatars": avatars(),
                 "telecommande": etat_telecommande(c),
                 "voixEtat": etat_voix(c),

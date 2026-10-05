@@ -13,29 +13,29 @@
 
 Object.assign(TEXTES.fr, {
   "cadre": "Cadre photo",
-  "cadre.detail": "En mode ambiant, les photos d'Images/HUB défilent sous l'horloge.",
+  "cadre.detail": "En mode ambiant, les photos de {dossier}/HUB défilent sous l'horloge.",
   "cadre.album": "Album",
-  "cadre.album.detail": "Un album est un sous-dossier d'Images/HUB.",
+  "cadre.album.detail": "Un album est un sous-dossier de {dossier}/HUB.",
   "cadre.tous": "Toutes les photos",
   "cadre.duree": "Durée par photo",
   "cadre.souvenirs": "Souvenirs",
   "cadre.souvenirs.detail": "D'abord les photos prises ce jour-là, les années précédentes.",
   "cadre.il.y.a": "Il y a {n} ans",
   "cadre.il.y.a.un": "Il y a un an",
-  "cadre.aucune": "Aucune photo dans Images/HUB : le mode ambiant garde son fond.",
+  "cadre.aucune": "Aucune photo dans {dossier}/HUB : le mode ambiant garde son fond.",
 });
 Object.assign(TEXTES.en, {
   "cadre": "Photo frame",
-  "cadre.detail": "In ambient mode, photos from Pictures/HUB play behind the clock.",
+  "cadre.detail": "In ambient mode, photos from {dossier}/HUB play behind the clock.",
   "cadre.album": "Album",
-  "cadre.album.detail": "An album is a subfolder of Pictures/HUB.",
+  "cadre.album.detail": "An album is a subfolder of {dossier}/HUB.",
   "cadre.tous": "All photos",
   "cadre.duree": "Time per photo",
   "cadre.souvenirs": "Memories",
   "cadre.souvenirs.detail": "Photos taken on this day in previous years come first.",
   "cadre.il.y.a": "{n} years ago",
   "cadre.il.y.a.un": "One year ago",
-  "cadre.aucune": "No photos in Pictures/HUB: ambient mode keeps its background.",
+  "cadre.aucune": "No photos in {dossier}/HUB: ambient mode keeps its background.",
 });
 
 const DEFAUT_CADRE = { actif: false, album: null, duree: 20, souvenirs: false };

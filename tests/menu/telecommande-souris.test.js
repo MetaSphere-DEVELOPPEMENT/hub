@@ -74,3 +74,29 @@ test("souris du téléphone : un profil restreint ne voit pas l'interrupteur", a
   assert.doesNotMatch(await page.textContent("#contenu-reglages"), /Souris et clavier/);
   await page.close();
 });
+
+// Décision du 21/09/2026 : le droit se donne SUR LA TV. Un téléphone appairé pilote le menu
+// aux flèches : sans ce refus, il se donnait la souris lui-même.
+const TELEPHONES = [{ id: "ab12cd", nom: "Pixel", vu: Date.now(), cree: Date.now(), pointeurAutorise: false }];
+
+test("souris du téléphone : un ordre venu du téléphone ne peut ni l'allumer ni l'accorder, le clavier devant la TV si", async () => {
+  const page = await ouvrir({ telecommande: { ...ETAT, telephones: 1, listeTelephones: TELEPHONES } });
+  await page.evaluate(() => { definirFocus(document.querySelector('[data-cle="souris-ab12cd"]'), true); window.hub.recevoir({ type: "commande", nom: "ok", source: "telephone" }); });
+  await page.waitForTimeout(150);
+  assert.equal(await page.evaluate(() => window.__messages.filter(m => m.type === "telecommande-souris-telephone").length), 0);
+  assert.match(await page.textContent("#annonce"), /devant la TV/);
+  await page.evaluate(() => { definirFocus(document.querySelector('[data-cle="telecommande-souris-true"]'), true); window.hub.recevoir({ type: "commande", nom: "ok", source: "telephone" }); });
+  await page.waitForTimeout(150);
+  assert.equal(await page.evaluate(() => window.__messages.filter(m => m.type === "reglages").length), 0, "l'interrupteur non plus");
+  // La voix et la télécommande CEC envoient l'ordre sans source : ils sont dans la pièce.
+  await page.evaluate(() => { definirFocus(document.querySelector('[data-cle="souris-ab12cd"]'), true); window.hub.recevoir({ type: "commande", nom: "ok" }); });
+  await page.waitForFunction(() => window.__messages.some(m => m.type === "telecommande-souris-telephone" && m.id === "ab12cd" && m.autoriser === true));
+  await page.close();
+});
+
+test("souris du téléphone : un profil restreint ne voit pas non plus le bouton par téléphone", async () => {
+  const page = await ouvrir({ telecommande: { ...ETAT, telephones: 1, listeTelephones: TELEPHONES }, reglages: { profilActif: "alix", profils: [{ id: "alix", nom: "Alix", modes: { tv: true, gaming: true, bureau: false } }] } });
+  assert.equal(await page.locator('[data-cle^="souris-"]').count(), 0);
+  assert.equal(await page.locator('[data-cle^="telecommande-souris-"]').count(), 0);
+  await page.close();
+});
