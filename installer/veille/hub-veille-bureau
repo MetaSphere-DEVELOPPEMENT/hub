@@ -34,8 +34,10 @@ org.gnome.desktop.session idle-delay (300 s par défaut, gsettings-desktop-schem
 éteint l'écran et verrouille (org.gnome.desktop.screensaver lock-enabled, true ; après
 lock-delay, 0). À 5 minutes, l'écran noir passerait AVANT un mode ambiant réglé à 10.
 Si idle-delay laisse moins de AMBIANT_MIN_S de mode ambiant, on le relève à délai +
-AMBIANT_VISE_S : l'ambiant d'abord, puis l'écran noir et le verrouillage, qu'on ne
-désactive pas. On ne fait que relever, jamais baisser ; « jamais » (0) reste « jamais ».
+AMBIANT_VISE_S : l'ambiant d'abord, puis l'écran noir. On ne fait que relever, jamais
+baisser ; « jamais » (0) reste « jamais ». Le VERROUILLAGE, lui, suit le réglage du HUB
+(systeme.verrouBureau, Réglages → Veille et minuteur) : désactivé par défaut sur une TV
+de salon, où le code des profils est le verrou — un foyer qui le veut l'active là.
 gnome-session lie idle-delay à sa présence en direct (gsm-manager.c) : pas besoin de
 rouvrir la session. La mise en veille automatique (plugins.power sleep-inactive-ac-*)
 n'est pas touchée : Ubuntu 26.04 la coupe sur secteur (ubuntu-settings, resolute :
@@ -101,6 +103,15 @@ def minutes_veille(reglages):
     return VEILLE_DEFAUT_MIN
 
 
+def verrou_bureau(reglages):
+    """systeme.verrouBureau : le bureau redemande-t-il le mot de passe de la session après
+    l'écran noir ? Sur une TV de salon, non par défaut : le code des profils est le verrou
+    familial, et un mot de passe au clavier devant la TV, c'est l'ordinateur qui
+    réapparaît. Un autre foyer peut le vouloir : c'est un réglage, pas un retrait."""
+    systeme = reglages.get("systeme") if isinstance(reglages, dict) else None
+    return isinstance(systeme, dict) and systeme.get("verrouBureau") is True
+
+
 def idle_delay_voulu(actuel_s, delai_s):
     """La nouvelle valeur d'idle-delay, ou None s'il laisse déjà sa place à l'ambiant."""
     if not delai_s or actuel_s == 0 or actuel_s >= delai_s + AMBIANT_MIN_S:
@@ -136,14 +147,23 @@ def valeur_gsettings(texte):
     return int(dernier) if dernier.isdigit() else dernier
 
 
-def coordonner_gnome(delai_s, executer, ecrire=True):
-    """Relève idle-delay si besoin. Rend ce qui a été lu et fait, pour le journal."""
+def coordonner_gnome(delai_s, executer, ecrire=True, verrou=None):
+    """Relève idle-delay si besoin, et aligne le verrouillage du bureau sur le réglage du
+    HUB (`verrou` : True, False, ou None pour ne pas y toucher). Rend ce qui a été lu et
+    fait, pour le journal."""
     def lire(schema, cle):
         code, sortie = executer(["gsettings", "get", schema, cle])
         return valeur_gsettings(sortie) if code == 0 else None
 
     idle = lire("org.gnome.desktop.session", "idle-delay")
     rapport = {"idle-delay": idle, "lock-enabled": lire("org.gnome.desktop.screensaver", "lock-enabled")}
+    if verrou is not None and rapport["lock-enabled"] in ("true", "false"):
+        voulu = "true" if verrou else "false"
+        if rapport["lock-enabled"] != voulu:
+            rapport["lock-enabled-voulu"] = voulu
+            if ecrire:
+                code, _ = executer(["gsettings", "set", "org.gnome.desktop.screensaver", "lock-enabled", voulu])
+                rapport["lock-enabled-ecrit"] = code == 0
     voulu = idle_delay_voulu(idle, delai_s) if isinstance(idle, int) else None
     if voulu:
         rapport["idle-delay-voulu"] = voulu
@@ -281,9 +301,12 @@ def main(arguments):
         print("usage : hub-veille-bureau [--etat]", file=sys.stderr)
         return 2
     c = chemins()
-    delai_s = minutes_veille(lire_reglages(c["reglages"])) * 60
+    reglages = lire_reglages(c["reglages"])
+    delai_s = minutes_veille(reglages) * 60
+    verrou_voulu = verrou_bureau(reglages)
     if arguments == ["--etat"]:
-        print(json.dumps({"delaiAmbiant": delai_s, "gnome": coordonner_gnome(delai_s, executer_commande, ecrire=False)},
+        print(json.dumps({"delaiAmbiant": delai_s, "verrouBureau": verrou_voulu,
+                          "gnome": coordonner_gnome(delai_s, executer_commande, ecrire=False, verrou=verrou_voulu)},
                          ensure_ascii=False))
         return 0
 
@@ -291,13 +314,16 @@ def main(arguments):
     if not verrou:
         print("hub-veille-bureau : déjà lancé dans cette session", file=sys.stderr)
         return 0
-    if delai_s:
-        rapport = coordonner_gnome(delai_s, executer_commande)
-        if "idle-delay-voulu" in rapport:
-            print(f"hub-veille-bureau : écran noir de GNOME repoussé de {rapport['idle-delay']} s à "
-                  f"{rapport['idle-delay-voulu']} s, après le mode ambiant", file=sys.stderr)
-        if "alerte" in rapport:
-            print(f"hub-veille-bureau : {rapport['alerte']}", file=sys.stderr)
+    # Même ambiant sur « jamais » : le verrouillage du bureau suit le réglage du HUB.
+    rapport = coordonner_gnome(delai_s, executer_commande, verrou=verrou_voulu)
+    if "idle-delay-voulu" in rapport:
+        print(f"hub-veille-bureau : écran noir de GNOME repoussé de {rapport['idle-delay']} s à "
+              f"{rapport['idle-delay-voulu']} s, après le mode ambiant", file=sys.stderr)
+    if "lock-enabled-voulu" in rapport:
+        print(f"hub-veille-bureau : verrouillage du bureau {'activé' if verrou_voulu else 'désactivé'} "
+              f"(Réglages → Veille et minuteur)", file=sys.stderr)
+    if "alerte" in rapport:
+        print(f"hub-veille-bureau : {rapport['alerte']}", file=sys.stderr)
 
     import gi
     gi.require_version("Gio", "2.0")

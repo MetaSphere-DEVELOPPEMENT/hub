@@ -96,6 +96,30 @@ class ReglagesGnome(unittest.TestCase):
         self.assertTrue(rapport["idle-delay-ecrit"])
         self.assertNotIn("alerte", rapport, "Ubuntu 26.04 : pas de mise en veille automatique sur secteur")
 
+    def test_le_verrouillage_du_bureau_suit_le_reglage_du_hub(self):
+        # Décision du 21/09/2026 : désactivé par défaut sur une TV (le code des profils est
+        # le verrou), activable par le foyer qui le veut. GNOME dit « true » par défaut.
+        executer, ecrits = self.faux_gsettings(self.VALEURS)
+        rapport = vb.coordonner_gnome(600, executer, verrou=False)
+        self.assertIn(["org.gnome.desktop.screensaver", "lock-enabled", "false"], ecrits)
+        self.assertEqual(rapport["lock-enabled-voulu"], "false")
+        self.assertTrue(rapport["lock-enabled-ecrit"])
+        executer, ecrits = self.faux_gsettings(self.VALEURS)
+        vb.coordonner_gnome(600, executer, verrou=True)
+        self.assertNotIn("lock-enabled", [e[1] for e in ecrits], "déjà « true » : rien à écrire")
+        executer, ecrits = self.faux_gsettings({**self.VALEURS, ("org.gnome.desktop.screensaver", "lock-enabled"): "false"})
+        vb.coordonner_gnome(0, executer, verrou=True)
+        self.assertIn(["org.gnome.desktop.screensaver", "lock-enabled", "true"], ecrits, "même ambiant sur « jamais »")
+        executer, ecrits = self.faux_gsettings(self.VALEURS)
+        vb.coordonner_gnome(600, executer, ecrire=False, verrou=False)
+        self.assertEqual(ecrits, [], "--etat n'écrit rien")
+
+    def test_le_reglage_du_verrou_est_lu_strictement(self):
+        self.assertFalse(vb.verrou_bureau(None))
+        self.assertFalse(vb.verrou_bureau({"systeme": {}}), "absent : désactivé, le défaut d'une TV")
+        self.assertFalse(vb.verrou_bureau({"systeme": {"verrouBureau": "true"}}), "tout ce qui n'est pas true vaut faux")
+        self.assertTrue(vb.verrou_bureau({"systeme": {"verrouBureau": True}}))
+
     def test_etat_n_ecrit_rien(self):
         executer, ecrits = self.faux_gsettings(self.VALEURS)
         self.assertEqual(vb.coordonner_gnome(600, executer, ecrire=False)["idle-delay-voulu"], 1500)

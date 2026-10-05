@@ -46,9 +46,12 @@ Sources lues le 17/09/2026 (gitlab.gnome.org, étiquettes `50.0`) : l'en-tête d
 `idle-delay` vaut 300 s par défaut : l'écran noir passerait avant l'ambiant. S'il laisse
 moins de 5 min d'ambiant, `hub-veille-bureau` le **relève** à délai + 15 min (25 min pour 10)
 et l'écrit dans le journal. Il ne le baisse jamais et laisse « Jamais » (0) tel quel. **Le
-verrouillage n'est pas désactivé** : il arrive simplement après le mode ambiant, au même
-moment qu'avant par rapport à l'écran noir. Une mise en veille automatique réglée avant
-l'écran noir est signalée dans le journal, pas modifiée.
+verrouillage suit le réglage du HUB** (`systeme.verrouBureau`, Réglages → Veille et minuteur →
+« Verrouiller le bureau ») : désactivé par défaut — sur une TV de salon, le code des profils
+est le verrou, et un mot de passe au clavier devant la TV, c'est l'ordinateur qui
+réapparaît (décision du 21/09/2026) ; un foyer qui le veut l'active là, et `lock-enabled`
+est remis à `true` à l'ouverture suivante du bureau. Une mise en veille automatique réglée
+avant l'écran noir est signalée dans le journal, pas modifiée.
 
 Ce réglage vit ici et pas dans `hub-theme` : `hub-theme` est l'habillage, qu'on désactive
 et « restaure » depuis le menu ; le délai d'écran noir n'est pas de l'apparence et dépend
@@ -69,9 +72,9 @@ passé sur le bureau n'était vraisemblablement pas compté du tout.
 
 ## Régler, désactiver, diagnostiquer
 
-- **Délai** : Réglages → Mode ambiant dans le menu du HUB (5, 10, 30 min). Lu à
+- **Délai** : Réglages → Veille et minuteur → Mode ambiant dans le menu du HUB (5, 10, 30 min). Lu à
   l'ouverture du bureau : un changement vaut pour la prochaine session Bureau.
-- **Désactiver** : Réglages → Mode ambiant → « Jamais » (GNOME garde alors sa veille, rien
+- **Désactiver** : Réglages → Veille et minuteur → Mode ambiant → « Jamais » (GNOME garde alors sa veille, rien
   n'est écrit). Pour couper le programme lui-même, pour cet utilisateur :
   ```bash
   mkdir -p ~/.config/autostart
