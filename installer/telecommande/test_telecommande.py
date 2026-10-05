@@ -1191,7 +1191,13 @@ class ServiceHTTPS(AvecDossier):
     def test_http_sur_le_port_https_ne_fait_pas_tomber_le_service(self):
         with socket.create_connection(("127.0.0.1", self.https), timeout=5) as s:
             s.sendall(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
-            s.recv(100)
+            try:
+                s.recv(100)
+            except (ConnectionResetError, BrokenPipeError):
+                # Selon la pile TLS, une poignée de main qui n'en est pas une finit par un
+                # RST (macOS) plutôt que par une fermeture ordonnée. Ce n'est pas ce que ce
+                # test vérifie : seul compte que le service réponde encore juste après.
+                pass
         self.assertEqual(self.requete("GET", "/", securise=True)[0], 200)
 
     def test_cle_privee_jamais_servie(self):
