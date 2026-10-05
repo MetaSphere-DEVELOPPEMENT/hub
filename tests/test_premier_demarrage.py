@@ -32,12 +32,12 @@ def sans_couleurs(texte):
 
 
 class PremierDemarrage(unittest.TestCase):
-    def preparer(self, code_installateur):
+    def preparer(self, code_installateur, code_audit=0):
         self.dossier = Path(tempfile.mkdtemp())
         faux, depot, self.journal = self.dossier / "bin", self.dossier / "depot", self.dossier / "journal"
         for d in (faux, depot / "installer", depot / "audit"):
             d.mkdir(parents=True)
-        (depot / "audit" / "audit.sh").write_text("echo audit\n")
+        (depot / "audit" / "audit.sh").write_text(f"echo audit\nexit {code_audit}\n")
         # Titres copiés du vrai installateur, dans son ordre d'exécution, noyés dans du bruit d'apt.
         titres = [l for l in (RACINE / "installer" / "hub-installer.sh").read_text().splitlines()
                   if re.match(r'^\s*etape "[0-9]+\. ', l)]
@@ -56,7 +56,8 @@ class PremierDemarrage(unittest.TestCase):
         executable(faux / "getent", f'n=$(cat "{self.dossier}/getent" 2>/dev/null || echo 0); '
                                     f'echo $((n+1)) >"{self.dossier}/getent"; [ "$n" -ge 2 ]\n')
         executable(faux / "sleep", 'exec /bin/sleep 0.02\n')
-        env = dict(os.environ, PATH=f"{faux}:{os.environ['PATH']}", HUB_DEPOT=str(depot), HUB_JOURNAL=str(self.journal))
+        env = dict(os.environ, PATH=f"{faux}:{os.environ['PATH']}", HUB_DEPOT=str(depot), HUB_JOURNAL=str(self.journal),
+                   HUB_UTILISATEUR="essai")
         return subprocess.Popen(["bash", str(SCRIPT)], env=env, stdin=subprocess.PIPE,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
@@ -84,6 +85,16 @@ class PremierDemarrage(unittest.TestCase):
         appels = self.appels.read_text()
         self.assertIn("systemctl disable hub-premier-demarrage.service", appels)
         self.assertIn("systemctl reboot", appels)
+
+    def test_audit_rate_n_est_pas_dit_reussi(self):
+        proc = self.preparer(0, code_audit=1)
+        sortie, _erreurs = proc.communicate(timeout=60)
+        ecran = sans_couleurs(sortie.decode())
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("audit incomplet (code 1)", ecran)
+        self.assertNotIn("✓ audit écrit", ecran)
+        # L'installation a quand même lieu : un audit incomplet n'est pas une panne.
+        self.assertRegex(ecran, r"HUB installé en \d+ min \d\d s")
 
     def test_echec_reste_affiche_jusqua_une_touche(self):
         proc = self.preparer(3)

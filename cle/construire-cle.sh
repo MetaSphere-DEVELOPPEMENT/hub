@@ -49,11 +49,18 @@ RACINE=$(cd .. && pwd)
 ISO="$HOME/Téléchargements/ubuntu-26.04.1-desktop-amd64.iso"
 DISQUE=/dev/nvme0n1
 SORTIE=hub-cle.iso
+# Le compte créé sur le HUB : celui de qui construit la clé, pas une constante du dépôt
+# (il est public). Le nom complet vient du système quand il le connaît.
+UTILISATEUR_HUB="${USER:-$(id -un)}"
+NOM_HUB=$( (id -F 2>/dev/null || getent passwd "$UTILISATEUR_HUB" 2>/dev/null | cut -d: -f5 | cut -d, -f1) | head -n 1)
+NOM_HUB="${NOM_HUB:-$UTILISATEUR_HUB}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --disque) shift; DISQUE="$1" ;;
     --iso) shift; ISO="$1" ;;
     --sortie) shift; SORTIE="$1" ;;
+    --utilisateur) shift; UTILISATEUR_HUB="$1" ;;
+    --nom) shift; NOM_HUB="$1" ;;
     *) echo "argument inconnu : $1" >&2; exit 2 ;;
   esac
   shift
@@ -63,15 +70,21 @@ attendue=$(awk '$2 ~ /ubuntu-26.04.1-desktop-amd64.iso$/ {print $1}' "$RACINE/vm
 printf '  … vérification de l’ISO\n'
 [ "$(sha256sum "$ISO" | cut -d' ' -f1)" = "$attendue" ] || { echo "  ✗ empreinte de l'ISO fausse" >&2; exit 3; }
 
-[ -z "$(git -C "$RACINE" status --porcelain -- installer audit cle)" ] \
-  || { echo "  ✗ modifications non commitées dans installer/ audit/ cle/ : la clé doit contenir une version identifiable" >&2; exit 4; }
+[ -z "$(git -C "$RACINE" status --porcelain -- installer audit cle tests VERSION NOUVEAUTES.md)" ] \
+  || { echo "  ✗ modifications non commitées dans installer/ audit/ cle/ tests/ VERSION NOUVEAUTES.md : la clé doit contenir une version identifiable" >&2; exit 4; }
 
 travail=$(mktemp -d "$PWD/.construction.XXXX")
 trap 'rm -rf "$travail"' EXIT
 mkdir -p "$travail/hub" "$travail/nocloud" "$travail/nocloud-apercu" "$travail/boot/grub/themes/hub" sortie
 
-git -C "$RACINE" archive HEAD installer audit cle ARCHITECTURE.md CLAUDE.md | tar -x -C "$travail/hub"
-git -C "$RACINE" describe --always --dirty > "$travail/hub/VERSION"
+# Tout ce que l'installateur et la mise à jour attendent d'un dépôt : VERSION (le numéro
+# que le menu affiche), NOUVEAUTES.md (ce qu'il raconte), tests/ (ce que la mise à jour
+# rejoue), LICENSE. Sans eux, un HUB installé depuis la clé n'avait ni numéro ni
+# nouveautés, et sa première mise à jour ne savait pas d'où elle partait.
+git -C "$RACINE" archive HEAD installer audit cle tests ARCHITECTURE.md CLAUDE.md VERSION NOUVEAUTES.md LICENSE | tar -x -C "$travail/hub"
+# Pas de .git sur la clé : l'empreinte et la date du commit voyagent dans COMMIT, que
+# poser_version (hub-installer.sh) lit à défaut de git.
+printf '%s\n%s\n' "$(git -C "$RACINE" rev-parse HEAD)" "$(git -C "$RACINE" log -1 --format=%cs)" > "$travail/hub/COMMIT"
 
 # Un mot de passe propre à cette clé : il sert à sudo et au bureau, jamais à l'allumage.
 if [ ! -f sortie/MOT-DE-PASSE.txt ]; then
@@ -87,7 +100,9 @@ fi
 hache=$(openssl passwd -6 -stdin < sortie/MOT-DE-PASSE.txt)
 cle_ssh=$(cat "$HOME/.ssh/id_rsa.pub")
 
-sed -e "s|@MOT_DE_PASSE_HACHE@|$hache|" -e "s|@CLE_SSH@|$cle_ssh|" -e "s|@DISQUE@|$DISQUE|" user-data.modele > "$travail/nocloud/user-data"
+printf '%s' "$UTILISATEUR_HUB" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$' || { echo "  ✗ nom d'utilisateur invalide pour Ubuntu : $UTILISATEUR_HUB (--utilisateur)" >&2; exit 6; }
+sed -e "s|@MOT_DE_PASSE_HACHE@|$hache|" -e "s|@CLE_SSH@|$cle_ssh|" -e "s|@DISQUE@|$DISQUE|" \
+    -e "s|@UTILISATEUR@|$UTILISATEUR_HUB|" -e "s|@NOM@|$NOM_HUB|" user-data.modele > "$travail/nocloud/user-data"
 : > "$travail/nocloud/meta-data"
 cp grub.cfg "$travail/boot/grub/grub.cfg"
 cp apercu/user-data apercu/meta-data "$travail/nocloud-apercu/"
@@ -107,4 +122,4 @@ docker run --rm -u "$(id -u):$(id -g)" -v "$ISO:/iso/source.iso:ro" -v "$travail
     -boot_image any replay 2>&1 | tail -3
 
 printf '  ✓ sortie/%s (%s)\n' "$SORTIE" "$(du -h "sortie/$SORTIE" | cut -f1)"
-printf '  ✓ version du HUB : %s — disque visé : %s\n' "$(cat "$travail/hub/VERSION")" "$DISQUE"
+printf '  ✓ version du HUB : %s (%s) — disque visé : %s\n' "$(head -n 1 "$travail/hub/VERSION")" "$(head -c 7 "$travail/hub/COMMIT")" "$DISQUE"

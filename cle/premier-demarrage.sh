@@ -23,7 +23,13 @@ set -uo pipefail
 # Surchargeables pour les tests seulement : systemd ne pose aucune de ces variables.
 DEPOT=${HUB_DEPOT:-/opt/hub}
 JOURNAL=${HUB_JOURNAL:-/var/log/hub}
-UTILISATEUR=samuel
+# Le compte créé par la clé : le premier utilisateur ordinaire (uid 1000), jamais un nom
+# écrit ici — le dépôt est public, et construire-cle.sh met celui de qui la construit.
+UTILISATEUR=${HUB_UTILISATEUR:-$(id -nu 1000 2>/dev/null)}
+if [ -z "$UTILISATEUR" ]; then
+  echo "premier-demarrage : aucun utilisateur ordinaire (uid 1000) : installation impossible" >&2
+  exit 1
+fi
 mkdir -p "$JOURNAL"
 LOG="$JOURNAL/premier-demarrage.log"
 SORTIE_INSTALLATEUR="$JOURNAL/installateur.log"
@@ -84,8 +90,13 @@ dire '%s   %s✓%s réseau disponible\n\n' "$EFF" "$T" "$Z"
 # ── Audit : la règle du projet, même ici ─────────────────────────────────────
 dire '   %s[1/2]%s Audit du matériel…\n' "$T" "$Z"
 rapport="$JOURNAL/audit-$(date +%F-%H%M).md"
-runuser -u "$UTILISATEUR" -- bash "$DEPOT/audit/audit.sh" >"$rapport" 2>&1
-dire '   ✓ audit écrit dans %s\n\n' "$rapport"
+if runuser -u "$UTILISATEUR" -- bash "$DEPOT/audit/audit.sh" >"$rapport" 2>&1; then
+  dire '   ✓ audit écrit dans %s\n\n' "$rapport"
+else
+  # Un audit incomplet n'empêche pas d'installer, mais il ne faut pas le dire réussi :
+  # c'est lui qu'on relit quand quelque chose cloche sur la machine.
+  dire '   ! audit incomplet (code %s), ce qui a pu être relevé est dans %s\n\n' "$?" "$rapport"
+fi
 
 # ── Installation du HUB ─────────────────────────────────────────────────────
 # Les étapes sont comptées dans l'installateur lui-même (« etape "N. titre" ») : le

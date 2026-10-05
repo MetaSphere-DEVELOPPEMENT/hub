@@ -20,8 +20,8 @@ autoinstall:
 
   identity:
     hostname: hub
-    realname: Samuel Boudine
-    username: samuel
+    realname: "@NOM@"
+    username: "@UTILISATEUR@"
     password: "@MOT_DE_PASSE_HACHE@"
 
   ssh:

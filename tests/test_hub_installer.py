@@ -83,7 +83,9 @@ class VersionDepuisLaCle(unittest.TestCase):
             (Path(d) / "VERSION").write_text("1.2.3\n")
             (Path(d) / "COMMIT").write_text("$(touch /tmp/pwn) b55acf7\npas une date\n")
             lignes = self.ecrire_version(d).splitlines()
-        self.assertEqual(lignes[:2], ["1.2.3", "b55acf7"])
+        self.assertEqual(lignes[0], "1.2.3")
+        # Il ne reste du contenu que des hexadécimaux : rien n'est exécuté, rien d'autre n'est écrit.
+        self.assertRegex(lignes[1], r"^[0-9a-f]{1,40}$")
         self.assertEqual(lignes[2:], [], "une date qui n'en est pas une n'est pas écrite")
 
 
