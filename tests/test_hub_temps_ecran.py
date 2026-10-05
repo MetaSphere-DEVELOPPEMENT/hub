@@ -11,6 +11,7 @@ import json
 import tempfile
 import threading
 import unittest
+from unittest import mock
 from datetime import datetime
 from pathlib import Path
 
@@ -333,6 +334,61 @@ class Avertir(unittest.TestCase):
         lances = []
         self.assertEqual(te.avertir("bientot", 3, "tv", "fr", executer=lambda c, **_: lances.append(c), kodi=kodi), "fenetre")
         self.assertIn("Plus que 3 min d'écran aujourd'hui", lances[0])
+
+
+class VeilleDeKodi(unittest.TestCase):
+    """Le temps du mode TV s'accumulait pendant que l'écran de veille de Kodi tournait :
+    personne ne regardait, et le quota de la journée fondait quand même."""
+
+    def test_lit_l_ecran_de_veille_de_kodi(self):
+        self.assertTrue(te.kodi_en_veille(kodi=lambda *_: json.dumps({"result": {"System.ScreenSaverActive": True}})))
+        self.assertFalse(te.kodi_en_veille(kodi=lambda *_: json.dumps({"result": {"System.ScreenSaverActive": False}})))
+
+    def test_kodi_injoignable_ou_reponse_abimee_vaut_pas_en_veille(self):
+        def injoignable(*_):
+            raise ConnectionRefusedError()
+        self.assertFalse(te.kodi_en_veille(kodi=injoignable))
+        self.assertFalse(te.kodi_en_veille(kodi=lambda *_: b"pas du json"))
+        self.assertFalse(te.kodi_en_veille(kodi=lambda *_: json.dumps({"result": {}})))
+        self.assertFalse(te.kodi_en_veille(kodi=lambda *_: json.dumps({"error": {"code": -32601}})))
+
+    def test_le_mode_tv_est_branche_sur_la_veille_de_kodi_pas_les_autres(self):
+        suivis = []
+
+        def faux_suivre(mode, c, demarrer, en_pause=None, **_):
+            suivis.append((mode, en_pause))
+            return 0
+
+        class FauxPopen:
+            def __init__(self, *_a, **_k):
+                pass
+
+        with mock.patch.object(te, "suivre", faux_suivre), mock.patch.object(te.subprocess, "Popen", FauxPopen), \
+                mock.patch.object(te, "chemins", lambda: {"etat": "e", "reglages": "r", "ambiant": "a"}):
+            te.main(["lancer", "tv", "--", "kodi"])
+            te.main(["lancer", "web", "--", "hub-web", "netflix"])
+        self.assertEqual(suivis[0], ("tv", te.kodi_en_veille))
+        self.assertEqual(suivis[1], ("web", None))
+
+    def test_rien_ne_s_ajoute_tant_que_kodi_est_en_veille(self):
+        d = Path(tempfile.mkdtemp())
+        c = {"etat": d / "temps-ecran.json", "reglages": d / "reglages.json"}
+        c["reglages"].write_text(json.dumps({"profilActif": "camille", "profils": [{"id": "camille", "langue": "fr"}]}))
+        h = Horloge(f"{MARDI} 10:00")
+        te.suivre("tv", c, horloge=h, pas=15, demarrer=lambda: FauxProcessus(600, h),
+                  avertir=lambda *a: None, terminer=lambda *a: None, en_pause=lambda: True)
+        self.assertEqual(te.lire_etat(c["etat"])["profils"]["camille"][MARDI]["secondes"], 0)
+
+    def test_le_compte_reprend_des_que_la_veille_cesse(self):
+        d = Path(tempfile.mkdtemp())
+        c = {"etat": d / "temps-ecran.json", "reglages": d / "reglages.json"}
+        c["reglages"].write_text(json.dumps({"profilActif": "camille", "profils": [{"id": "camille", "langue": "fr"}]}))
+        h = Horloge(f"{MARDI} 10:00")
+        # Deux premiers pas en veille, puis le spectateur revient : seuls ces deux pas manquent.
+        reponses = iter([True, True])
+        te.suivre("tv", c, horloge=h, pas=15, demarrer=lambda: FauxProcessus(60, h),
+                  avertir=lambda *a: None, terminer=lambda *a: None, en_pause=lambda: next(reponses, False))
+        self.assertEqual(te.lire_etat(c["etat"])["profils"]["camille"][MARDI]["secondes"], 30)
 
 
 class Commande(unittest.TestCase):
