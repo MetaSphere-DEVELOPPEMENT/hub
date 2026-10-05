@@ -2639,12 +2639,30 @@ function rendreSection(garderFocus = true) {
         rangee(t("horloge"), null, options("horloge", [["24", t("horloge.24")], ["12", t("horloge.12")]], p.horloge, v => { p.horloge = v; })));
       break;
 
-    case "voix":
+    case "voix": {
+      // Le mot d'éveil : ce que hub-voix écoute vraiment (voix.json), sinon ce qui est demandé.
+      const demande = motEveilDemande();
+      const effectif = etatVoix.mot?.motEveil || demande;
+      // hub-voix écrit le prénom demandé en minuscules : on compare sans la casse.
+      const refus = etatVoix.mot?.refus && memeMotEveil(etatVoix.mot.demande, demande) ? etatVoix.mot.refus : null;
+      const prenom = !(demande in MOTS_EVEIL);
       zone.append(
-        rangee(t("voix"), `${t("voix.detail")}${etatVoix.micro === false ? " — " + t("voix.micro.absent") : ""}`,
+        rangee(t("voix"), `${t("voix.detail", { mot: libelleMotEveil(effectif) })}${etatVoix.micro === false ? " — " + t("voix.micro.absent") : ""}`,
           options("voix", [[true, t("voix.active")], [false, t("voix.inactive")]], s.voix, v => { s.voix = v === true || v === "true"; }), false, true),
+        rangee(t("voix.mot"), refus ? t(`voix.mot.refus.${refus}`, { mot: libelleMotEveil(etatVoix.mot.demande), garde: libelleMotEveil(effectif) }) : t("voix.mot.detail"),
+          el("div", { class: "options" },
+            ...Object.keys(MOTS_EVEIL).map(v => el("button", {
+              class: `option${demande === v ? " choisie" : ""}`, "data-nav": true, "data-cle": `mot-eveil-${v}`,
+              onclick: () => choisirMotEveil(v),
+            }, libelleMotEveil(v))),
+            el("button", {
+              class: `option${prenom ? " choisie" : ""}`, "data-nav": true, "data-cle": "mot-eveil-prenom",
+              onclick: () => ouvrirClavier(t("voix.mot"), prenom ? libelleMotEveil(demande) : "", nom => { if (nom.trim()) choisirMotEveil(nom.trim().slice(0, 24)); }),
+            }, prenom ? libelleMotEveil(demande) : t("voix.mot.prenom"))),
+          true, true),
         rangee(t("sons"), null, options("sons", [[true, t("oui")], [false, t("non")]], sonsActifs(), v => { p.sons = v === true || v === "true"; })));
       break;
+    }
 
     case "services": {
       // Un profil restreint ne rallume pas lui-même ce qu'on lui a masqué ; les modes
@@ -3136,7 +3154,37 @@ function majMinuteur() {
 }
 
 // ── Voix ──────────────────────────────────────────────────────────────────
-const etatVoix = { micro: null };
+// Le mot d'éveil (installer/voix/README.md, « Le mot d'éveil ») : un préréglage, ou un
+// prénom. Les libellés disent ce qu'on prononce dans la langue du profil ; en anglais,
+// « Salut HUB » et « Dis HUB » se disent tous deux « Hey HUB ». hub-voix écrit dans voix.json
+// ce qu'il écoute vraiment et pourquoi il a pu refuser un prénom ; la page l'affiche.
+const MOTS_EVEIL = {
+  "ok-hub": { fr: "OK HUB", en: "OK HUB" },
+  "salut-hub": { fr: "Salut HUB", en: "Hey HUB (Salut HUB)" },
+  "dis-hub": { fr: "Dis HUB", en: "Hey HUB (Dis HUB)" },
+  hub: { fr: "HUB", en: "HUB" },
+};
+const MOT_EVEIL_DEFAUT = "ok-hub";
+function motEveilDemande() {
+  const valeur = reglages.systeme.motEveil;
+  return typeof valeur === "string" && valeur.trim() ? valeur.trim() : MOT_EVEIL_DEFAUT;
+}
+function memeMotEveil(a, b) {
+  const plat = v => String(v ?? "").toLowerCase().split(/\s+/).filter(Boolean).join(" ");
+  return plat(a) === plat(b);
+}
+function libelleMotEveil(valeur) {
+  if (valeur in MOTS_EVEIL) return MOTS_EVEIL[valeur][profil().langue] || MOTS_EVEIL[valeur].fr;
+  return String(valeur).split(/\s+/).filter(Boolean).map(m => m[0].toLocaleUpperCase(locale()) + m.slice(1)).join(" ");
+}
+function choisirMotEveil(valeur) {
+  reglages.systeme.motEveil = valeur;
+  sauver(); appliquerTout(); rendreSection(); son("ok");
+  // hub-voix relit les réglages toutes les deux secondes et écrit ce qu'il en fait :
+  // on relit après lui, deux fois, pour afficher un refus sans attendre qu'on revienne.
+  if (PONT) for (const delai of [2500, 5000]) setTimeout(() => envoyer({ type: "voix-mot" }), delai);
+}
+const etatVoix = { micro: null, mot: INITIAL.voixEtat || null };
 let minuterieBulle;
 function bulle(texte, duree = 0, ecoute = false) {
   const b = $("bulle-voix");
@@ -3490,6 +3538,10 @@ window.hub = {
     switch (message.type) {
       case "commande": return commande(message.nom);
       case "voix": return recevoirVoix(message.etat, message.texte);
+      case "voix-mot":
+        etatVoix.mot = message.etat && typeof message.etat === "object" ? message.etat : null;
+        if (pile.at(-1) === "reglages" && sectionCourante === "voix") rendreSection();
+        return;
       case "meteo": return recevoirMeteo(message.donnees, message.releveLe, message.horsLigne);
       case "geocodage": return rappelGeocodage?.(message.resultats || []);
       case "minuteur": return recevoirMinuteur(message.fin);

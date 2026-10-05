@@ -316,6 +316,29 @@ class Telecommande(AvecDossier):
         self.assertEqual(hub_menu.message_voix("texte:Brest".encode()), {"type": "texte", "texte": "Brest"})
 
 
+class Voix(AvecDossier):
+    """Le mot d'éveil : la page lit dans voix.json ce que hub-voix écoute vraiment."""
+
+    def setUp(self):
+        super().setUp()
+        self.c["voix-etat"] = self.c["execution"] / "voix.json"
+        self.c["execution"].mkdir(parents=True, exist_ok=True)
+
+    def test_etat_lu_tel_que_hub_voix_l_ecrit(self):
+        etat = {"motEveil": "ok-hub", "demande": "zorglub", "refus": "inconnu", "phrases": ["okay hub", "ok hub"], "langue": "fr"}
+        self.c["voix-etat"].write_text(json.dumps({**etat, "autre": 1}))
+        self.assertEqual(hub_menu.etat_voix(self.c), etat)
+
+    def test_absent_ou_abime_vaut_rien_plutot_qu_un_etat_invente(self):
+        self.assertIsNone(hub_menu.etat_voix(self.c))
+        self.c["voix-etat"].write_text("{pas du json")
+        self.assertIsNone(hub_menu.etat_voix(self.c))
+        self.c["voix-etat"].write_text(json.dumps({"motEveil": 3, "demande": "x", "refus": None, "phrases": [], "langue": "fr"}))
+        self.assertIsNone(hub_menu.etat_voix(self.c))
+        self.c["voix-etat"].write_text(json.dumps({"motEveil": "ok-hub"}))
+        self.assertIsNone(hub_menu.etat_voix(self.c))
+
+
 class Habillage(unittest.TestCase):
     def test_active_regenere_les_fonds_desactive_restaure_une_fois(self):
         with tempfile.TemporaryDirectory() as d:

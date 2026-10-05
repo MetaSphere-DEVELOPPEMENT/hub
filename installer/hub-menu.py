@@ -89,6 +89,9 @@ def chemins():
         # Présent : la vérification du démarrage a eu lieu (sous /run : oublié à l'extinction).
         "maj-auto-demarrage": execution / "maj-auto-demarrage",
         "telecommande": execution / "telecommande.json",
+        # Écrit par hub-voix : le mot d'éveil qu'il écoute vraiment, et pourquoi il a pu
+        # refuser celui des réglages (installer/voix/README.md, « Le mot d'éveil »).
+        "voix-etat": execution / "voix.json",
         "telecommande-appairage": execution / "telecommande-appairage",
         "lecture": execution / "lecture.json",
         "recopie-code": execution / "recopie-code.json",
@@ -1315,6 +1318,18 @@ def appliquer_allumage(executer=subprocess.run):
 
 
 # ── Messages ──────────────────────────────────────────────────────────────
+CHAMPS_VOIX = {"motEveil": str, "demande": str, "refus": (str, type(None)), "phrases": list, "langue": str}
+
+
+def etat_voix(c):
+    """Ce que hub-voix écoute : voix.json tel qu'il l'écrit, ou None s'il manque ou ment
+    sur sa forme. La page y lit le mot d'éveil effectif et un refus éventuel."""
+    donnees = lire_json(c["voix-etat"])
+    if not isinstance(donnees, dict) or not all(isinstance(donnees.get(k), genre) for k, genre in CHAMPS_VOIX.items()):
+        return None
+    return {k: donnees[k] for k in CHAMPS_VOIX}
+
+
 def message_voix(datagramme):
     """Traduit un datagramme de hub-voix en message pour la page, ou None."""
     try:
@@ -1821,6 +1836,7 @@ def lancer(arguments=None):
                 "photos": photos(),
                 "avatars": avatars(),
                 "telecommande": etat_telecommande(c),
+                "voixEtat": etat_voix(c),
                 "lecture": etat_lecture(c),
                 "recopieCode": etat_code_recopie(c),
                 "minuteurFin": minuteur_en_cours(c),
@@ -2149,6 +2165,8 @@ def lancer(arguments=None):
             elif genre == "internet":
                 if self.internet:
                     self.vers_page({"type": "internet", **self.internet})
+            elif genre == "voix-mot":
+                self.vers_page({"type": "voix-mot", "etat": etat_voix(c)})
             elif genre == "maj-appliquer":
                 self.maj_lancee = {"le": time.time() * 1000, "monotone": time.monotonic()}
                 if lancer_mise_a_jour():
