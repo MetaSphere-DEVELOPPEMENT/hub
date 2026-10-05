@@ -336,21 +336,59 @@ class Avertir(unittest.TestCase):
         self.assertIn("Plus que 3 min d'écran aujourd'hui", lances[0])
 
 
+def faux_kodi(ecran=True, lecteurs=(), mode="screensaver.xbmc.builtin.dim", **brutes):
+    """Un Kodi qui répond à ses trois questions ; `brutes` remplace la réponse d'une
+    méthode par un texte tel quel (abîmé, tronqué), ou par une exception à lever."""
+    reponses = {
+        "XBMC.GetInfoBooleans": json.dumps({"result": {"System.ScreenSaverActive": ecran}}),
+        "Player.GetActivePlayers": json.dumps({"result": list(lecteurs)}),
+        "Settings.GetSettingValue": json.dumps({"result": {"value": mode}}),
+    }
+    reponses.update({k.replace("_", "."): v for k, v in brutes.items()})
+
+    def kodi(methode, parametres=None):
+        reponse = reponses[methode]
+        if isinstance(reponse, Exception):
+            raise reponse
+        return reponse
+    return kodi
+
+
 class VeilleDeKodi(unittest.TestCase):
     """Le temps du mode TV s'accumulait pendant que l'écran de veille de Kodi tournait :
-    personne ne regardait, et le quota de la journée fondait quand même."""
+    personne ne regardait, et le quota de la journée fondait quand même. Mais l'écran de
+    veille se règle depuis Kodi, par la personne même dont on compte le temps : il ne
+    suffit pas, on exige aussi qu'aucun lecteur ne tourne et que l'économiseur n'affiche rien."""
 
-    def test_lit_l_ecran_de_veille_de_kodi(self):
-        self.assertTrue(te.kodi_en_veille(kodi=lambda *_: json.dumps({"result": {"System.ScreenSaverActive": True}})))
-        self.assertFalse(te.kodi_en_veille(kodi=lambda *_: json.dumps({"result": {"System.ScreenSaverActive": False}})))
+    def test_ecran_de_veille_integre_sans_lecteur_met_en_pause(self):
+        self.assertTrue(te.kodi_en_veille(kodi=faux_kodi()))
+        self.assertTrue(te.kodi_en_veille(kodi=faux_kodi(mode="screensaver.xbmc.builtin.black")))
 
-    def test_kodi_injoignable_ou_reponse_abimee_vaut_pas_en_veille(self):
-        def injoignable(*_):
-            raise ConnectionRefusedError()
-        self.assertFalse(te.kodi_en_veille(kodi=injoignable))
-        self.assertFalse(te.kodi_en_veille(kodi=lambda *_: b"pas du json"))
-        self.assertFalse(te.kodi_en_veille(kodi=lambda *_: json.dumps({"result": {}})))
-        self.assertFalse(te.kodi_en_veille(kodi=lambda *_: json.dumps({"error": {"code": -32601}})))
+    def test_ecran_de_veille_inactif_compte(self):
+        self.assertFalse(te.kodi_en_veille(kodi=faux_kodi(ecran=False)))
+
+    def test_musique_ou_video_sous_l_economiseur_compte(self):
+        # Kodi lance son économiseur (visualisation, assombrissement) pendant la lecture audio :
+        # l'écoute continue, le temps aussi.
+        self.assertFalse(te.kodi_en_veille(kodi=faux_kodi(lecteurs=[{"playerid": 0, "type": "audio"}])))
+        self.assertFalse(te.kodi_en_veille(kodi=faux_kodi(lecteurs=[{"playerid": 1, "type": "video"}])))
+        self.assertFalse(te.kodi_en_veille(kodi=faux_kodi(lecteurs=[{"playerid": 2, "type": "picture"}])))
+
+    def test_economiseur_qui_affiche_quelque_chose_compte(self):
+        # Diaporama, visualisation, extension qui lit des vidéos : l'écran montre un contenu.
+        for mode in ("screensaver.xbmc.builtin.slideshow", "screensaver.picture.slideshow", "screensaver.video", ""):
+            self.assertFalse(te.kodi_en_veille(kodi=faux_kodi(mode=mode)), mode)
+
+    def test_kodi_injoignable_ou_reponse_abimee_compte(self):
+        self.assertFalse(te.kodi_en_veille(kodi=faux_kodi(XBMC_GetInfoBooleans=ConnectionRefusedError())))
+        self.assertFalse(te.kodi_en_veille(kodi=faux_kodi(XBMC_GetInfoBooleans=b"pas du json")))
+        self.assertFalse(te.kodi_en_veille(kodi=faux_kodi(XBMC_GetInfoBooleans=json.dumps({"result": {}}))))
+        self.assertFalse(te.kodi_en_veille(kodi=faux_kodi(XBMC_GetInfoBooleans=json.dumps({"error": {"code": -32601}}))))
+        self.assertFalse(te.kodi_en_veille(kodi=faux_kodi(Player_GetActivePlayers=b'{"result": [')))
+        self.assertFalse(te.kodi_en_veille(kodi=faux_kodi(Player_GetActivePlayers=json.dumps({"result": None}))))
+        self.assertFalse(te.kodi_en_veille(kodi=faux_kodi(Settings_GetSettingValue=ConnectionResetError())))
+        self.assertFalse(te.kodi_en_veille(kodi=faux_kodi(Settings_GetSettingValue=json.dumps({"result": {}}))))
+        self.assertFalse(te.kodi_en_veille(kodi=faux_kodi(Settings_GetSettingValue=json.dumps({"result": "dim"}))))
 
     def test_le_mode_tv_est_branche_sur_la_veille_de_kodi_pas_les_autres(self):
         suivis = []

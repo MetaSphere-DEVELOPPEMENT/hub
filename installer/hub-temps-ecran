@@ -260,18 +260,39 @@ def kodi_jsonrpc(methode, parametres=None, delai=2):
         return s.recv(4096)
 
 
-def kodi_en_veille(kodi=kodi_jsonrpc):
-    """Le mode TV ne compte pas pendant que l'écran de veille de Kodi occupe l'écran :
-    personne ne regarde. Kodi le dit par JSON-RPC (System.ScreenSaverActive). Ce n'est
-    pas l'état de la TV elle-même — rien ici ne le connaît de façon fiable et continue —,
-    c'est le signal le plus sûr dont on dispose, et il suit le délai de veille réglé dans
-    Kodi. Kodi qui démarre encore, ou une réponse abîmée : « pas en veille », pour ne pas
-    arrêter le décompte pour de bon, comme avertir() le fait déjà pour ses propres appels."""
+# Les deux économiseurs livrés avec Kodi, qui n'affichent rien : un écran assombri ou noir.
+# Tout autre mode (diaporama, visualisation, extension) montre quelque chose, et compte.
+ECONOMISEURS_INTEGRES = frozenset({"screensaver.xbmc.builtin.dim", "screensaver.xbmc.builtin.black"})
+
+
+def reponse_kodi(kodi, methode, parametres=None):
+    """Le « result » d'un appel JSON-RPC à Kodi, ou None s'il ne répond pas, ou pas en JSON."""
     try:
-        reponse = json.loads(kodi("XBMC.GetInfoBooleans", {"booleans": ["System.ScreenSaverActive"]}))
-        return bool(reponse.get("result", {}).get("System.ScreenSaverActive"))
-    except (OSError, ValueError, AttributeError, TypeError):
+        reponse = json.loads(kodi(methode, parametres))
+    except (OSError, ValueError, TypeError):
+        return None
+    return reponse.get("result") if isinstance(reponse, dict) else None
+
+
+def kodi_en_veille(kodi=kodi_jsonrpc):
+    """Le mode TV ne compte pas pendant que l'écran de veille de Kodi occupe l'écran et
+    que rien ne joue : personne ne regarde. Kodi le dit par JSON-RPC.
+
+    Ce n'est pas l'état de la TV elle-même — rien ici ne le connaît de façon fiable et
+    continue —, c'est le signal le plus sûr dont on dispose. Mais c'est un signal que la
+    personne devant Kodi règle elle-même (délai, extension d'économiseur) : un enfant au
+    temps compté pourrait écouter sa musique sous l'économiseur, ou choisir un
+    économiseur qui lit des vidéos. On le croise donc avec ce qu'il ne maîtrise pas par
+    ce biais : aucun lecteur actif (ni son, ni vidéo, ni images), et l'économiseur
+    intégré qui n'affiche rien. Kodi qui démarre encore, une réponse abîmée ou tronquée :
+    « pas en veille », pour ne jamais arrêter le décompte pour de bon."""
+    actif = reponse_kodi(kodi, "XBMC.GetInfoBooleans", {"booleans": ["System.ScreenSaverActive"]})
+    if not isinstance(actif, dict) or actif.get("System.ScreenSaverActive") is not True:
         return False
+    if reponse_kodi(kodi, "Player.GetActivePlayers") != []:
+        return False
+    mode = reponse_kodi(kodi, "Settings.GetSettingValue", {"setting": "screensaver.mode"})
+    return isinstance(mode, dict) and mode.get("value") in ECONOMISEURS_INTEGRES
 
 
 def avertir(nature, minutes, mode, langue, executer=subprocess.Popen, kodi=kodi_jsonrpc):
