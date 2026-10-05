@@ -1,4 +1,4 @@
-# Adaptateur USB-CEC Pulse-Eight — /etc/udev/rules/70-hub-cec.rules
+# Adaptateur USB-CEC Pulse-Eight — /etc/udev/rules.d/70-hub-cec.rules
 #
 # uaccess : logind donne le port à l'utilisateur de la session active, sans l'ajouter
 # au groupe dialout (qui ouvrirait tous les ports série, et ne prendrait effet

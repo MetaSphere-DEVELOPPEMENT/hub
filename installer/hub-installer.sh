@@ -312,7 +312,7 @@ etape_mesure() {
 # compare (suis-je à jour ? qu'est-ce qui a été signé ?) se fait donc sur l'empreinte,
 # et le numéro n'est là que pour être lu. Les deux, jamais l'un à la place de l'autre.
 poser_version() {
-  local version_depot numero date_depot cible=/usr/local/share/hub/VERSION
+  local version_depot numero date_depot date_commit="" cible=/usr/local/share/hub/VERSION
   # safe.directory : lancé par sudo, git refuse un dépôt appartenant à l'utilisateur.
   # --long : pile sur une étiquette de version (le cas de chaque version publiée, dont le
   # clone de la mise à jour reçoit l'étiquette), `describe` ne rendrait que « v1.0.15 »,
@@ -320,6 +320,13 @@ poser_version() {
   # jamais « déjà installé » et le menu proposerait la même version sans fin (vu sur la
   # 1.0.15). Avec --long, l'empreinte est toujours là : « v1.0.15-0-gb55acf7 ».
   version_depot=$(git -c safe.directory='*' -C "$DEPOT/.." describe --always --dirty --long 2>/dev/null)
+  # Depuis la clé USB, il n'y a pas de .git : construire-cle.sh écrit l'empreinte et la
+  # date du commit dans COMMIT. Sans elles, un HUB installé depuis la clé n'avait ni
+  # empreinte ni date, et sa première mise à jour ne savait pas d'où elle partait.
+  if [ -z "$version_depot" ] && [ -f "$DEPOT/../COMMIT" ]; then
+    version_depot=$(sed -n '1p' "$DEPOT/../COMMIT" | tr -cd '0-9a-f' | cut -c1-40)
+    date_commit=$(sed -n '2p' "$DEPOT/../COMMIT" | tr -cd '0-9-')
+  fi
   # Une Ubuntu neuve n'a pas git : la révision se lit alors directement dans .git
   # (sans l'indication « -dirty », que seul git sait calculer).
   if [ -z "$version_depot" ] && [ -f "$DEPOT/../.git/HEAD" ]; then
@@ -339,6 +346,7 @@ poser_version() {
     *) numero="" ;;
   esac
   date_depot=$(git -c safe.directory='*' -C "$DEPOT/.." log -1 --format=%cs 2>/dev/null)
+  [ -n "$date_depot" ] || date_depot="${date_commit:-}"
   case "$date_depot" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;; *) date_depot="" ;; esac
   if [ -z "$version_depot" ] && [ -z "$numero" ]; then
     alerte "version inconnue (ni dépôt git, ni fichier VERSION) : le menu n'en affichera pas"
@@ -1060,7 +1068,7 @@ etape_cec() {
   if [ -f "$DEPOT/voix/hub_voix_logique.py" ]; then
     poser "$DEPOT/voix/hub_voix_logique.py" "$lib/voix/hub_voix_logique.py" 0644 || return 1
   fi
-  poser "$cec/70-hub-cec.rules" /etc/udev/rules/70-hub-cec.rules 0644 || return 1
+  poser "$cec/70-hub-cec.rules" /etc/udev/rules.d/70-hub-cec.rules 0644 || return 1
   # Mode « relais » : Kodi ne doit pas ouvrir l'adaptateur que tient hub-cec. Posé
   # seulement s'il n'existe pas : un choix fait dans les réglages de Kodi est gardé.
   for n in 1001 1002; do

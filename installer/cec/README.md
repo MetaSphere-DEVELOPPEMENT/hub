@@ -137,7 +137,7 @@ Ordres ponctuels, par le service en cours (socket `$XDG_RUNTIME_DIR/hub/cec.sock
 2. `hub-cec.py`, `hub_cec_logique.py`, `README.md` dans `/usr/local/lib/hub/cec/`, et
    `hub_voix_logique.py` dans `/usr/local/lib/hub/voix/` (reconnaître Kodi, le bureau,
    hub-web) ;
-3. `/etc/udev/rules/70-hub-cec.rules` ;
+3. `/etc/udev/rules.d/70-hub-cec.rules` ;
 4. `peripheral_data/cec_2548_1001.xml` et `…1002.xml` pour Kodi, **s'ils n'existent pas** ;
 5. `/usr/local/lib/systemd/user/hub-cec.service`, activé pour toutes les sessions.
 
